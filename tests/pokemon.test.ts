@@ -429,6 +429,29 @@ test('Splash just hops, and nothing happens', async ($, on) => {
   expect(answer.text).toBe('Magikarp used Splash!\nBut nothing happened!')
 })
 
+test('every move of every mon plays to the end without breaking a frame', { timeoutMs: 120000 }, async ($, on) => {
+  const { clock, blits } = await started($, on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const list = await $.command.run({ command: 'pokemon', args: 'list' })
+  const mons = list.text.replace(/^\d+ mons: /, '').split(', ')
+  for (const mon of mons) {
+    await $.command.run({ command: 'pokemon', args: mon })
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    const help = await $.command.run({ command: 'pokemon', args: 'attack ?' })
+    const moves = help.text.replace(/^.* Its moves: /, '').replace(/\.$/, '').split(', ')
+    for (const move of moves) {
+      const answer = await $.command.run({ command: 'pokemon', args: 'attack ' + move })
+      expect(answer.text).toContain(' used ' + move + '!')
+      const seen = blits.length
+      await clock.advance(50 * 80)
+      // One blit per tick, all the size of the band, means no frame threw
+      expect(blits.length - seen).toBe(80)
+      expect(new Set(blits.slice(seen).map((cells) => cells.length)).size).toBe(1)
+    }
+    await ui.unmount()
+  }
+})
+
 test('display names read like the games', async ($, on) => {
   await started($, on)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })

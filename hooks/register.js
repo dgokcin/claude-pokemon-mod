@@ -1,6 +1,6 @@
-import { attackFrame, attackPose, attackTicks, effectOf } from './attacks.js'
+import { attackFrame, attackPose, prepareAttack } from './attacks.js'
 import { SPRITES } from './frames.js'
-import { MOVES } from './moves.js'
+import { movesOf } from './moves.js'
 import { displayName } from './names.js'
 
 // One pixel Pokémon lives in a strip at the right of the band above the prompt.
@@ -165,6 +165,7 @@ function dotsIcon() {
 
 // What the bubble beside the head shows, if anything
 function bubbleIcon() {
+  if (attack) return null
   if (tick < yumUntil) return BUBBLE_ICONS.yum
   if (working && thinking) return dotsIcon()
   const need = needNow()
@@ -280,26 +281,22 @@ function heartStamps() {
   return out
 }
 
-// Start one of the mon's moves, aimed the way it walks, or toward the roomier side when it stands still
+// Start one of the mon's moves, aimed the way it walks, or toward the roomier side
+// when it stands still. The move takes over the body, so a hop in progress stops.
 function startAttack(move) {
   markActive()
   wanderTarget = null
-  const effect = effectOf(move.effect)
+  hopStart = -HOP_TICKS
   const room = columns - SPRITES[mon].width - x
   const side = isWalking() ? facing : x >= room ? 'left' : 'right'
+  const seed = Math.floor(Math.random() * 0x7fffffff)
   const others = MONS.filter((name) => name !== mon)
   const fitting = others.filter((name) => spriteRows(name) <= spriteRows(mon))
   const pool = fitting.length > 0 ? fitting : others
   attack = {
-    effect,
-    color: move.color ?? null,
-    from: move.from ?? null,
+    ...prepareAttack(move, { side, seed, x, home: homeX() }),
     start: tick,
-    ticks: attackTicks(effect),
-    side,
-    seed: Math.floor(Math.random() * 0x7fffffff),
-    toX: effect === 'teleport' ? (x + 1 + Math.floor(Math.random() * homeX())) % (homeX() + 1) : null,
-    swap: effect === 'transform' ? pool[Math.floor(Math.random() * pool.length)] : null,
+    swap: pool[Math.floor(Math.random() * pool.length)],
   }
 }
 
@@ -355,8 +352,31 @@ function needNow() {
   return needs[Math.floor((tick * TICK_MS) / 3000) % needs.length]
 }
 
-const NO_POSE = { swap: false, asleep: false }
-const NO_EFFECT = { dots: [], chars: [], hidden: false, dx: 0, lift: 0, jitter: 0 }
+const NO_POSE = { view: 'front', stride: false, swap: false, asleep: false }
+const NO_EFFECT = {
+  dots: [], under: [], chars: [], ghosts: [], hidden: false,
+  dx: 0, dy: 0, sx: 1, sy: 1, flipX: false, flipY: false, skew: null, shade: null, shake: [0, 0],
+}
+const STRIDE_TICKS = 2
+
+// The most common color of a frame, leaving out dark outlines and shading, cached per frame
+const bodies = new WeakMap()
+function bodyOf(rows, colors) {
+  if (bodies.has(rows)) return bodies.get(rows)
+  const counts = new Map()
+  for (const row of rows) {
+    for (const ch of row) if (colors[ch] !== undefined) counts.set(ch, (counts.get(ch) ?? 0) + 1)
+  }
+  let body = 0xffffff
+  let most = 0
+  for (const [ch, n] of counts) {
+    const c = colors[ch]
+    const luma = 0.3 * (c >> 16) + 0.59 * ((c >> 8) & 255) + 0.11 * (c & 255)
+    if (luma >= 72 && n > most) [body, most] = [c, n]
+  }
+  bodies.set(rows, body)
+  return body
+}
 
 // Where the sprite stands in strip pixels, for aiming an attack
 function attackGeometry(sprite, frame, colors, flip, at, top, rows, pixel) {
@@ -370,6 +390,7 @@ function attackGeometry(sprite, frame, colors, flip, at, top, rows, pixel) {
     columns,
     pixels: rows * 2,
     side: attack.side === 'left' ? -1 : 1,
+    body: bodyOf(frame, colors),
     solid: (cx, py) => pixel(cx - at, py - top) !== null,
   }
 }
@@ -387,6 +408,43 @@ function overlayOf(dots, rows) {
   return overlay
 }
 
+// The sprite as the effect left it: moved to left, top, each row slid by skew, then
+// scaled around the middle of its feet, turned upside down, and recolored. A color
+// per strip pixel, or null.
+function bodyPixel(effect, pixel, box, width, mirrored, left, top) {
+  const scaled = effect.sx !== 1 || effect.sy !== 1
+  const sx = Math.max(0.01, effect.sx)
+  const sy = Math.max(0.01, effect.sy)
+  const ax = mirrored ? width - (box.left + box.right + 1) / 2 : (box.left + box.right + 1) / 2
+  const ay = box.bottom + 1
+  return (cx, py) => {
+    let px = cx - left - (effect.skew ? Math.round(effect.skew(py)) : 0)
+    let qy = py - top
+    if (scaled) {
+      px = Math.floor(ax + (px + 0.5 - ax) / sx)
+      qy = Math.floor(ay + (qy + 0.5 - ay) / sy)
+    }
+    if (effect.flipY) qy = box.top + box.bottom - qy
+    const c = pixel(px, qy)
+    return c === null || !effect.shade ? c : effect.shade(cx, py, c)
+  }
+}
+
+// The effect's afterimages, a color per strip pixel or null. A flipped ghost mirrors
+// within the sprite's opaque box, so at dx 0 it covers the body.
+function ghostPixel(ghosts, pixel, box, width, flip, baseX, baseTop) {
+  const span = flip ? 2 * width - 2 - box.left - box.right : box.left + box.right
+  return (cx, py) => {
+    for (const g of ghosts) {
+      const px = cx - baseX - g.dx
+      const c = pixel(g.flip ? span - px : px, py - baseTop - g.dy)
+      const k = c === null || !g.shade ? c : g.shade(c, cx, py)
+      if (k !== null) return k
+    }
+    return null
+  }
+}
+
 // Pack the current frame into Raster cells, two pixels per cell with half blocks
 function cellsNow() {
   const age = attack ? tick - attack.start : 0
@@ -395,26 +453,37 @@ function cellsNow() {
   const sprite = SPRITES[shown]
   const sheet = sprite.variants[variant]
   const walking = isWalking()
-  const anim = walking ? sheet.walk : sheet.idle
+  // A move faces its target side on, with the walk frames held still unless it strides
+  const sideOn = attack ? pose.view === 'side' : walking
+  const anim = sideOn ? sheet.walk : sheet.idle
   const asleep = isAsleep() || pose.asleep
-  const frame = asleep ? anim[0].rows : frameAt(anim, tick * TICK_MS)
+  let frame = frameAt(anim, tick * TICK_MS)
+  if (asleep) frame = anim[0].rows
+  else if (attack && sideOn) frame = anim[pose.stride ? Math.floor(age / STRIDE_TICKS) % anim.length : 0].rows
   const colors = COLORS[shown][variant]
-  const flip = attack ? attack.side === 'left' : walking && facing === 'left'
+  // Facing out, the sprite stays unmirrored like the idle mon, so it doesn't jump when the move ends
+  const flip = attack ? sideOn && attack.side === 'left' : walking && facing === 'left'
   const rows = rowsOf(mon)
   // A swapped-in mon stands on the same ground and stays inside the strip
   const baseTop = (rows - spriteRows(shown)) * 2
   const baseX = Math.max(0, Math.min(x, columns - sprite.width))
-  const pixel = (px, py) => {
+  const pixelOf = (mirror) => (px, py) => {
     if (px < 0 || px >= sprite.width || py < 0) return null
     const row = frame[py]
     if (!row) return null
-    return colors[row[flip ? sprite.width - 1 - px : px]] ?? null
+    return colors[row[mirror ? sprite.width - 1 - px : px]] ?? null
   }
+  const pixel = pixelOf(flip)
   const effect = attack ? attackFrame(attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel)) : NO_EFFECT
   const overlay = overlayOf(effect.dots, rows)
-  const hopUp = (isHopping() && Math.floor((tick - hopStart) / 3) % 2 === 0) || effect.lift > 0
-  const top = baseTop - (hopUp ? 2 : 0)
+  const underlay = overlayOf(effect.under, rows)
+  const hopUp = !attack && isHopping() && Math.floor((tick - hopStart) / 3) % 2 === 0
+  const top = baseTop + effect.dy - (hopUp ? 2 : 0)
   const left = baseX + effect.dx
+  const mirrored = flip !== effect.flipX
+  const box = boxOf(frame, colors)
+  const body = bodyPixel(effect, pixelOf(mirrored), box, sprite.width, mirrored, left, top)
+  const ghost = ghostPixel(effect.ghosts, pixel, box, sprite.width, flip, baseX, baseTop)
   const head = headColumns(pixel, sprite.width, left)
   const icon = bubbleIcon()
   const floating = new Map()
@@ -423,14 +492,24 @@ function cellsNow() {
     floating.set(effect.chars[k] + ',' + effect.chars[k + 1], [effect.chars[k + 2], effect.chars[k + 3]])
   }
   const under = [...(icon ? bubbleStamps(icon, head) : []), ...(asleep ? sleepStamps(head) : [])]
+  const pixels = rows * 2
   const colorAt = (cx, py) => {
-    if (overlay && overlay[py * columns + cx] >= 0) return overlay[py * columns + cx]
+    if (py < 0 || py >= pixels) return null
+    const i = py * columns + cx
+    if (overlay && overlay[i] >= 0) return overlay[i]
     for (const s of over) {
       const h = stampPixel(s, cx, py)
       if (h !== null) return h
     }
-    const c = (effect.hidden ? null : pixel(cx - left, py - top)) ?? foodPixel(cx, py)
+    const c = effect.hidden ? null : body(cx, py)
     if (c !== null) return c
+    if (effect.ghosts.length > 0) {
+      const g = ghost(cx, py)
+      if (g !== null) return g
+    }
+    if (underlay && underlay[i] >= 0) return underlay[i]
+    const f = foodPixel(cx, py)
+    if (f !== null) return f
     for (const s of under) {
       const u = stampPixel(s, cx, py)
       if (u !== null) return u
@@ -438,19 +517,20 @@ function cellsNow() {
     return null
   }
 
+  const [shakeX, shakeY] = effect.shake
   const words = new Uint32Array(columns * rows * 3)
   for (let cy = 0; cy < rows; cy++) {
     for (let cx = 0; cx < columns; cx++) {
       const i = (cy * columns + cx) * 3
-      const sx = cx - effect.jitter
+      const sx = cx - shakeX
       if (sx < 0 || sx >= columns) {
         words.set([SPACE, DEFAULT_COLOR, DEFAULT_COLOR], i)
         continue
       }
-      const upper = colorAt(sx, cy * 2)
-      const lower = colorAt(sx, cy * 2 + 1)
-      const heart = floating.get(cx + ',' + cy)
-      if (heart) words.set([heart[0], heart[1], upper ?? lower ?? DEFAULT_COLOR], i)
+      const upper = colorAt(sx, cy * 2 - shakeY)
+      const lower = colorAt(sx, cy * 2 + 1 - shakeY)
+      const glyph = floating.get(sx + ',' + cy)
+      if (glyph) words.set([glyph[0], glyph[1], upper ?? lower ?? DEFAULT_COLOR], i)
       else if (upper !== null) words.set([UPPER_HALF, upper, lower ?? DEFAULT_COLOR], i)
       else if (lower !== null) words.set([LOWER_HALF, lower, DEFAULT_COLOR], i)
       else words.set([SPACE, DEFAULT_COLOR, DEFAULT_COLOR], i)
@@ -544,12 +624,12 @@ function attackCommand(wanted) {
   const name = displayName(mon)
   if (attack) return { text: name + ' is still attacking.' }
   if (food) return { text: name + ' is busy eating.' }
-  const moves = MOVES[mon] ?? FALLBACK_MOVES
+  const known = movesOf(mon)
+  const moves = known.length > 0 ? known : FALLBACK_MOVES
   const move = wanted ? moves.find((m) => moveKey(m.name) === moveKey(wanted)) : moves[Math.floor(Math.random() * moves.length)]
   if (!move) return { text: name + ' doesn\'t know "' + wanted + '". Its moves: ' + moves.map((m) => m.name).join(', ') + '.' }
   startAttack(move)
-  const text = move.text ?? (attack.effect === 'splash' ? 'But nothing happened!' : null)
-  return { text: name + ' used ' + move.name + '!' + (text ? '\n' + text : '') }
+  return { text: name + ' used ' + move.name + '!' + (move.text ? '\n' + move.text : '') }
 }
 
 export function register(on) {

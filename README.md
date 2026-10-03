@@ -16,7 +16,7 @@ bubbles, and Zs are pixel art in one `Raster`. The meters are one-cell character
 | 5 minutes with no turns or typing | Falls asleep, with a small and a big pixel Z beside its head | `prompt.edit`, `prompt.submit`, turns |
 | `/pokemon pet` | Stops, hops, and sends up a stream of big and small pixel hearts | |
 | `/pokemon feed` | A random pixel berry drops nearby, the mon walks over, eats it a column at a time, and shows a bubble with a star | |
-| `/pokemon attack` | Stops and plays one of its moves for 1 to 4 s, aimed the way it faces | |
+| `/pokemon attack` | Stops and plays one of its moves for 1.5 to 4 s. It turns side on to aim at the roomier side, or faces you for moves on itself | |
 | Food or happiness under 30% | While idle and awake, shows a pixel thought bubble with a red berry (hungry) or a pink heart (lonely), taking turns when both are low | |
 
 ## Needs
@@ -71,19 +71,50 @@ replies `Pikachu used Thunderbolt!`. `/pokemon attack <move>` picks one by name,
 ignoring case, spaces, and dashes. An unknown move lists the mon's moves. While a
 move plays, the mon stops walking and wakes up, and a second attack waits for it to end.
 
-Each move names one of these effects, with an optional color. An unknown effect plays `impact`.
-`from: 'top'` makes `vines` and `powder` come out of the top of the sprite instead of the
-front, as with the Bulbasaur line's bulb.
+A move takes over the mon's body. A move aimed ahead turns the mon side on toward the
+roomier side of the strip, and the mon winds up, lunges, recoils, or leaps as it hits. A
+move on itself, like Harden or Recover, faces you, and the mon braces, shrinks, melts,
+glows, or falls asleep instead.
 
-| Family | Effects | Example moves |
-| --- | --- | --- |
-| Projectiles | `beam`, `flame`, `spray`, `bubbles`, `leaves`, `stars`, `ice`, `dragon`, `sludge`, `string` | Hyper Beam, Ember, Water Gun, Razor Leaf, Swift |
-| Waves and clouds | `rings`, `shadow`, `wind`, `powder`, `notes` | Psychic, Night Shade, Gust, Sleep Powder, Sing |
-| Strikes | `impact`, `slash`, `tackle`, `vines`, `bolt`, `rocks`, `quake`, `explode` | Thunderbolt, Scratch, Vine Whip, Rock Slide, Earthquake, Self-Destruct |
-| On itself | `shield`, `heal`, `drain`, `sleep`, `teleport`, `transform`, `splash` | Reflect, Recover, Absorb, Rest, Teleport, Transform, Splash |
+`hooks/moves.js` has two tables. `MOVE_FX` gives each move its effect, plus an optional
+`color`, a `power` of 1 or 2 for moves that share an effect at two sizes, and a `text`
+line printed after the announcement. `MOVES` lists each mon's moves by name. An entry can
+be `{ name, from: 'top' }` to send a move out of the top of the sprite, as Vine Whip and
+the powders leave the Bulbasaur line's bulb, or `{ name, from: 'body' }` to pour it from
+the whole body, as Koffing and Weezing do with Smog. An unknown effect plays `impact`.
 
-The effects live in `hooks/attacks.js`. `teleport` leaves the mon at a random spot,
-`transform` borrows another mon's sprite for a few seconds, and `splash` does nothing at all.
+The effects live in `hooks/effects/`, one file per family:
+
+| File | Effects |
+| --- | --- |
+| `beams.js` | `hyperbeam`, `solarbeam`, `psybeam`, `aurorabeam`, `icebeam`, `bubblebeam` |
+| `electric.js` | `thundershock`, `thunderbolt`, `thunder`, `thunderwave` |
+| `fire.js` | `ember`, `flamethrower`, `firespin`, `dragonrage` |
+| `water.js` | `watergun`, `hydropump`, `surf`, `waterfall`, `bubble`, `clamp` |
+| `nature.js` | `vinewhip`, `razorleaf`, `petaldance`, `leechseed`, `drain`, `leechlife`, `powder`, `stringshot` |
+| `poison.js` | `poisonsting`, `twineedle`, `acid`, `sludge`, `gas`, `pinmissile`, `spikecannon` |
+| `mind.js` | `confusion`, `psychic`, `kinesis`, `hypnosis`, `nightshade`, `lick`, `confuseray`, `dreameater` |
+| `sound.js` | `screech`, `supersonic`, `growl`, `roar`, `sing`, `lovelykiss` |
+| `charge.js` | `tackle`, `quickattack`, `bodyslam`, `headbutt`, `skullbash`, `takedown`, `rage`, `thrash`, `outrage`, `hornattack`, `horndrill`, `stomp`, `slam` |
+| `strikes.js` | `pound`, `doubleslap`, `megapunch`, `cometpunch`, `firepunch`, `icepunch`, `thunderpunch`, `megakick`, `lowkick`, `doublekick`, `hijumpkick`, `seismictoss`, `submission`, `karatechop` |
+| `weapons.js` | `scratch`, `slash`, `furyswipes`, `cut`, `bite`, `hyperfang`, `crabhammer`, `vicegrip`, `guillotine`, `peck`, `drillpeck`, `furyattack`, `boneclub`, `bonemerang`, `wrap` |
+| `sky.js` | `gust`, `wingattack`, `fly`, `skyattack`, `agility`, `doubleteam` |
+| `earth.js` | `earthquake`, `dig`, `rockthrow`, `rockslide`, `sandattack`, `blizzard`, `mist` |
+| `guard.js` | `harden`, `withdraw`, `defensecurl`, `minimize`, `focusenergy`, `meditate`, `amnesia`, `barrier`, `reflect`, `lightscreen`, `acidarmor` |
+| `self.js` | `recover`, `softboiled`, `rest`, `splash`, `teleport`, `transform`, `explosion` |
+| `special.js` | `swift`, `payday`, `triattack`, `eggbomb` |
+| `basic.js` | `impact`, the fallback |
+
+`hooks/effects/draw.js` holds the shared drawing helpers and lists what an effect can do
+to a frame. Teleport leaves the mon at a random spot, Dig tunnels it forward, Transform
+borrows another mon's sprite for a few seconds, and Splash does nothing at all.
+
+To watch a move frame by frame without a terminal, render it to a PNG contact sheet:
+
+```bash
+node scripts/preview-attack.mjs pikachu thunderbolt          # from home, aiming left
+node scripts/preview-attack.mjs pikachu thunderbolt --at 2   # from the left edge, aiming right
+```
 
 ## Mons
 
@@ -109,18 +140,21 @@ smallest at 12 px (7 rows). Fearow, Gyarados, and Pidgeot are the tallest at
 | Path | Contents |
 | --- | --- |
 | `hooks/register.js` | Band renderer, animation timer, `/pokemon` command |
-| `hooks/attacks.js` | Attack animations, one function per effect |
-| `hooks/moves.js` | Each mon's moves and the effect each one plays |
+| `hooks/attacks.js` | Attack registry: each move's pose, aim, and frame |
+| `hooks/effects/*.js` | Attack animations, one file per family, on the helpers in `draw.js` |
+| `hooks/moves.js` | Each move's effect, and each mon's moveset |
 | `hooks/names.js` | Display names, like `Nidoran♀` and `Mr. Mime` |
 | `hooks/frames.js` | Generated pixel frames. Don't edit by hand. |
 | `sprites/<mon>/*.gif` | Source GIFs, 32x32 |
 | `scripts/build-frames.mjs` | Regenerates `frames.js` from the GIFs with ffmpeg |
+| `scripts/preview-attack.mjs` | Renders a move to a PNG contact sheet, one frame per tick |
 | `tests/pokemon.test.ts` | `claude plugin test` suite |
 
 ## Development
 
 ```bash
 node scripts/build-frames.mjs      # after changing sprites/
+node scripts/preview-attack.mjs <mon> <move>   # writes /tmp/<mon>-<move>.png
 claude plugin validate .
 claude plugin test
 claude --plugin-dir .              # live-reloading session
