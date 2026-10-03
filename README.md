@@ -38,6 +38,17 @@ narrow for them.
 - The terminal app. The Desktop app has no `Raster`, so the mod draws nothing there.
 - A truecolor terminal (iTerm2, Ghostty, kitty, WezTerm)
 
+## Install
+
+```bash
+claude plugin marketplace add dgokcin/claude-pokemon
+claude plugin install pokemon@claude-pokemon
+```
+
+To hack on it, clone the repo and add the clone instead
+(`claude plugin marketplace add ./claude-pokemon`). A local marketplace loads the
+mod in place, so edits apply on `/reload-plugins`.
+
 ## Usage
 
 | Command | Effect |
@@ -123,3 +134,5 @@ sprite paces inside a 40 column strip.
 Sprites come from [jakobhoeg/vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media).
 Pokémon sprites are © The Pokémon Company / Nintendo / Game Freak, used here
 for a personal, non-commercial fan project.
+This is a fan project, not affiliated with or endorsed by Nintendo, The Pokémon
+Company, or Game Freak.

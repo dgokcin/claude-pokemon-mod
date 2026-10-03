@@ -1,0 +1,14 @@
+{
+  "name": "claude-pokemon",
+  "description": "A pixel Pokémon for Claude Code",
+  "owner": {
+    "name": "deniz gökçin"
+  },
+  "plugins": [
+    {
+      "name": "pokemon",
+      "source": "./",
+      "description": "A pixel Pokémon that lives at the right edge of the band above the prompt"
+    }
+  ]
+}
