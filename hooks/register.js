@@ -1,14 +1,17 @@
+import { attackFrame, attackPose, attackTicks, effectOf } from './attacks.js'
 import { SPRITES } from './frames.js'
+import { MOVES } from './moves.js'
+import { displayName } from './names.js'
 
 // One pixel Pokémon lives in a strip at the right of the band above the prompt.
 // While Claude works it paces, with a thought bubble while Claude thinks. It
 // hops when a turn ends, then wanders while idle (or stays at the right edge,
 // after /pokemon wander) and falls asleep after five quiet minutes.
-// /pokemon pet makes hearts float up, and /pokemon feed drops a random pixel
+// /pokemon pet makes pixel hearts float up, and /pokemon feed drops a random pixel
 // berry for it to walk over and eat. Food and happiness drain over real time,
 // shown as pink ●●●○○ and ❤❤❤♡♡ at the right edge, so it needs both now and then.
-// The mon, berries, bubbles, and Zs are pixels in one Raster, two per cell.
-// Hearts are ♥ characters, one cell each, so they stay small.
+// /pokemon attack plays one of its moves, with the animations in attacks.js.
+// The mon, hearts, berries, bubbles, and Zs are pixels in one Raster, two per cell.
 
 const TICK_MS = 50
 const MOVE_TICKS = 3
@@ -22,8 +25,10 @@ const DEFAULT_COLOR = 0x01000000
 const HEART_COLORS = [0xff4f8b, 0xff9ec4]
 const HEART_COUNT = 7
 const HEART_GAP_TICKS = 7
-const HEART_RISE_TICKS = 5
-const HEART = 0x2665
+const HEART_RISE_TICKS = 3
+// Pixel hearts, big and small in turn: p body, h highlight
+const HEARTS = [['pp.pp', 'phppp', '.ppp.', '..p..'], ['p.p', 'ppp', '.p.']]
+const HEART_SHINE = 0xffe0ec
 const PET_TICKS = 60
 const FALL_TICKS = 2
 const EAT_TICKS = 30
@@ -62,6 +67,7 @@ let petUntil = 0
 let hearts = []
 let food = null
 let yumUntil = 0
+let attack = null
 let nowMs = 0
 let stats = {}
 
@@ -105,7 +111,10 @@ function idleTarget() {
   return wanderTarget ?? x
 }
 
-const isWalking = () => (food ? idleTarget() !== x : working || idleTarget() !== x)
+function isWalking() {
+  if (attack) return false
+  return food ? idleTarget() !== x : working || idleTarget() !== x
+}
 
 function markActive() {
   lastActive = tick
@@ -191,13 +200,14 @@ function pet() {
   petUntil = tick + PET_TICKS
   hopStart = tick
   const width = SPRITES[mon].width
-  const lowest = rowsOf(mon) - 3
+  const lowest = rowsOf(mon) * 2 - 6
   for (let k = 0; k < HEART_COUNT; k++) {
     hearts.push({
-      x: x - 2 + Math.floor(Math.random() * (width + 4)),
-      row: lowest - Math.floor(Math.random() * 3),
+      x: x - 2 + Math.floor(Math.random() * (width + 2)),
+      y: lowest - Math.floor(Math.random() * 6),
       born: tick + k * HEART_GAP_TICKS,
-      color: HEART_COLORS[k % HEART_COLORS.length],
+      rows: HEARTS[k % HEARTS.length],
+      colors: { p: HEART_COLORS[k % HEART_COLORS.length], h: HEART_SHINE },
     })
   }
 }
@@ -258,22 +268,73 @@ function stepFood() {
   clampX()
 }
 
-// Where each heart is now: rising a row every few ticks with a slight sway,
-// as a map from "column,row" to its color
-function heartCells() {
-  const cells = new Map()
+// Each heart where it is now: rising a pixel every few ticks with a slight sway
+function heartStamps() {
+  const out = []
   for (const heart of hearts) {
     const age = tick - heart.born
     if (age < 0) continue
-    const row = heart.row - Math.floor(age / HEART_RISE_TICKS)
-    const sway = Math.floor(age / (HEART_RISE_TICKS * 2)) % 2
-    if (row >= 0) cells.set(heart.x + sway + ',' + row, heart.color)
+    const sway = Math.floor(age / (HEART_RISE_TICKS * 3)) % 2
+    out.push(stamp(heart.x + sway, heart.y - Math.floor(age / HEART_RISE_TICKS), heart.rows, heart.colors))
   }
-  return cells
+  return out
+}
+
+// Start one of the mon's moves, aimed the way it walks, or toward the roomier side when it stands still
+function startAttack(move) {
+  markActive()
+  wanderTarget = null
+  const effect = effectOf(move.effect)
+  const room = columns - SPRITES[mon].width - x
+  const side = isWalking() ? facing : x >= room ? 'left' : 'right'
+  const others = MONS.filter((name) => name !== mon)
+  const fitting = others.filter((name) => spriteRows(name) <= spriteRows(mon))
+  const pool = fitting.length > 0 ? fitting : others
+  attack = {
+    effect,
+    color: move.color ?? null,
+    from: move.from ?? null,
+    start: tick,
+    ticks: attackTicks(effect),
+    side,
+    seed: Math.floor(Math.random() * 0x7fffffff),
+    toX: effect === 'teleport' ? (x + 1 + Math.floor(Math.random() * homeX())) % (homeX() + 1) : null,
+    swap: effect === 'transform' ? pool[Math.floor(Math.random() * pool.length)] : null,
+  }
+}
+
+// Hold still while the attack plays, then land wherever it left the mon
+function stepAttack() {
+  markActive()
+  if (tick - attack.start < attack.ticks) return
+  if (attack.toX !== null) x = attack.toX
+  facing = attack.side
+  attack = null
+  clampX()
+}
+
+// The first and last opaque pixel columns and rows of a frame, cached per frame
+const boxes = new WeakMap()
+function boxOf(rows, colors) {
+  let box = boxes.get(rows)
+  if (box) return box
+  box = { left: Infinity, right: -1, top: Infinity, bottom: -1 }
+  rows.forEach((row, py) => {
+    for (let px = 0; px < row.length; px++) {
+      if (colors[row[px]] === undefined) continue
+      box.left = Math.min(box.left, px)
+      box.right = Math.max(box.right, px)
+      box.top = Math.min(box.top, py)
+      box.bottom = Math.max(box.bottom, py)
+    }
+  })
+  if (box.right < 0) box = { left: 0, right: rows[0].length - 1, top: 0, bottom: rows.length - 1 }
+  boxes.set(rows, box)
+  return box
 }
 
 // The strip columns the top of the sprite covers, so a bubble can sit right beside it
-function headColumns(pixel, width) {
+function headColumns(pixel, width, x) {
   let left = width
   let right = -1
   for (let py = 0; py < HEAD_PIXELS; py++) {
@@ -288,36 +349,87 @@ function headColumns(pixel, width) {
 
 // What the idle mon is asking for, if anything. With both low it takes turns.
 function needNow() {
-  if (working || food || isPetted() || isAsleep() || tick < yumUntil) return null
+  if (working || food || attack || isPetted() || isAsleep() || tick < yumUntil) return null
   const needs = Object.keys(STATS).filter((key) => statNow(mon, key) < NEEDY_BELOW)
   if (needs.length === 0) return null
   return needs[Math.floor((tick * TICK_MS) / 3000) % needs.length]
 }
 
+const NO_POSE = { swap: false, asleep: false }
+const NO_EFFECT = { dots: [], chars: [], hidden: false, dx: 0, lift: 0, jitter: 0 }
+
+// Where the sprite stands in strip pixels, for aiming an attack
+function attackGeometry(sprite, frame, colors, flip, at, top, rows, pixel) {
+  const box = boxOf(frame, colors)
+  return {
+    x: at,
+    left: at + (flip ? sprite.width - 1 - box.right : box.left),
+    right: at + (flip ? sprite.width - 1 - box.left : box.right),
+    top: top + box.top,
+    bottom: top + box.bottom,
+    columns,
+    pixels: rows * 2,
+    side: attack.side === 'left' ? -1 : 1,
+    solid: (cx, py) => pixel(cx - at, py - top) !== null,
+  }
+}
+
+// The attack's pixels as one color per strip pixel, -1 where it draws nothing
+function overlayOf(dots, rows) {
+  if (dots.length === 0) return null
+  const pixels = rows * 2
+  const overlay = new Int32Array(columns * pixels).fill(-1)
+  for (let k = 0; k < dots.length; k += 3) {
+    const cx = dots[k]
+    const py = dots[k + 1]
+    if (cx >= 0 && cx < columns && py >= 0 && py < pixels) overlay[py * columns + cx] = dots[k + 2]
+  }
+  return overlay
+}
+
 // Pack the current frame into Raster cells, two pixels per cell with half blocks
 function cellsNow() {
-  const sprite = SPRITES[mon]
+  const age = attack ? tick - attack.start : 0
+  const pose = attack ? attackPose(attack, age) : NO_POSE
+  const shown = pose.swap ? attack.swap : mon
+  const sprite = SPRITES[shown]
   const sheet = sprite.variants[variant]
   const walking = isWalking()
   const anim = walking ? sheet.walk : sheet.idle
-  const frame = isAsleep() ? anim[0].rows : frameAt(anim, tick * TICK_MS)
-  const colors = COLORS[mon][variant]
-  const flip = walking && facing === 'left'
-  const hopUp = isHopping() && Math.floor((tick - hopStart) / 3) % 2 === 0
-  const top = HEAD_ROWS - (hopUp ? 1 : 0)
+  const asleep = isAsleep() || pose.asleep
+  const frame = asleep ? anim[0].rows : frameAt(anim, tick * TICK_MS)
+  const colors = COLORS[shown][variant]
+  const flip = attack ? attack.side === 'left' : walking && facing === 'left'
+  const rows = rowsOf(mon)
+  // A swapped-in mon stands on the same ground and stays inside the strip
+  const baseTop = (rows - spriteRows(shown)) * 2
+  const baseX = Math.max(0, Math.min(x, columns - sprite.width))
   const pixel = (px, py) => {
     if (px < 0 || px >= sprite.width || py < 0) return null
     const row = frame[py]
     if (!row) return null
     return colors[row[flip ? sprite.width - 1 - px : px]] ?? null
   }
-  const head = headColumns(pixel, sprite.width)
-  const rows = rowsOf(mon)
+  const effect = attack ? attackFrame(attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel)) : NO_EFFECT
+  const overlay = overlayOf(effect.dots, rows)
+  const hopUp = (isHopping() && Math.floor((tick - hopStart) / 3) % 2 === 0) || effect.lift > 0
+  const top = baseTop - (hopUp ? 2 : 0)
+  const left = baseX + effect.dx
+  const head = headColumns(pixel, sprite.width, left)
   const icon = bubbleIcon()
-  const floating = heartCells()
-  const under = [...(icon ? bubbleStamps(icon, head) : []), ...(isAsleep() ? sleepStamps(head) : [])]
+  const floating = new Map()
+  const over = heartStamps()
+  for (let k = 0; k < effect.chars.length; k += 4) {
+    floating.set(effect.chars[k] + ',' + effect.chars[k + 1], [effect.chars[k + 2], effect.chars[k + 3]])
+  }
+  const under = [...(icon ? bubbleStamps(icon, head) : []), ...(asleep ? sleepStamps(head) : [])]
   const colorAt = (cx, py) => {
-    const c = pixel(cx - x, py - top * 2) ?? foodPixel(cx, py)
+    if (overlay && overlay[py * columns + cx] >= 0) return overlay[py * columns + cx]
+    for (const s of over) {
+      const h = stampPixel(s, cx, py)
+      if (h !== null) return h
+    }
+    const c = (effect.hidden ? null : pixel(cx - left, py - top)) ?? foodPixel(cx, py)
     if (c !== null) return c
     for (const s of under) {
       const u = stampPixel(s, cx, py)
@@ -329,11 +441,16 @@ function cellsNow() {
   const words = new Uint32Array(columns * rows * 3)
   for (let cy = 0; cy < rows; cy++) {
     for (let cx = 0; cx < columns; cx++) {
-      const upper = colorAt(cx, cy * 2)
-      const lower = colorAt(cx, cy * 2 + 1)
-      const heart = floating.get(cx + ',' + cy)
       const i = (cy * columns + cx) * 3
-      if (heart) words.set([HEART, heart, upper ?? lower ?? DEFAULT_COLOR], i)
+      const sx = cx - effect.jitter
+      if (sx < 0 || sx >= columns) {
+        words.set([SPACE, DEFAULT_COLOR, DEFAULT_COLOR], i)
+        continue
+      }
+      const upper = colorAt(sx, cy * 2)
+      const lower = colorAt(sx, cy * 2 + 1)
+      const heart = floating.get(cx + ',' + cy)
+      if (heart) words.set([heart[0], heart[1], upper ?? lower ?? DEFAULT_COLOR], i)
       else if (upper !== null) words.set([UPPER_HALF, upper, lower ?? DEFAULT_COLOR], i)
       else if (lower !== null) words.set([LOWER_HALF, lower, DEFAULT_COLOR], i)
       else words.set([SPACE, DEFAULT_COLOR, DEFAULT_COLOR], i)
@@ -358,7 +475,8 @@ function planWander() {
 function step() {
   tick += 1
   nowMs += TICK_MS
-  hearts = hearts.filter((heart) => tick - heart.born <= (heart.row + 1) * HEART_RISE_TICKS)
+  hearts = hearts.filter((heart) => tick - heart.born <= (heart.y + heart.rows.length) * HEART_RISE_TICKS)
+  if (attack) return stepAttack()
   if (food) return stepFood()
   if (working) markActive()
   planWander()
@@ -415,14 +533,30 @@ function iconsFor(key) {
   return STATS[key].icon.repeat(filled) + STATS[key].emptyIcon.repeat(STAT_ICONS - filled)
 }
 
-const OPTIONS = [...MONS, ...VARIANTS, 'wander', 'pet', 'feed']
+const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'pet', 'feed', 'attack', 'list']
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
+
+const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
+const moveKey = (name) => name.toLowerCase().replace(/[\s\-_'.]/g, '')
+
+// Play a random move, or the one named, and announce it
+function attackCommand(wanted) {
+  const name = displayName(mon)
+  if (attack) return { text: name + ' is still attacking.' }
+  if (food) return { text: name + ' is busy eating.' }
+  const moves = MOVES[mon] ?? FALLBACK_MOVES
+  const move = wanted ? moves.find((m) => moveKey(m.name) === moveKey(wanted)) : moves[Math.floor(Math.random() * moves.length)]
+  if (!move) return { text: name + ' doesn\'t know "' + wanted + '". Its moves: ' + moves.map((m) => m.name).join(', ') + '.' }
+  startAttack(move)
+  const text = move.text ?? (attack.effect === 'splash' ? 'But nothing happened!' : null)
+  return { text: name + ' used ' + move.name + '!' + (text ? '\n' + text : '') }
+}
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'pokemon',
-      description: 'Pick the Pokémon above the prompt, switch it to shiny, let it wander, pet it, or feed it',
+      description: 'Pick the Pokémon above the prompt, switch it to shiny, let it wander, pet it, feed it, or make it attack',
       argumentHint: '[' + OPTIONS.join('|') + ']',
       immediate: true,
     })
@@ -470,7 +604,7 @@ export function register(on) {
       const pets = Number((await $.store.get('pets')) ?? 0) + 1
       await $.store.set('pets', pets)
       const line = PET_LINES[Math.floor(Math.random() * PET_LINES.length)]
-      return { text: mon + ' ' + line + ' ♥ (pets: ' + pets + ')' }
+      return { text: mon + ' ' + line + ' ❤ (pets: ' + pets + ')' }
     } else if (asked === 'feed') {
       if (food) return { text: mon + ' is still busy with the last one.' }
       const berry = feed()
@@ -482,8 +616,12 @@ export function register(on) {
       await $.store.set('feeds', feeds)
       const article = /^[aeiou]/.test(berry.name) ? 'an ' : 'a '
       return { text: 'You toss ' + mon + ' ' + article + berry.name + ' ' + berry.emoji + ' (feeds: ' + feeds + ')' }
+    } else if (asked === 'attack' || asked.startsWith('attack ')) {
+      return attackCommand(asked.slice('attack'.length).trim())
+    } else if (asked === 'list') {
+      return { text: MONS.length + ' mons: ' + MONS.join(', ') }
     } else if (asked) {
-      return { text: 'Unknown option "' + asked + '". Try one of: ' + OPTIONS.join(', ') + '.' }
+      return { text: 'Unknown option "' + asked + '". Try one of: ' + OPTIONS.join(', ') + '. See /pokemon list for every mon.' }
     } else {
       const mode = wander ? ', wandering' : ''
       const levels = 'food ' + Math.round(statNow(mon, 'food')) + '%, happiness ' + Math.round(statNow(mon, 'happiness')) + '%'

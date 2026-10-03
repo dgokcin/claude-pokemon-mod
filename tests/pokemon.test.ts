@@ -92,8 +92,9 @@ test('/pokemon switches the mon and the variant, and saves both', async ($, on) 
 
 test('/pokemon rejects an unknown name', async ($, on) => {
   mock.clock(on)
-  const answer = await $.command.run({ command: 'pokemon', args: 'mewtwo' })
-  expect(answer.text).toMatch(/^Unknown option "mewtwo"/)
+  const answer = await $.command.run({ command: 'pokemon', args: 'togepi' })
+  expect(answer.text).toMatch(/^Unknown option "togepi"/)
+  expect(answer.text).not.toContain('bulbasaur')
 })
 
 test('/pokemon charmander draws Charmander', async ($, on) => {
@@ -221,8 +222,8 @@ test('/pokemon pet sends hearts up, then they fade', async ($, on) => {
   await $.ui.mount({ ...BAND, surface: 'terminal' })
 
   const answer = await $.command.run({ command: 'pokemon', args: 'pet' })
-  expect(answer.text).toMatch(/^abra .+ ♥ \(pets: 1\)$/)
-  const hearty = (cells: string) => codePoints(cells).includes(0x2665)
+  expect(answer.text).toMatch(/^abra .+ ❤ \(pets: 1\)$/)
+  const hearty = (cells: string) => paints(cells, 0xff4f8b)
   await clock.advance(400)
   expect(hearty(blits[blits.length - 1])).toBe(true)
   await clock.advance(8000)
@@ -335,4 +336,121 @@ test('a lonely idle mon shows a heart bubble', async ($, on) => {
   await $.ui.mount({ ...BAND, surface: 'terminal' })
   await clock.advance(100)
   expect(paints(blits[blits.length - 1], 0xff6fa8)).toBe(true)
+})
+
+// Every color a blit paints, as a foreground or a background
+function colorsOf(cells: string): Set<number> {
+  const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
+  return new Set(Array.from(words).filter((_, i) => i % 3 !== 0))
+}
+
+test('/pokemon attack plays a random move, then ends', async ($, on) => {
+  const { clock, blits } = await started($, on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(100)
+  const still = blits[blits.length - 1]
+
+  const answer = await $.command.run({ command: 'pokemon', args: 'attack' })
+  expect(answer.text).toMatch(/^Abra used (Teleport|Confusion)!$/)
+  const seen = blits.length
+  await clock.advance(1000)
+  expect(blits.slice(seen).some((cells) => cells !== still)).toBe(true)
+
+  await clock.advance(2000)
+  const again = await $.command.run({ command: 'pokemon', args: 'attack' })
+  expect(again.text).toMatch(/^Abra used /)
+})
+
+test('/pokemon attack while attacking says the mon is busy', async ($, on) => {
+  await started($, on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.command.run({ command: 'pokemon', args: 'attack' })
+  const busy = await $.command.run({ command: 'pokemon', args: 'attack' })
+  expect(busy.text).toBe('Abra is still attacking.')
+})
+
+test('/pokemon attack <move> picks that move and draws it in its color', async ($, on) => {
+  const { clock, blits } = await started($, on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  const answer = await $.command.run({ command: 'pokemon', args: 'attack CON-fusion' })
+  expect(answer.text).toBe('Abra used Confusion!')
+  const seen = blits.length
+  await clock.advance(1000)
+  expect(blits.slice(seen).some((cells) => paints(cells, 0xd88aff))).toBe(true)
+  await clock.advance(2000)
+  expect(paints(blits[blits.length - 1], 0xd88aff)).toBe(false)
+
+  const unknown = await $.command.run({ command: 'pokemon', args: 'attack flamethrower' })
+  expect(unknown.text).toBe('Abra doesn\'t know "flamethrower". Its moves: Teleport, Confusion.')
+})
+
+test('Teleport blinks the mon to another spot in the strip', async ($, on) => {
+  const { clock, blits } = await startedWith($, on, { wander: false }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const home = rightEdge((await ui.find({ key: 'pokemon' })).props.cells)
+
+  const answer = await $.command.run({ command: 'pokemon', args: 'attack teleport' })
+  expect(answer.text).toBe('Abra used Teleport!')
+  const seen = blits.length
+  await clock.advance(50 * 40)
+  // Past the sparkles and before it walks home, the mon stands somewhere new
+  const landed = blits[seen + 33]
+  expect(rightEdge(landed)).toBeGreaterThan(-1)
+  expect(rightEdge(landed)).not.toBe(home)
+})
+
+test('Transform shows another mon for a while, then turns back', async ($, on) => {
+  const { clock, blits } = await startedWith($, on, { wander: false, mon: 'ditto' }, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(1000)
+  const own = new Set(blits.flatMap((cells) => [...colorsOf(cells)]))
+
+  const answer = await $.command.run({ command: 'pokemon', args: 'attack transform' })
+  expect(answer.text).toBe('Ditto used Transform!')
+  const seen = blits.length
+  await clock.advance(3000)
+  const during = blits.slice(seen, seen + 70)
+  expect(during.some((cells) => [...colorsOf(cells)].some((c) => !own.has(c)))).toBe(true)
+  // The band keeps its size while another sprite stands in
+  expect(new Set(blits.map((cells) => cells.length)).size).toBe(1)
+
+  await clock.advance(1000)
+  expect([...colorsOf(blits[blits.length - 1])].every((c) => own.has(c))).toBe(true)
+})
+
+test('Splash just hops, and nothing happens', async ($, on) => {
+  await started($, on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.command.run({ command: 'pokemon', args: 'magikarp' })
+  const answer = await $.command.run({ command: 'pokemon', args: 'attack splash' })
+  expect(answer.text).toBe('Magikarp used Splash!\nBut nothing happened!')
+})
+
+test('display names read like the games', async ($, on) => {
+  await started($, on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.command.run({ command: 'pokemon', args: 'nidoran_female' })
+  expect((await $.command.run({ command: 'pokemon', args: 'attack' })).text).toMatch(/^Nidoran♀ used /)
+})
+
+test('/pokemon list names every mon, and the hint and status stay short', async ($, on) => {
+  mock.clock(on)
+  let hint = ''
+  on('command.register', ($, e) => {
+    hint = e.argumentHint
+    return { value: undefined }
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('store.get', () => ({ value: undefined }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  expect(hint).toBe('[<mon>|default|shiny|wander|pet|feed|attack|list]')
+
+  const list = await $.command.run({ command: 'pokemon', args: 'list' })
+  expect(list.text).toMatch(/^\d+ mons: abra, /)
+  expect(list.text).toContain('charmander')
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).not.toContain('charmander')
 })
