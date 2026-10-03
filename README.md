@@ -4,6 +4,12 @@ A Claude Code mod that draws one pixel Pokémon at the right edge of the band
 above the prompt, reacting to what Claude is doing. The mon, hearts, berries,
 bubbles, and Zs are pixel art in one `Raster`. The meters are one-cell characters.
 
+![Bulbasaur gets petted, eats a berry, and uses Razor Leaf and Leech Seed above the Claude Code prompt](gifs/feed-pet-attack.gif)
+
+The sprites come from [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon)
+by Jakob Hoeg Mørk. This is an unofficial fan project, not affiliated with Nintendo
+or The Pokémon Company. See [Credits](#credits) and [Disclaimer](#disclaimer).
+
 ## Behavior
 
 | When | The mon | Driven by |
@@ -165,8 +171,24 @@ sprite paces inside a 40 column strip.
 
 ## Credits
 
-Sprites come from [jakobhoeg/vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media).
-Pokémon sprites are © The Pokémon Company / Nintendo / Game Freak, used here
-for a personal, non-commercial fan project.
-This is a fan project, not affiliated with or endorsed by Nintendo, The Pokémon
-Company, or Game Freak.
+The sprites come from [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon)
+by [Jakob Hoeg Mørk](https://github.com/jakobhoeg), the extension that puts Pokémon
+in your VS Code window. Those GIFs took slow, manual work to extract and make, and
+this mod would not exist without them. If you like the mod, give the original a star.
+
+- `sprites/` holds unmodified copies of the gen 1 GIFs from vscode-pokemon's
+  [`media/`](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) folder.
+- `hooks/frames.js` holds the pixel frames that `scripts/build-frames.mjs` generates
+  from those GIFs.
+- vscode-pokemon builds on [vscode-pets](https://github.com/tonybaloney/vscode-pets)
+  by [Anthony Shaw](https://github.com/tonybaloney).
+
+## Disclaimer
+
+This is an unofficial, non-commercial fan project. It is not affiliated with,
+endorsed by, or sponsored by Nintendo, Creatures Inc., GAME FREAK inc., or The
+Pokémon Company.
+
+Pokémon and Pokémon character names are trademarks of Nintendo. The sprite artwork
+is © Nintendo, Creatures Inc., GAME FREAK inc., and The Pokémon Company. Rights
+holders who want anything removed can open an issue.
