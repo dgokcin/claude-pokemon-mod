@@ -1,8 +1,36 @@
 # pokemon
 
 A Claude Code mod that draws one pixel Pokémon at the right edge of the band
-above the prompt. It paces back and forth while Claude works, walks home to the
-right edge when the turn ends, and bobs in place there while you're idle.
+above the prompt, reacting to what Claude is doing. The mon, berries, bubbles,
+and Zs are pixel art in one `Raster`. Hearts and meters are one-cell characters
+so they stay small.
+
+## Behavior
+
+| When | The mon | Driven by |
+| --- | --- | --- |
+| Claude works | Paces back and forth across the strip | band `isWorking` |
+| Claude thinks | Shows a pixel thought bubble with animated dots | spinner `mode === 'thinking'` |
+| A turn ends | Hops twice, unless you interrupted it | `turn.complete` (main agent only) |
+| You're idle | Strolls to random spots in the strip, resting 3 to 8 s between walks | |
+| You're idle, wandering off | Walks home to the right edge and bobs there | |
+| 5 minutes with no turns or typing | Falls asleep, with a small and a big pixel Z beside its head | `prompt.edit`, `prompt.submit`, turns |
+| `/pokemon pet` | Stops, hops, and sends up a stream of small ♥ hearts | |
+| `/pokemon feed` | A random pixel berry drops nearby, the mon walks over, eats it a column at a time, and shows a bubble with a star | |
+| Food or happiness under 30% | While idle and awake, shows a pixel thought bubble with a red berry (hungry) or a pink heart (lonely), taking turns when both are low | |
+
+## Needs
+
+Each mon has two meters at the bottom right of the band:
+
+| Meter | Icons | Drains from full in | Filled by |
+| --- | --- | --- | --- |
+| Food | `●●●○○` in salmon pink | 8 hours | `/pokemon feed`: +35 |
+| Happiness | `❤❤❤♡♡` in pink | 12 hours | `/pokemon pet`: +25, `/pokemon feed`: +5 |
+
+Each icon is 20%. The meters are stored with a timestamp, so they keep draining while
+Claude Code is closed. A new mon starts at 80%. The meters hide when the band is too
+narrow for them.
 
 ## Requirements
 
@@ -14,18 +42,23 @@ right edge when the turn ends, and bobs in place there while you're idle.
 
 | Command | Effect |
 | --- | --- |
-| `/pokemon` | Show which mon and variant are active, and the options |
+| `/pokemon` | Show the active mon, its variant, its food and happiness, and the options |
 | `/pokemon abra`, `/pokemon bulbasaur`, `/pokemon charmander` | Pick a mon, saved across sessions |
 | `/pokemon shiny`, `/pokemon default` | Pick a variant, saved across sessions |
+| `/pokemon wander` | Toggle idle wandering (on by default), saved across sessions |
+| `/pokemon pet` | Pet the mon. Wakes it up, and counts pets across sessions |
+| `/pokemon feed` | Toss it a random oran 🫐, pecha 🍑, razz 🍓, or sitrus 🍋 berry. Counts feeds across sessions |
 | Ctrl+X Ctrl+A | Collapse or expand the band (Claude Code's own binding) |
 
 ## Mons
 
+Band rows include one row of headroom for the hop.
+
 | Mon | Pixels | Band rows | Frames (default) |
 | --- | --- | --- | --- |
-| abra | 19x19 | 10 | 2 idle, 2 walk at 300 ms |
-| bulbasaur | 20x17 | 9 | 6 idle, 6 walk at 100 ms |
-| charmander | 19x17 | 9 | 2 idle, 2 walk at 300 ms |
+| abra | 19x19 | 11 | 2 idle, 2 walk at 300 ms |
+| bulbasaur | 20x17 | 10 | 6 idle, 6 walk at 100 ms |
+| charmander | 19x17 | 10 | 2 idle, 2 walk at 300 ms |
 
 ## Add a mon
 

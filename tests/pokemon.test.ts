@@ -17,9 +17,19 @@ const BAND = {
 
 const THEIRS = { type: 'Text', props: {}, children: ['drawn by Claude Code'] }
 
+// The strip is 40 columns, and the meters are text to its right
+const STRIP = 40
+const RASTER = 40
+
 function codePoints(cells: string): number[] {
   const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
   return Array.from(words).filter((_, i) => i % 3 === 0)
+}
+
+// Whether any cell paints a given color, as a foreground or a background
+function paints(cells: string, color: number): boolean {
+  const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
+  return Array.from(words).some((w, i) => i % 3 !== 0 && w === color)
 }
 
 test('draws Abra by default as a half-block raster in the terminal band', async ($, on) => {
@@ -27,8 +37,8 @@ test('draws Abra by default as a half-block raster in the terminal band', async 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   const raster = await ui.find({ key: 'pokemon' })
   expect(raster).toBeDefined()
-  expect(raster.props.columns).toBe(40)
-  expect(raster.props.rows).toBe(10)
+  expect(raster.props.columns).toBe(RASTER)
+  expect(raster.props.rows).toBe(11)
   expect(codePoints(raster.props.cells)).toContain(0x2580)
 })
 
@@ -61,6 +71,7 @@ test('paces while Claude works', async ($, on) => {
 })
 
 test('/pokemon switches the mon and the variant, and saves both', async ($, on) => {
+  mock.clock(on)
   const saved = new Map<string, unknown>()
   on('ui.render', () => THEIRS)
   on('store.set', ($, e) => {
@@ -76,34 +87,64 @@ test('/pokemon switches the mon and the variant, and saves both', async ($, on) 
   expect(saved.get('variant')).toBe('shiny')
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ key: 'pokemon' })).props.rows).toBe(9)
+  expect((await ui.find({ key: 'pokemon' })).props.rows).toBe(10)
 })
 
-test('/pokemon rejects an unknown name', async ($) => {
+test('/pokemon rejects an unknown name', async ($, on) => {
+  mock.clock(on)
   const answer = await $.command.run({ command: 'pokemon', args: 'mewtwo' })
   expect(answer.text).toMatch(/^Unknown option "mewtwo"/)
 })
 
 test('/pokemon charmander draws Charmander', async ($, on) => {
+  mock.clock(on)
   on('ui.render', () => THEIRS)
   on('store.set', () => ({ value: undefined }))
   const answer = await $.command.run({ command: 'pokemon', args: 'charmander' })
   expect(answer.text).toBe('Now showing default charmander.')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ key: 'pokemon' })).props.rows).toBe(9)
+  expect((await ui.find({ key: 'pokemon' })).props.rows).toBe(10)
 })
 
-// The rightmost column that holds part of the sprite
-function rightEdge(cells: string, columns: number): number {
+// The rightmost strip column that holds part of the sprite, ignoring the meters
+function rightEdge(cells: string): number {
   const points = codePoints(cells)
   let edge = -1
   points.forEach((cp, i) => {
-    if (cp !== 0x20) edge = Math.max(edge, i % columns)
+    if (cp !== 0x20 && i % RASTER < STRIP) edge = Math.max(edge, i % RASTER)
   })
   return edge
 }
 
-test('walks back to the right edge after a turn and idles there', async ($, on) => {
+test('with wandering off, walks back to the right edge after a turn and idles there', async ($, on) => {
+  const clock = mock.clock(on)
+  const blits: string[] = []
+  on('ui.render', () => THEIRS)
+  on('ui.blit', ($, e) => {
+    blits.push(e.cells)
+    return { value: {} }
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('command.register', () => ({ value: undefined }))
+  on('store.get', ($, e) => ({ value: e.key === 'wander' ? false : undefined }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+
+  const idle = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const home = rightEdge((await idle.find({ key: 'pokemon' })).props.cells)
+  await idle.unmount()
+
+  const busy = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
+  await clock.advance(150 * 10)
+  expect(rightEdge(blits[blits.length - 1])).toBeLessThan(home)
+  await busy.unmount()
+
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(150 * 40)
+  expect(rightEdge(blits[blits.length - 1])).toBe(home)
+})
+
+// Fire session.start with the stubs it needs, and collect every blit
+async function started($, on) {
   const clock = mock.clock(on)
   const blits: string[] = []
   on('ui.render', () => THEIRS)
@@ -114,18 +155,184 @@ test('walks back to the right edge after a turn and idles there', async ($, on) 
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  return { clock, blits }
+}
+
+const SPINNER = {
+  plugin: 'pokemon',
+  component: 'Spinner',
+  requestId: 'main',
+  viewport: BAND.viewport,
+  props: { word: 'Thinking', message: 'Thinking', suffix: '…', mode: 'thinking' },
+} as const
+
+test('shows a thought bubble while Claude thinks', async ($, on) => {
+  await started($, on)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.ui.mount({ ...SPINNER, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
+  const cells = (await ui.find({ key: 'pokemon' })).props.cells
+  expect(paints(cells, 0xf0f0f0)).toBe(true)
+  expect(paints(cells, 0x9a9ab0)).toBe(true)
+})
 
-  const idle = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  const home = rightEdge((await idle.find({ key: 'pokemon' })).props.cells, 40)
-  await idle.unmount()
+test('hops when a turn ends', async ($, on) => {
+  await started($, on)
+  on('turn.complete', () => ({ text: '' }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const before = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const still = (await before.find({ key: 'pokemon' })).props.cells
+  await before.unmount()
 
-  const busy = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
-  await clock.advance(150 * 10)
-  expect(rightEdge(blits[blits.length - 1], 40)).toBeLessThan(home)
-  await busy.unmount()
+  await $.turn.complete({ turnId: 't', answer: 'ok', durationMs: 1000, isAborted: false, usage: null })
+  const after = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await after.find({ key: 'pokemon' })).props.cells).not.toBe(still)
+})
 
+test('falls asleep after five idle minutes', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, blits } = await started($, on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await $.ui.mount({ ...BAND, surface: 'terminal' })
-  await clock.advance(150 * 40)
-  expect(rightEdge(blits[blits.length - 1], 40)).toBe(home)
+  await clock.advance(4 * 60 * 1000)
+  expect(paints(blits[blits.length - 1], 0xe8e8ff)).toBe(false)
+  await clock.advance(61 * 1000)
+  expect(paints(blits[blits.length - 1], 0xe8e8ff)).toBe(true)
+})
+
+test('wanders while idle by default, and /pokemon wander sends it home', async ($, on) => {
+  const { clock, blits } = await started($, on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const home = rightEdge((await ui.find({ key: 'pokemon' })).props.cells)
+
+  await clock.advance(30 * 1000)
+  expect(blits.some((cells) => rightEdge(cells) < home)).toBe(true)
+
+  const answer = await $.command.run({ command: 'pokemon', args: 'wander' })
+  expect(answer.text).toBe('abra is heading home.')
+  await clock.advance(10 * 1000)
+  expect(rightEdge(blits[blits.length - 1])).toBe(home)
+})
+
+test('/pokemon pet sends hearts up, then they fade', async ($, on) => {
+  const { clock, blits } = await started($, on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  const answer = await $.command.run({ command: 'pokemon', args: 'pet' })
+  expect(answer.text).toMatch(/^abra .+ ♥ \(pets: 1\)$/)
+  const hearty = (cells: string) => codePoints(cells).includes(0x2665)
+  await clock.advance(400)
+  expect(hearty(blits[blits.length - 1])).toBe(true)
+  await clock.advance(8000)
+  expect(hearty(blits[blits.length - 1])).toBe(false)
+})
+
+// Whether any cell paints a berry's body color, as a foreground or a background
+const BERRY_BODIES = [0x4a63d8, 0xf48fb1, 0xd81b60, 0xfdd835]
+function hasBerry(cells: string): boolean {
+  const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
+  return Array.from(words).some((w, i) => i % 3 !== 0 && BERRY_BODIES.includes(w))
+}
+
+test('/pokemon feed drops a random berry, the mon walks over and eats it, then says yum', async ($, on) => {
+  const { clock, blits } = await started($, on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  const answer = await $.command.run({ command: 'pokemon', args: 'feed' })
+  expect(answer.text).toMatch(/^You toss abra (an oran|a pecha|a razz|a sitrus) berry \S+ \(feeds: 1\)$/u)
+  const busy = await $.command.run({ command: 'pokemon', args: 'feed' })
+  expect(busy.text).toBe('abra is still busy with the last one.')
+
+  await clock.advance(1000)
+  expect(hasBerry(blits[blits.length - 1])).toBe(true)
+
+  // Long enough to land, walk the whole strip, eat, and say "yum!"
+  const seen = blits.length
+  await clock.advance(150 * 40 + 2000)
+  const later = blits.slice(seen)
+  expect(later.some((cells) => paints(cells, 0xffd54f))).toBe(true)
+  expect(hasBerry(blits[blits.length - 1])).toBe(false)
+})
+
+const HOUR = 3600 * 1000
+
+// Fire session.start with a saved store and a clock set to a given time
+async function startedWith($, on, saved: Record<string, unknown>, now: number) {
+  const clock = mock.clock(on, { now })
+  const blits: string[] = []
+  on('ui.render', () => THEIRS)
+  on('ui.blit', ($, e) => {
+    blits.push(e.cells)
+    return { value: {} }
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('command.register', () => ({ value: undefined }))
+  on('store.get', ($, e) => ({ value: saved[e.key] }))
+  on('store.set', ($, e) => {
+    saved[e.key] = e.value
+    return { value: undefined }
+  })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  return { clock, blits }
+}
+
+test('draws food circles and happiness hearts at the right edge', async ($, on) => {
+  await startedWith($, on, {}, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  // A new mon starts at 80%: four filled icons and one empty in each meter
+  expect(await ui.find({ type: 'Text', text: '●●●●○' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '❤❤❤❤♡' })).toBeDefined()
+})
+
+test('hides the meters when the band is too narrow', async ($, on) => {
+  await startedWith($, on, {}, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: 44 } })
+  expect((await ui.find({ key: 'pokemon' })).props.columns).toBe(STRIP)
+  expect(await ui.find({ type: 'Text', text: /●/ })).toBeUndefined()
+})
+
+test('food and happiness drain over real time, even between sessions', async ($, on) => {
+  const full = { value: 100, at: 0 }
+  await startedWith($, on, { stats: { abra: { food: full, happiness: full } } }, 4 * HOUR)
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).toContain('food 50%, happiness 67%')
+})
+
+test('feeding fills food, petting fills happiness, and both are saved', async ($, on) => {
+  const saved: Record<string, any> = { stats: { abra: { food: { value: 10, at: 0 }, happiness: { value: 10, at: 0 } } } }
+  await startedWith($, on, saved, 0)
+  await $.command.run({ command: 'pokemon', args: 'feed' })
+  await $.command.run({ command: 'pokemon', args: 'pet' })
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).toContain('food 45%, happiness 40%')
+  expect(Math.round(saved.stats.abra.food.value)).toBe(45)
+})
+
+test('a hungry idle mon shows a berry bubble until it is fed', async ($, on) => {
+  const low = { value: 10, at: 0 }
+  const fine = { value: 90, at: 0 }
+  const { clock, blits } = await startedWith($, on, { stats: { abra: { food: low, happiness: fine } } }, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(100)
+  const hungry = blits[blits.length - 1]
+  expect(paints(hungry, 0xf0f0f0)).toBe(true)
+  expect(paints(hungry, 0xd84040)).toBe(true)
+  expect(paints(hungry, 0xff6fa8)).toBe(false)
+
+  await $.command.run({ command: 'pokemon', args: 'feed' })
+  await $.command.run({ command: 'pokemon', args: 'feed' })
+  await clock.advance(10 * 1000)
+  expect(paints(blits[blits.length - 1], 0xd84040)).toBe(false)
+})
+
+test('a lonely idle mon shows a heart bubble', async ($, on) => {
+  const low = { value: 10, at: 0 }
+  const fine = { value: 90, at: 0 }
+  const { clock, blits } = await startedWith($, on, { stats: { abra: { food: fine, happiness: low } } }, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(100)
+  expect(paints(blits[blits.length - 1], 0xff6fa8)).toBe(true)
 })
