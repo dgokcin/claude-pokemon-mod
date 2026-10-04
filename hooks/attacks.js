@@ -11,6 +11,7 @@ import { BEAMS } from './effects/beams.js'
 import { CHARGES } from './effects/charge.js'
 import { EARTH } from './effects/earth.js'
 import { ELECTRIC } from './effects/electric.js'
+import { EVOLVE } from './effects/evolve.js'
 import { FIRE } from './effects/fire.js'
 import { GUARD } from './effects/guard.js'
 import { MIND } from './effects/mind.js'
@@ -26,8 +27,8 @@ import { WEAPONS } from './effects/weapons.js'
 import { clamp } from './effects/draw.js'
 
 const EFFECTS = {
-  ...BASIC, ...BEAMS, ...CHARGES, ...EARTH, ...ELECTRIC, ...FIRE, ...GUARD, ...MIND, ...NATURE,
-  ...POISON, ...SELF, ...SKY, ...SOUND, ...SPECIAL, ...STRIKES, ...WATER, ...WEAPONS,
+  ...BASIC, ...BEAMS, ...CHARGES, ...EARTH, ...ELECTRIC, ...EVOLVE, ...FIRE, ...GUARD, ...MIND,
+  ...NATURE, ...POISON, ...SELF, ...SKY, ...SOUND, ...SPECIAL, ...STRIKES, ...WATER, ...WEAPONS,
 }
 
 const FALLBACK = 'impact'
