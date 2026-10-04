@@ -722,6 +722,33 @@ test('/pokemon box says when the box is empty, or holds only the active mon', as
   expect(await run()).toBe('1 mon in your box:\nAbra, Lv. 5 ●●●●○ ❤❤❤❤❤ (active)\nOnly Abra so far. /pokemon <mon> picks another.')
 })
 
+test('/pokemon release drops a mon from the box, so it starts over at its first level with fresh meters', async ($, on) => {
+  const low = { value: 10, at: 0 }
+  const saved: Record<string, any> = { mon: 'pikachu', stats: { pikachu: { xp: 12 ** 3, food: low, happiness: low }, charizard: { xp: 40 ** 3 } } }
+  await startedWith($, on, saved, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+
+  expect(await run('release')).toBe('Name the mon to release, like /pokemon release pikachu. /pokemon box lists yours.')
+  expect(await run('release agumon')).toBe('Unknown mon "agumon". /pokemon box lists yours.')
+  expect(await run('release bulbasaur')).toBe('Bulbasaur isn\'t in your box.')
+
+  expect(await run('release charizard')).toBe('You release Charizard. Bye-bye, Charizard!')
+  expect(Object.keys(saved.stats)).toEqual(['pikachu'])
+
+  expect(await run('release pikachu')).toBe('You release Pikachu. Bye-bye, Pikachu! A fresh Pikachu takes its place.')
+  expect(saved.stats).toEqual({})
+  expect(saved.mon).toBe('pikachu')
+  expect(await run('box')).toBe('Your box is empty. Pet or feed Pikachu, or finish a turn, to start raising it.')
+  expect(await run('')).toContain('Pikachu Lv. 5, wandering (food 80%, happiness 80%)')
+})
+
+test('/pokemon release waits while the mon evolves', async ($, on) => {
+  await startedWith($, on, { mon: 'pikachu', stats: { pikachu: { xp: 12 ** 3 } } }, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await run('evolve')).toBe('You use a Thunder Stone on Pikachu.')
+  expect(await run('release pikachu')).toBe('Pikachu is evolving! /pokemon stop cancels it.')
+})
+
 test('a refused frame, as when a resize remounts the band, asks for a redraw at most once a second', async ($, on) => {
   const clock = mock.clock(on)
   let renders = 0
@@ -777,7 +804,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('session.start', () => ({ cwd: '/work' }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|pet|feed|attack|moves|evolve|stop|stats|box|list]')
+  expect(hint).toBe('[<mon>|default|shiny|wander|needs|pet|feed|attack|moves|evolve|stop|stats|box|release|list]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)

@@ -472,8 +472,8 @@ function stepAttack() {
 // with any move or berry
 const isFree = () => !working && !attack && !food && !isAsleep() && !isAlerted()
 
-// Petting, feeding, attacking, and switching mons wait while it evolves
-const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'attack']
+// Petting, feeding, attacking, releasing, and switching mons wait while it evolves
+const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'attack', 'release']
 const waitsForEvolution = (asked) => evolving !== null && (MONS.includes(asked) || WAITS_FOR_EVOLUTION.includes(asked.split(' ')[0]))
 
 // Play the evolve effect with the evolved mon swapped in, in a band grown to fit both
@@ -923,6 +923,19 @@ function boxText() {
   return count + ' in your box:\n' + lines.join('\n') + alone
 }
 
+// Drop a mon's record from the box, so it starts over at its first level with fresh
+// meters. The active mon stays on screen and starts over in place.
+function releaseCommand(wanted) {
+  if (!wanted) return { text: 'Name the mon to release, like /pokemon release ' + mon + '. /pokemon box lists yours.' }
+  if (!MONS.includes(wanted)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
+  const name = displayName(wanted)
+  if (!stats[wanted]) return { text: name + ' isn\'t in your box.' }
+  delete stats[wanted]
+  if (wanted !== mon) return { text: 'You release ' + name + '. Bye-bye, ' + name + '!' }
+  evolveDue = null
+  return { text: 'You release ' + name + '. Bye-bye, ' + name + '! A fresh ' + name + ' takes its place.' }
+}
+
 // A hungry mon drags its feet, except on its way to a berry
 const moveTicks = () => (needsOn && statNow(mon, 'food') < NEEDY_BELOW ? HUNGRY_MOVE_TICKS : MOVE_TICKS)
 
@@ -938,7 +951,7 @@ function hopForJoy() {
   }
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'pet', 'feed', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'list']
+const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'pet', 'feed', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'release', 'list']
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
@@ -1118,6 +1131,11 @@ export function register(on) {
       return { text: await statsText($) }
     } else if (asked === 'box') {
       return { text: boxText() }
+    } else if (asked === 'release' || asked.startsWith('release ')) {
+      const result = releaseCommand(asked.slice('release'.length).trim())
+      await $.store.set('stats', stats)
+      $.ui.invalidate('ui.render')
+      return result
     } else if (asked === 'list') {
       return { text: MONS.length + ' mons: ' + MONS.join(', ') }
     } else if (asked) {
