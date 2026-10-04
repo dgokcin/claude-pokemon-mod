@@ -2,14 +2,12 @@
 
 // Checks that the mod's tables agree with each other: every move has an effect, every
 // mon has sprites and moves, evolutions name real mons without loops, levels round-trip,
-// the generated frames match their mon's size and palette, and every frame's eyes are
-// marked inside it.
+// and the generated frames match their mon's size and palette.
 //
 // node scripts/check-data.mjs
 
 import { effectOf } from '../hooks/attacks.js'
 import { EVOLUTIONS } from '../hooks/evolutions.js'
-import { EYES, eyesOf } from '../hooks/eyes.js'
 import { SPRITES } from '../hooks/frames.js'
 import { MAX_LEVEL, levelAt, xpAt } from '../hooks/levels.js'
 import { MOVE_FX, MOVES } from '../hooks/moves.js'
@@ -73,29 +71,6 @@ for (const mon of mons) {
         if (frame.rows.some((row) => row.length !== width)) fail(`${where} has a row that isn't ${width} wide`)
         if (frame.rows.some((row) => [...row].some((ch) => ch !== '.' && !letters.has(ch)))) fail(`${where} uses a color outside its palette`)
         if (!(frame.ms > 0)) fail(`${where} has no duration`)
-      })
-    }
-  }
-}
-
-for (const mon of Object.keys(EYES)) if (!SPRITES[mon]) fail(`eyes for ${mon}, which has no sprites`)
-
-for (const mon of mons) {
-  if (!EYES[mon]) fail(`${mon} has no eyes marked`)
-  const { width, height, variants } = SPRITES[mon]
-  for (const [variant, sheet] of Object.entries(variants)) {
-    for (const anim of ['idle', 'walk']) {
-      const marked = (EYES[mon]?.[variant] ?? EYES[mon])?.[anim]
-      if (marked && marked.length !== sheet[anim].length) fail(`${mon} ${variant} ${anim} has eyes for ${marked.length} frames, not ${sheet[anim].length}`)
-      sheet[anim].forEach((frame, k) => {
-        for (const box of eyesOf(mon, variant, anim, k) ?? []) {
-          const [x, y, w, h] = box
-          const where = `${mon} ${variant} ${anim} frame ${k} eye ${JSON.stringify(box)}`
-          if (box.length !== 4 || !box.every(Number.isInteger)) fail(`${where} isn't [x, y, width, height]`)
-          else if (x < 0 || y < 0 || x + w > width || y + h > height) fail(`${where} is outside the ${width}x${height} frame`)
-          else if (w < 1 || h < 1) fail(`${where} is empty`)
-          else if (![...frame.rows[y + h - 1].slice(x, x + w)].some((ch) => ch !== '.')) fail(`${where} has no lid row on the sprite`)
-        }
       })
     }
   }
