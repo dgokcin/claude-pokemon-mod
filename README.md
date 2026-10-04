@@ -131,8 +131,10 @@ Two meters sit at the bottom right of the band. Each icon is 20%.
 | Food | `🍓🍓🍓○ ○` | 8 hours | `/pokemon feed`: +20 |
 | Happiness | `💗💗💗♡ ♡` | 12 hours | `/pokemon pet`: +25, `/pokemon feed`: +5 |
 
-The meters drain at a quarter speed while Claude Code is closed. A new mon starts at 80%. The meters
-scale the XP a turn earns, from half when both are empty to one and a half when both are
+The meters drain at a quarter speed while Claude Code is closed. Only the mon on show
+drains, so the others in your box keep their meters until you pick them again. Asleep with
+`/pokemon sleep`, food drains at half speed and happiness at a quarter. A new mon starts at
+80%. The meters scale the XP a turn earns, from half when both are empty to one and a half when both are
 full. `/pokemon needs` turns them off, and XP then ignores them.
 
 </details>
