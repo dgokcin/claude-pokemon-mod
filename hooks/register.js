@@ -1,6 +1,6 @@
 import { attackFrame, attackPose, prepareAttack } from './attacks.js'
 import { evolutionsOf, levelEvolutionOf, startLevel } from './evolutions.js'
-import { closedEyes } from './eyes.js'
+import { closedEyes, eyesOf } from './eyes.js'
 import { SPRITES } from './frames.js'
 import { MAX_LEVEL, careOf, levelAt, turnXp, xpAt } from './levels.js'
 import { movesOf } from './moves.js'
@@ -14,7 +14,8 @@ import { zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 // after /pokemon wander) and falls asleep after five quiet minutes.
 // /pokemon pet makes pixel hearts float up, and /pokemon feed drops a random pixel
 // berry for it to walk over and eat. Food and happiness drain over time, slower while Claude Code is closed,
-// shown as 🍓🍓🍓○ ○ and 💗💗💗♡ ♡ at the right edge, so it needs both now and then.
+// shown as ●●●○○ and ♥♥♥♡♡ at the right edge, so it needs both now and then.
+// /pokemon emoji swaps the meters' icons for 🍓 and 💗.
 // /pokemon sleep tucks it in, so both meters drain slower until Claude starts working.
 // /pokemon attack plays one of its moves, with the animations in attacks.js.
 // While a tool runs, the bubble shows it, and when Claude waits on you the mon stops
@@ -119,6 +120,7 @@ let attack = null
 let nowMs = 0
 let stats = {}
 let needsOn = true
+let emojiOn = false
 let evolving = null
 let evolveDue = null
 let joyHopAt = null
@@ -720,8 +722,10 @@ function needNow() {
 
 // A sleeping mon's frame with its eyes shut, cached per frame
 const sleepingFrames = new Map()
-function sleepingFrame(rows, palette) {
-  if (!sleepingFrames.has(rows)) sleepingFrames.set(rows, closedEyes(rows, palette))
+function sleepingFrame(shown, view) {
+  const sheet = SPRITES[shown].variants[variant]
+  const rows = sheet[view][0].rows
+  if (!sleepingFrames.has(rows)) sleepingFrames.set(rows, closedEyes(rows, sheet.palette, eyesOf(shown, variant, view, 0)))
   return sleepingFrames.get(rows)
 }
 
@@ -835,7 +839,7 @@ function cellsNow() {
   const anim = sideOn ? sheet.walk : sheet.idle
   const asleep = isAsleep() || pose.asleep
   let frame = frameAt(anim, tick * TICK_MS)
-  if (asleep) frame = sleepingFrame(anim[0].rows, sheet.palette)
+  if (asleep) frame = sleepingFrame(shown, sideOn ? 'walk' : 'idle')
   else if (attack && sideOn) frame = anim[pose.stride ? Math.floor(age / STRIDE_TICKS) % anim.length : 0].rows
   const colors = COLORS[shown][variant]
   // Facing out, the sprite stays unmirrored like the idle mon, so it doesn't jump when the move ends
@@ -989,21 +993,39 @@ function step() {
 // Each stat drains from full to empty over its hours, per mon. It's stored with a
 // timestamp, which slowMeters moves on past most of the time when no session ran
 const STATS = {
-  // The empty icons take the color of the emoji they stand in for
-  food: { hoursToEmpty: 8, icon: '🍓', emptyIcon: '○', color: '#e0303e' },
-  happiness: { hoursToEmpty: 12, icon: '💗', emptyIcon: '♡', color: '#ff7aa8' },
+  food: { hoursToEmpty: 8 },
+  happiness: { hoursToEmpty: 12 },
+}
+// The meters' icons, plain text unless /pokemon emoji turns emoji on. Each text pair is a
+// filled and an empty glyph from one Unicode block, drawn one column wide at one size, with
+// no emoji presentation. An emoji icon takes two columns: a filled one is drawn two wide from
+// the emoji font whatever the terminal's font, and an empty one is followed by a space. Some
+// fonts lack ○ or ♡ and borrow a wider glyph, which then spills into the space, not the next icon.
+// Many fonts lack ♡ too, so with dimEmpty the band draws empty icons as the filled glyph, dimmed.
+// Plain text replies can't dim, so they keep the empty glyph.
+const METER_STYLES = {
+  text: {
+    columns: 1,
+    food: { icon: '●', emptyIcon: '○', color: '#ea697d' },
+    happiness: { icon: '♥', emptyIcon: '♡', color: '#ff5f9e', dimEmpty: true },
+  },
+  emoji: {
+    columns: 2,
+    // The empty icons take the color of the emoji they stand in for
+    food: { icon: '🍓', emptyIcon: '○', color: '#e0303e' },
+    happiness: { icon: '💗', emptyIcon: '♡', color: '#ff7aa8' },
+  },
 }
 const START_STAT = 80
-// One icon's worth, so each berry adds exactly one strawberry
+// One icon's worth, so each berry adds exactly one icon
 const FEED_FOOD = 20
 const FEED_HAPPINESS = 5
 const PET_HAPPINESS = 25
 const NEEDY_BELOW = 30
 const STAT_ICONS = 5
-// Each icon takes two columns: a filled one is an emoji, drawn two wide from the emoji font
-// whatever the terminal's font, and an empty one is followed by a space. Some fonts
-// lack ○ or ♡ and borrow a wider glyph, which then spills into the space, not the next icon.
-const METER_COLUMNS = STAT_ICONS * 2
+const meterStyle = () => (emojiOn ? METER_STYLES.emoji : METER_STYLES.text)
+// The columns a meter takes in the active style
+const meterColumns = () => STAT_ICONS * meterStyle().columns
 const STAT_REDRAW_TICKS = 1200
 const HUNGRY_MOVE_TICKS = 5
 const HAPPY_FROM = 80
@@ -1213,8 +1235,9 @@ const isFull = () => filledIcons('food') === STAT_ICONS
 const isHappiest = () => filledIcons('happiness') === STAT_ICONS
 
 function iconsFor(key, name = mon) {
+  const style = meterStyle()
   const filled = filledIcons(key, name)
-  return STATS[key].icon.repeat(filled) + (STATS[key].emptyIcon + ' ').repeat(STAT_ICONS - filled)
+  return style[key].icon.repeat(filled) + (style[key].emptyIcon + ' '.repeat(style.columns - 1)).repeat(STAT_ICONS - filled)
 }
 
 // A nickname lives in the mon's record too, so it follows the mon through evolution
@@ -1263,7 +1286,7 @@ async function statsText($) {
 }
 
 // Every mon with a saved record, highest level first, one a line, like
-// "Charizard, Lv. 36 🍓🍓🍓○ ○ 💗💗💗♡ ♡ (active)"
+// "Charizard, Lv. 36 ●●●○○ ♥♥♥♡♡ (active)"
 function boxText() {
   const raised = Object.keys(stats).filter((name) => MONS.includes(name) && stats[name] && typeof stats[name] === 'object')
   if (raised.length === 0) return 'Your box is empty. Pet or feed ' + displayName(mon) + ', or finish a turn, to start raising it.'
@@ -1328,7 +1351,7 @@ function hopForJoy() {
   }
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'pet', 'feed', 'sleep', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'nickname', 'release', 'list']
+const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'emoji', 'pet', 'feed', 'sleep', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'nickname', 'release', 'list']
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
@@ -1460,6 +1483,7 @@ export function register(on) {
     if (VARIANTS.includes(savedVariant)) variant = savedVariant
     wander = (await $.store.get('wander')) !== false
     needsOn = (await $.store.get('needs')) !== false
+    emojiOn = (await $.store.get('emoji')) === true
     const savedStats = await $.store.get('stats')
     if (savedStats && typeof savedStats === 'object') stats = savedStats
     nowMs = await $.clock.now()
@@ -1574,6 +1598,12 @@ export function register(on) {
       $.ui.invalidate('ui.render')
       const name = nameOf(mon)
       return { text: needsOn ? 'Needs are on. Keep ' + name + ' fed and happy.' : 'Needs are off. ' + name + ' won\'t get hungry or lonely.' }
+    } else if (asked === 'emoji') {
+      emojiOn = !emojiOn
+      await $.store.set('emoji', emojiOn)
+      $.ui.invalidate('ui.render')
+      const icons = iconsFor('food').trimEnd() + ' ' + iconsFor('happiness').trimEnd()
+      return { text: (emojiOn ? 'The meters show emoji: ' : 'The meters show text icons: ') + icons }
     } else if (asked === 'evolve' || asked.startsWith('evolve ')) {
       return evolveCommand($, asked.slice('evolve'.length).trim())
     } else if (asked === 'stop') {
@@ -1670,15 +1700,26 @@ export function register(on) {
     maxRows = e.props.maxRows
     // The panel goes over the scene's right end when the band shows at full size and
     // has room for it, and beside a shrunk band otherwise
-    const meterColumns = METER_COLUMNS + 1
+    const panelColumns = meterColumns() + 1
     const fullSize = bandRows() <= maxRows
-    panel = fullSize && e.props.bodyColumns >= SPRITES[mon].width + meterColumns ? meterColumns : 0
+    panel = fullSize && e.props.bodyColumns >= SPRITES[mon].width + panelColumns ? panelColumns : 0
     columns = Math.max(SPRITES[mon].width, Math.min(STRIP_COLUMNS, e.props.bodyColumns - panel))
     margin = fullSize ? Math.max(0, Math.min(BUBBLE_SPAN, e.props.bodyColumns - panel - columns)) : 0
     if (wasHome) x = homeX()
     clampX()
 
-    const meter = (key, lead = '') => Text({ color: STATS[key].color, children: [lead + iconsFor(key)] })
+    const meter = (key, lead = '') => {
+      const icons = meterStyle()[key]
+      if (!icons.dimEmpty) return Text({ color: icons.color, children: [lead + iconsFor(key)] })
+      const filled = filledIcons(key)
+      return Box({
+        flexDirection: 'row',
+        children: [
+          Text({ color: icons.color, children: [lead + icons.icon.repeat(filled)] }),
+          Text({ dimColor: true, children: [icons.icon.repeat(STAT_ICONS - filled)] }),
+        ],
+      })
+    }
     const level = Text({ dimColor: true, children: [levelLine()] })
     const zoom = bandZoom()
     let corner
@@ -1691,7 +1732,7 @@ export function register(on) {
         corner = [Box({ position: 'relative', children: [sprite, meters] })]
       } else {
         const meters = Box({ flexDirection: 'column', justifyContent: 'flex-end', paddingLeft: 1, children: meterLines })
-        corner = e.props.bodyColumns >= zoom.columns + METER_COLUMNS + 1 ? [sprite, meters] : [sprite]
+        corner = e.props.bodyColumns >= zoom.columns + panelColumns ? [sprite, meters] : [sprite]
       }
     } else {
       // Too short even for a shrunk mon: its name, level, and meters on one line, and no blits

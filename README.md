@@ -82,6 +82,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon stop` | Cancel an evolution |
 | `/pokemon sleep` | Tuck the mon in, so its meters drain slower until Claude starts working. Run it again to wake it |
 | `/pokemon needs` | Toggle food and happiness (on by default) |
+| `/pokemon emoji` | Toggle emoji meters, 🍓 and 💗 instead of ● and ♥ (off by default, saved across sessions) |
 | `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
 | `/pokemon box` | List every mon you've raised, highest level first |
 | `/pokemon nickname <name>` | Nickname the mon, up to 12 characters. It keeps the name when it evolves, and its species name takes the nickname away |
@@ -128,8 +129,13 @@ Two meters sit at the bottom right of the band. Each icon is 20%.
 
 | Meter | Icons | Empties from full in | Filled by |
 | --- | --- | --- | --- |
-| Food | `🍓🍓🍓○ ○` | 8 hours | `/pokemon feed`: +20 |
-| Happiness | `💗💗💗♡ ♡` | 12 hours | `/pokemon pet`: +25, `/pokemon feed`: +5 |
+| Food | `●●●○○` | 8 hours | `/pokemon feed`: +20 |
+| Happiness | `♥♥♥♥♥`, the last two dimmed | 12 hours | `/pokemon pet`: +25, `/pokemon feed`: +5 |
+
+The icons are plain text, one column each. Empty hearts are a dimmed `♥`, because many
+fonts lack `♡` and borrow it from another font at another size. If your terminal draws
+emoji well, `/pokemon emoji` swaps them for `🍓🍓🍓○ ○` and `💗💗💗♡ ♡`, two columns each.
+Run it again to switch back.
 
 The meters drain at a quarter speed while Claude Code is closed. Only the mon on show
 drains, so the others in your box keep their meters until you pick them again. Asleep with
@@ -211,7 +217,7 @@ Gyarados, and Pidgeot are the tallest at 17.
 When the pane is too short, the band shrinks the whole scene to fit. Each shrunk pixel
 takes the most common color of its block, and ties go to the darker color, so outlines and
 eyes survive. Below 4 rows it shows a line of text instead, like
-`Pikachu Lv 12 🍓🍓🍓🍓○  💗💗💗💗♡`.
+`Pikachu Lv 12 ●●●●○ ♥♥♥♥♡`.
 
 </details>
 
@@ -232,7 +238,8 @@ A local marketplace loads the mod in place, so your edits apply on `/reload-plug
 2. Run `node scripts/build-frames.mjs`.
 3. Give it a moveset in `MOVES` in `hooks/moves.js`. Every mon needs at least one move.
 4. If it evolves, add it to `hooks/evolutions.js`. If its name isn't just the key capitalized, add it to `hooks/names.js`.
-5. Run `node scripts/check-data.mjs`, then `/reload-plugins`.
+5. Mark its eyes on every frame in `EYES` in `hooks/eyes.js`, and check them asleep with `node scripts/preview-sleep.mjs <mon>`.
+6. Run `node scripts/check-data.mjs`, then `/reload-plugins`.
 
 </details>
 
@@ -243,6 +250,7 @@ A local marketplace loads the mod in place, so your edits apply on `/reload-plug
 node scripts/build-frames.mjs                    # after changing sprites/
 node scripts/preview-attack.mjs <mon> <move>     # contact sheet in /tmp/<mon>-<move>.png
 node scripts/preview-attack.mjs <mon> <move> --at 2   # start from the left edge
+node scripts/preview-sleep.mjs <mon>...          # awake and asleep frames in /tmp/sleep.png
 node scripts/check-data.mjs                      # moves, evolutions, and sprites agree
 npx @biomejs/biome@2.5.15 ci --error-on-warnings .   # lint, same as CI
 claude plugin validate .
@@ -261,9 +269,10 @@ claude --plugin-dir .                            # live-reloading session
 | `hooks/evolutions.js` | Gen 1 evolutions, and each mon's start level |
 | `hooks/party.js` | The Poké Balls of running subagents |
 | `hooks/zoom.js` | Shrinks the band to fit a short pane |
+| `hooks/eyes.js` | Each mon's eyes on every frame, shut while it sleeps |
 | `hooks/frames.js` | Generated pixel frames. Don't edit by hand |
 | `sprites/<mon>/*.gif` | Source GIFs, 32x32 |
-| `scripts/` | Frame builder, attack previewer, data check |
+| `scripts/` | Frame builder, attack and sleep previewers, data check |
 | `tests/pokemon.test.ts` | `claude plugin test` suite |
 
 CI runs the lint, the data check, and the tests on every pull request and push to `main`.
