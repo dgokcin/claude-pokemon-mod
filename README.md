@@ -18,7 +18,7 @@ claude plugin marketplace add dgokcin/claude-pokemon-mod
 claude plugin install pokemon@claude-pokemon
 ```
 
-Then pick your partner with `/pokemon pikachu`.
+Then pick your partner with `/pokemon <mon>`.
 
 ## Why you'll keep it on
 
