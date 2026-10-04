@@ -27,12 +27,12 @@ trim = true
 conventional_commits = true
 filter_unconventional = true
 commit_parsers = [
-  { message = "^feat", group = "<!-- 0 -->Features" },
-  { message = "^fix", group = "<!-- 1 -->Fixes" },
-  { message = "^perf", group = "<!-- 2 -->Performance" },
-  { message = "^refactor", group = "<!-- 3 -->Refactoring" },
-  { message = "^docs", group = "<!-- 4 -->Docs" },
-  { message = "^test", group = "<!-- 5 -->Tests" },
+  { message = "^feat", group = "<!-- 0 -->✨ Features" },
+  { message = "^fix", group = "<!-- 1 -->🐛 Fixes" },
+  { message = "^perf", group = "<!-- 2 -->⚡ Performance" },
+  { message = "^refactor", group = "<!-- 3 -->♻️ Refactoring" },
+  { message = "^docs", group = "<!-- 4 -->📝 Docs" },
+  { message = "^test", group = "<!-- 5 -->🧪 Tests" },
   { message = "^(chore|ci|build|style)", skip = true },
 ]
 filter_commits = false
