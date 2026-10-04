@@ -17,6 +17,7 @@ import { zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 // /pokemon attack plays one of its moves, with the animations in attacks.js.
 // While a tool runs, the bubble shows it, and when Claude waits on you the mon stops
 // and shows a "!". Each running subagent is a Poké Ball along the left of the strip.
+// A main-loop tool call that fails makes it flinch, with a sweat drop by its head.
 // Answered turns earn XP, and the mon evolves at the levels from the games.
 // The mon, hearts, berries, bubbles, balls, and Zs are pixels in one Raster, two per cell.
 
@@ -40,6 +41,9 @@ const PET_TICKS = 60
 const FALL_TICKS = 2
 const EAT_TICKS = 30
 const YUM_TICKS = 30
+const FLINCH_TICKS = 24
+const SHAKE_TICKS = 12
+const DRIP_TICKS = 8
 // A 4x4 pixel berry: k leaf, b rim, B body, h highlight. Each kind recolors it.
 const BERRY = ['.kk.', 'bBBb', 'bBhb', '.bb.']
 const BERRY_SIZE = 4
@@ -55,10 +59,12 @@ const INKS = {
   dark: {
     bubble: 0xf0f0f0, dots: 0x9a9ab0, z: 0xe8e8ff, star: 0xffd54f, silhouette: 0xf8f8ff,
     pencil: 0xffc83d, lens: 0x6cc4ff, shell: 0x5fe08a, ball: 0xeeeef6, wrench: 0xb8b8c8, party: 0xb4b4c8,
+    sweat: 0x6ec8ff, sweatShine: 0xe6f7ff,
   },
   light: {
     bubble: 0x4a4a58, dots: 0x70708a, z: 0x5a5aa8, star: 0xe0a000, silhouette: 0x2e2e3a,
     pencil: 0xe08a00, lens: 0x2a7ad0, shell: 0x1f9a4a, ball: 0xa8a8b4, wrench: 0x6a6a80, party: 0x5c5c74,
+    sweat: 0x2b8fe0, sweatShine: 0xbfe4ff,
   },
 }
 const UPPER_HALF = 0x2580
@@ -74,6 +80,8 @@ let working = false
 let thinking = false
 const runningTools = new Map()
 let toolCalls = 0
+const verdicts = new Map()
+let flinchStart = -FLINCH_TICKS
 const alertTools = new Set()
 let alertUntil = 0
 let idleAlertAt = null
@@ -130,6 +138,7 @@ const isHome = () => x >= homeX()
 
 const isHopping = () => tick - hopStart < HOP_TICKS
 const isPetted = () => tick < petUntil
+const isFlinching = () => tick - flinchStart < FLINCH_TICKS
 const isAsleep = () => !working && (tick - lastActive) * TICK_MS >= SLEEP_AFTER_MS
 
 // Where the sprite stands to eat: right beside the berry
@@ -147,7 +156,7 @@ function idleTarget() {
 }
 
 function isWalking() {
-  if (attack || isAlerted()) return false
+  if (attack || isAlerted() || isFlinching()) return false
   return food ? idleTarget() !== x : working || idleTarget() !== x
 }
 
@@ -177,6 +186,8 @@ const BUBBLE_ICONS = {
 const STAR = ['..s..', 'sssss', '.sss.', '.s.s.']
 const SMALL_Z = ['zzz', '.z.', 'zzz']
 const BIG_Z = ['zzzz', '..z.', '.z..', 'zzzz']
+// A sweat drop on the head when a tool call fails: d drop, h shine
+const SWEAT = ['..d.', '.dd.', 'dhdd', 'dddd', '.dd.']
 // The "!" of a trainer who spots you, shown while Claude waits on you
 const ALERT_ICON = { rows: ['..a..', '..a..', '.....', '..a..'], colors: { a: 0xff3d3d } }
 // What the bubble shows while a tool runs: a pencil (p body, e eraser, t wood, g lead),
@@ -201,6 +212,9 @@ const ALERT_NOTIFICATIONS = ['permission_prompt', 'worker_permission_prompt', 'a
 // A minute after a turn with no word from you, the "!" shows for two
 const IDLE_WAIT_MS = 60 * 1000
 const IDLE_ALERT_MS = 2 * 60 * 1000
+// What core tells the model when you turn a call down at its dialog or interrupt it.
+// Nothing else marks a refusal there, so the wording is the one sign.
+const REFUSED = /The user doesn't want to (proceed with this tool use|take this action)|\[Request interrupted by user/
 
 const stamp = (x, y, rows, colors) => ({ x, y, rows, colors })
 
@@ -292,6 +306,34 @@ function sleepStamps(head) {
   const small = stamp(onLeft ? head[0] - 4 : head[1] + 2, 4, SMALL_Z, { z: ink.z })
   const big = stamp(onLeft ? head[0] - 8 : head[1] + 5, 0, BIG_Z, { z: ink.z })
   return phase === 0 ? [small] : [small, big]
+}
+
+// A tool call that failed makes the mon wince: it shakes in place, then holds still
+// with a sweat drop. Another failure starts it over, and a move or evolution ignores it.
+function flinch() {
+  if (attack) return
+  markActive()
+  flinchStart = tick
+}
+
+// The flinch shows unless a move plays or the mon is calling you over
+const isWincing = () => isFlinching() && !attack && !isAlerted()
+const isShaking = () => isWincing() && tick - flinchStart < SHAKE_TICKS
+
+// A pixel to either side in turn while the flinch shakes, kept inside the strip
+function flinchJolt(baseX, width) {
+  if (!isShaking()) return 0
+  const side = Math.floor((tick - flinchStart) / 2) % 2 === 0 ? -1 : 1
+  return Math.max(-baseX, Math.min(columns - width - baseX, side))
+}
+
+// The sweat drop sliding down the corner of the head away from the bubble
+function sweatStamps(head, y) {
+  const width = SWEAT[0].length
+  const bubbleOnLeft = head[0] - (BUBBLE_WIDTH + 3) >= 0
+  const sx = bubbleOnLeft ? Math.min(columns - width, head[1] - 1) : Math.max(0, head[0] - 2)
+  const drip = Math.floor((tick - flinchStart) / DRIP_TICKS)
+  return [stamp(sx, y + drip, SWEAT, { d: ink.sweat, h: ink.sweatShine })]
 }
 
 // Stop to enjoy it, hop, and send a stream of hearts up around the sprite
@@ -681,16 +723,17 @@ function cellsNow() {
   const effect = playing ? attackFrame(attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel)) : NO_EFFECT
   const overlay = overlayOf(effect.dots, rows)
   const underlay = overlayOf(effect.under, rows)
-  const hopUp = !attack && isHopping() && Math.floor((tick - hopStart) / 3) % 2 === 0
+  const jolt = flinchJolt(baseX, sprite.width)
+  const hopUp = !attack && !isShaking() && isHopping() && Math.floor((tick - hopStart) / 3) % 2 === 0
   const top = baseTop + effect.dy - (hopUp ? 2 : 0)
-  const left = baseX + effect.dx
+  const left = baseX + effect.dx + jolt
   const mirrored = flip !== effect.flipX
   const box = boxOf(frame, colors)
   const body = bodyPixel(effect, pixelOf(mirrored), box, sprite.width, mirrored, left, top)
   const ghost = ghostPixel(effect.ghosts, pixel, box, sprite.width, flip, baseX, baseTop)
   const head = headColumns(pixel, sprite.width, left)
   const icon = bubbleIcon()
-  const over = heartStamps()
+  const over = [...heartStamps(), ...(isWincing() ? sweatStamps(head, top + box.top) : [])]
   const balls = partyStamps(party, tick, { columns, ground: rows * 2 - 1, label: ink.party })
   const under = [...(icon ? bubbleStamps(icon, head) : []), ...(asleep ? sleepStamps(head) : []), ...balls]
   const pixels = rows * 2
@@ -766,6 +809,7 @@ function step() {
   if (attack) return stepAttack()
   // Calling you over, it stays awake and stands still, even with a berry to eat
   if (isAlerted()) return markActive()
+  if (isFlinching()) return
   if (food) return stepFood()
   if (working) markActive()
   planWander()
@@ -821,8 +865,8 @@ function bumpStat(key, amount) {
 }
 
 // Five icons, each worth 20%, rounding up so any food or love left shows at least one.
-function iconsFor(key) {
-  const filled = Math.ceil(statNow(mon, key) / (100 / STAT_ICONS))
+function iconsFor(key, name = mon) {
+  const filled = Math.ceil(statNow(name, key) / (100 / STAT_ICONS))
   return STATS[key].icon.repeat(filled) + STATS[key].emptyIcon.repeat(STAT_ICONS - filled)
 }
 
@@ -864,6 +908,21 @@ async function statsText($) {
   return displayName(mon) + ', Lv. ' + level + ', ' + xpOf(mon) + ' XP' + next + '.' + becomes + meters + ' ' + pets + ' pets, ' + feeds + ' feeds.'
 }
 
+// Every mon with a saved record, highest level first, one a line, like
+// "Charizard, Lv. 36 ●●●○○ ❤❤❤♡♡ (active)"
+function boxText() {
+  const raised = Object.keys(stats).filter((name) => MONS.includes(name) && stats[name] && typeof stats[name] === 'object')
+  if (raised.length === 0) return 'Your box is empty. Pet or feed ' + displayName(mon) + ', or finish a turn, to start raising it.'
+  raised.sort((a, b) => levelOf(b) - levelOf(a) || displayName(a).localeCompare(displayName(b)) || a.localeCompare(b))
+  const lines = raised.map((name) => {
+    const meters = needsOn ? ' ' + iconsFor('food', name) + ' ' + iconsFor('happiness', name) : ''
+    return displayName(name) + ', Lv. ' + levelOf(name) + meters + (name === mon ? ' (active)' : '')
+  })
+  const count = raised.length + (raised.length === 1 ? ' mon' : ' mons')
+  const alone = raised.length === 1 && raised[0] === mon ? '\nOnly ' + displayName(mon) + ' so far. /pokemon <mon> picks another.' : ''
+  return count + ' in your box:\n' + lines.join('\n') + alone
+}
+
 // A hungry mon drags its feet, except on its way to a berry
 const moveTicks = () => (needsOn && statNow(mon, 'food') < NEEDY_BELOW ? HUNGRY_MOVE_TICKS : MOVE_TICKS)
 
@@ -879,7 +938,7 @@ function hopForJoy() {
   }
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'pet', 'feed', 'attack', 'moves', 'evolve', 'stop', 'stats', 'list']
+const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'pet', 'feed', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'list']
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
@@ -1057,6 +1116,8 @@ export function register(on) {
       return stopEvolution($)
     } else if (asked === 'stats') {
       return { text: await statsText($) }
+    } else if (asked === 'box') {
+      return { text: boxText() }
     } else if (asked === 'list') {
       return { text: MONS.length + ' mons: ' + MONS.join(', ') }
     } else if (asked) {
@@ -1153,6 +1214,8 @@ export function register(on) {
 
   // Show the main loop's running tools in the bubble, and call you over while one
   // asks you something. A call resolving also settles a dialog waiting on its tool.
+  // A call that errors or throws makes the mon flinch, unless you interrupted it or
+  // it was refused: by the permission check, at its dialog, or by a hook beneath.
   on('tool.call', async ($, e, next) => {
     const name = String(e.tool)
     let id = null
@@ -1162,12 +1225,27 @@ export function register(on) {
       runningTools.set(id, name)
       if (QUESTION_TOOLS.includes(name)) raiseAlert({ tool: name })
     }
+    let failed = true
     try {
-      return await next(e)
+      const result = await next(e)
+      failed = result?.isError === true && !REFUSED.test(String(result.text ?? ''))
+      return result
     } finally {
-      if (id !== null) runningTools.delete(id)
+      if (id !== null) {
+        runningTools.delete(id)
+        if (failed && !next.signal?.aborted && verdicts.get(id) !== 'deny') flinch()
+        verdicts.delete(id)
+      }
       alertTools.delete(name)
     }
+  })
+
+  // Note what the permission check decides for the main loop's calls, so a call it
+  // denies isn't taken for a tool failing
+  on('tool.check', async ($, e, next) => {
+    const result = await next(e)
+    if (e.tool_use_id !== undefined && runningTools.has(e.tool_use_id)) verdicts.set(e.tool_use_id, result?.decision)
+    return result
   })
 
   // Call you over while a permission dialog waits, until the call it holds resolves.
