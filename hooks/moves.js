@@ -142,8 +142,9 @@ export const MOVE_FX = {
 }
 
 // Each mon's moveset: move names, or { name, ...options } for options only that mon
-// uses: from: 'top' for the moves the Bulbasaur line sends out of its bulb, and
-// from: 'body' for the smog Koffing and Weezing pour from their whole body
+// uses: from: 'top' for the moves the Bulbasaur line sends out of its bulb,
+// from: 'body' for the smog Koffing and Weezing pour from their whole body, and
+// mouth: for how far down the sprite a move leaves the mouth, when 0.35 misses it
 export const MOVES = {
   abra: ['Teleport', 'Confusion'],
   aerodactyl: ['Wing Attack', 'Bite', 'Hyper Beam', 'Supersonic'],
@@ -184,8 +185,8 @@ export const MOVES = {
   farfetchd: ['Cut', 'Fury Attack', 'Agility'],
   fearow: ['Drill Peck', 'Agility', 'Fly'],
   flareon: ['Flamethrower', 'Quick Attack', 'Bite', 'Smog'],
-  gastly: ['Lick', 'Night Shade', 'Hypnosis', 'Confuse Ray'],
-  gengar: ['Night Shade', 'Hypnosis', 'Lick', 'Dream Eater'],
+  gastly: [{ name: 'Lick', mouth: 0.65 }, 'Night Shade', 'Hypnosis', 'Confuse Ray'],
+  gengar: ['Night Shade', 'Hypnosis', { name: 'Lick', mouth: 0.55 }, 'Dream Eater'],
   geodude: ['Rock Throw', 'Tackle', 'Defense Curl', 'Self-Destruct'],
   gloom: ['Absorb', 'Poison Powder', 'Acid', 'Petal Dance'],
   golbat: ['Leech Life', 'Wing Attack', 'Supersonic', 'Bite'],
@@ -196,7 +197,7 @@ export const MOVES = {
   grimer: ['Pound', 'Poison Gas', 'Sludge', 'Minimize'],
   growlithe: ['Ember', 'Bite', 'Roar', 'Take Down'],
   gyarados: ['Hyper Beam', 'Dragon Rage', 'Hydro Pump', 'Bite'],
-  haunter: ['Lick', 'Night Shade', 'Hypnosis', 'Confuse Ray'],
+  haunter: [{ name: 'Lick', mouth: 0.45 }, 'Night Shade', 'Hypnosis', 'Confuse Ray'],
   hitmonchan: ['Fire Punch', 'Ice Punch', 'Thunder Punch', 'Agility'],
   hitmonlee: ['Hi Jump Kick', 'Mega Kick', 'Meditate'],
   horsea: ['Bubble', 'Smokescreen', 'Water Gun'],
@@ -214,7 +215,7 @@ export const MOVES = {
   koffing: ['Tackle', { name: 'Smog', from: 'body' }, 'Sludge', 'Self-Destruct'],
   krabby: ['Bubble', 'Vice Grip', 'Harden', 'Crabhammer'],
   lapras: ['Surf', 'Ice Beam', 'Sing', 'Body Slam'],
-  lickitung: ['Lick', 'Wrap', 'Stomp', 'Supersonic'],
+  lickitung: [{ name: 'Lick', mouth: 0.45 }, 'Wrap', 'Stomp', 'Supersonic'],
   machamp: ['Karate Chop', 'Seismic Toss', 'Submission', 'Earthquake'],
   machoke: ['Karate Chop', 'Seismic Toss', 'Focus Energy'],
   machop: ['Karate Chop', 'Low Kick', 'Seismic Toss'],

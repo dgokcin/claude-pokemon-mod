@@ -19,6 +19,7 @@ import { zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 // /pokemon attack plays one of its moves, with the animations in attacks.js.
 // While a tool runs, the bubble shows it, and when Claude waits on you the mon stops
 // and shows a "!". Each running subagent is a Poké Ball along the left of the strip.
+// A main-loop tool call that fails makes it flinch, with a sweat drop by its head.
 // Answered turns earn XP, and the mon evolves at the levels from the games.
 // The mon, hearts, berries, bubbles, balls, and Zs are pixels in one Raster, two per cell.
 
@@ -42,6 +43,9 @@ const PET_TICKS = 60
 const FALL_TICKS = 2
 const EAT_TICKS = 30
 const YUM_TICKS = 30
+const FLINCH_TICKS = 24
+const SHAKE_TICKS = 12
+const DRIP_TICKS = 8
 // A 4x4 pixel berry: k leaf, b rim, B body, h highlight. Each kind recolors it.
 const BERRY = ['.kk.', 'bBBb', 'bBhb', '.bb.']
 const BERRY_SIZE = 4
@@ -57,10 +61,12 @@ const INKS = {
   dark: {
     bubble: 0xf0f0f0, dots: 0x9a9ab0, z: 0xe8e8ff, star: 0xffd54f, silhouette: 0xf8f8ff,
     pencil: 0xffc83d, lens: 0x6cc4ff, shell: 0x5fe08a, ball: 0xeeeef6, wrench: 0xb8b8c8, party: 0xb4b4c8,
+    sweat: 0x6ec8ff, sweatShine: 0xe6f7ff,
   },
   light: {
     bubble: 0x4a4a58, dots: 0x70708a, z: 0x5a5aa8, star: 0xe0a000, silhouette: 0x2e2e3a,
     pencil: 0xe08a00, lens: 0x2a7ad0, shell: 0x1f9a4a, ball: 0xa8a8b4, wrench: 0x6a6a80, party: 0x5c5c74,
+    sweat: 0x2b8fe0, sweatShine: 0xbfe4ff,
   },
 }
 const UPPER_HALF = 0x2580
@@ -79,6 +85,8 @@ let turnRunning = false
 let thinking = false
 const runningTools = new Map()
 let toolCalls = 0
+const verdicts = new Map()
+let flinchStart = -FLINCH_TICKS
 const alertTools = new Set()
 let alertUntil = 0
 let idleAlertAt = null
@@ -193,6 +201,7 @@ const isHome = () => x >= homeX()
 
 const isHopping = () => tick - hopStart < HOP_TICKS
 const isPetted = () => tick < petUntil
+const isFlinching = () => tick - flinchStart < FLINCH_TICKS
 // Put to bed with /pokemon sleep, saved with the mon's meters so it stays asleep across sessions.
 const isTuckedIn = () => stats[mon]?.asleep === true
 // Five quiet minutes make it drowsy, in this session only
@@ -222,7 +231,7 @@ function idleTarget() {
 }
 
 function isWalking() {
-  if (attack || isAlerted()) return false
+  if (attack || isAlerted() || isFlinching()) return false
   return food ? idleTarget() !== x : working || idleTarget() !== x
 }
 
@@ -260,6 +269,8 @@ const ZZZ_LIFE_MS = 2200
 // The gap between a new Z and the side of the body, and how far out it drifts from there, in pixels
 const ZZZ_GAP = 0
 const ZZZ_DRIFT = 4
+// A sweat drop on the head when a tool call fails: d drop, h shine
+const SWEAT = ['..d.', '.dd.', 'dhdd', 'dddd', '.dd.']
 // The "!" of a trainer who spots you, shown while Claude waits on you
 const ALERT_ICON = { rows: ['..a..', '..a..', '.....', '..a..'], colors: { a: 0xff3d3d } }
 // What the bubble shows while a tool runs: a pencil (p body, e eraser, t wood, g lead),
@@ -284,6 +295,9 @@ const ALERT_NOTIFICATIONS = ['permission_prompt', 'worker_permission_prompt', 'a
 // A minute after a turn with no word from you, the "!" shows for two
 const IDLE_WAIT_MS = 60 * 1000
 const IDLE_ALERT_MS = 2 * 60 * 1000
+// What core tells the model when you turn a call down at its dialog or interrupt it.
+// Nothing else marks a refusal there, so the wording is the one sign.
+const REFUSED = /The user doesn't want to (proceed with this tool use|take this action)|\[Request interrupted by user/
 
 const stamp = (x, y, rows, colors) => ({ x, y, rows, colors })
 
@@ -393,6 +407,34 @@ function sleepStamps(body) {
     zs.push(stamp(x, startY - Math.round(p * (startY + glyph.length)), glyph, { z: ink.z }))
   }
   return zs
+}
+
+// A tool call that failed makes the mon wince: it shakes in place, then holds still
+// with a sweat drop. Another failure starts it over, and a move or evolution ignores it.
+function flinch() {
+  if (attack) return
+  markActive()
+  flinchStart = tick
+}
+
+// The flinch shows unless a move plays or the mon is calling you over
+const isWincing = () => isFlinching() && !attack && !isAlerted()
+const isShaking = () => isWincing() && tick - flinchStart < SHAKE_TICKS
+
+// A pixel to either side in turn while the flinch shakes, kept inside the strip
+function flinchJolt(baseX, width) {
+  if (!isShaking()) return 0
+  const side = Math.floor((tick - flinchStart) / 2) % 2 === 0 ? -1 : 1
+  return Math.max(-baseX, Math.min(columns - width - baseX, side))
+}
+
+// The sweat drop sliding down the corner of the head away from the bubble
+function sweatStamps(head, y) {
+  const width = SWEAT[0].length
+  const bubbleOnLeft = head[0] - (BUBBLE_WIDTH + 3) >= 0
+  const sx = bubbleOnLeft ? Math.min(columns - width, head[1] - 1) : Math.max(0, head[0] - 2)
+  const drip = Math.floor((tick - flinchStart) / DRIP_TICKS)
+  return [stamp(sx, y + drip, SWEAT, { d: ink.sweat, h: ink.sweatShine })]
 }
 
 // Stop to enjoy it, hop, and send a stream of hearts up around the sprite
@@ -536,13 +578,13 @@ function stepAttack() {
 // with any move or berry
 const isFree = () => !working && !attack && !food && !isAsleep() && !isAlerted()
 
-// Petting, feeding, attacking, and switching mons wait while it evolves
-const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack']
+// Petting, feeding, sleeping, attacking, releasing, and switching mons wait while it evolves
+const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack', 'release']
 const waitsForEvolution = (asked) => evolving !== null && (MONS.includes(asked) || WAITS_FOR_EVOLUTION.includes(asked.split(' ')[0]))
 
 // Play the evolve effect with the evolved mon swapped in, in a band grown to fit both
 function startEvolution($, into) {
-  $.ui.toast('What? ' + displayName(mon) + ' is evolving!')
+  $.ui.toast('What? ' + nameOf(mon) + ' is evolving!')
   startAttack({ effect: 'evolve', color: ink.silhouette })
   attack.swap = into
   evolving = { from: mon, into }
@@ -572,15 +614,16 @@ function finishEvolution($) {
   mon = into
   if (wasHome) x = homeX()
   clampX()
+  const name = nameOf(from)
   saveMon($).catch((err) => logOnce($, err))
   moveRecord($, from, into).catch((err) => logOnce($, err))
-  $.ui.toast('Congratulations! Your ' + displayName(from) + ' evolved into ' + displayName(into) + '!')
+  $.ui.toast('Congratulations! Your ' + name + ' evolved into ' + displayName(into) + '!')
   $.ui.invalidate('ui.render')
 }
 
 // Call off an evolution under way or due. The mon stays as it is.
 function stopEvolution($) {
-  const name = displayName(mon)
+  const name = nameOf(mon)
   if (!evolving && !evolveDue) return { text: name + ' isn\'t evolving.' }
   if (evolving) attack = null
   evolving = null
@@ -602,7 +645,7 @@ function evolutionText(entry) {
 // A stone, a trade, or a level the mon has reached starts its evolution now. Several
 // ways and none named get a list.
 function evolveCommand($, wanted) {
-  const name = displayName(mon)
+  const name = nameOf(mon)
   const entries = evolutionsOf(mon)
   if (entries.length === 0) return { text: name + ' doesn\'t evolve.' }
   if (attack || food) return { text: name + ' is busy right now.' }
@@ -803,9 +846,10 @@ function cellsNow() {
   const effect = playing ? attackFrame(attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel)) : NO_EFFECT
   const overlay = overlayOf(effect.dots, rows)
   const underlay = overlayOf(effect.under, rows)
-  const hopUp = !attack && isHopping() && Math.floor((tick - hopStart) / 3) % 2 === 0
+  const jolt = flinchJolt(baseX, sprite.width)
+  const hopUp = !attack && !isShaking() && isHopping() && Math.floor((tick - hopStart) / 3) % 2 === 0
   const top = baseTop + effect.dy - (hopUp ? 2 : 0)
-  const left = baseX + effect.dx
+  const left = baseX + effect.dx + jolt
   const mirrored = flip !== effect.flipX
   const box = boxOf(frame, colors)
   const body = bodyPixel(effect, pixelOf(mirrored), box, sprite.width, mirrored, left, top)
@@ -815,7 +859,7 @@ function cellsNow() {
   // The frame's box as drawn, mirrored along with the sprite
   const [boxLeft, boxRight] = flip ? [sprite.width - 1 - box.right, sprite.width - 1 - box.left] : [box.left, box.right]
   const sleeper = { left: left + boxLeft, right: left + boxRight, top: top + box.top, bottom: top + box.bottom }
-  const over = [...heartStamps(), ...(asleep ? sleepStamps(sleeper) : [])]
+  const over = [...heartStamps(), ...(isWincing() ? sweatStamps(head, top + box.top) : []), ...(asleep ? sleepStamps(sleeper) : [])]
   const balls = partyStamps(party, tick, { columns, ground: rows * 2 - 1, label: ink.party })
   const under = [...(icon ? bubbleStamps(icon, head, walking ? facing : 'left') : []), ...balls]
   const pixels = rows * 2
@@ -905,6 +949,7 @@ function step() {
   if (attack) return stepAttack()
   // Calling you over, it stays awake and stands still, even with a berry to eat
   if (isAlerted()) return markActive()
+  if (isFlinching()) return
   if (food) return stepFood()
   if (working) markActive()
   planWander()
@@ -1121,7 +1166,16 @@ async function syncSessions($) {
   // stepWake. The shown mon is never parked here, whatever another session saved.
   const writes = statWrites
   const saved = await $.store.get('stats')
-  if (statSaving > 0 || writes !== statWrites || !saved?.[mon]) return
+  if (statSaving > 0 || writes !== statWrites) return
+  // Released in another session, the shown mon starts over here too
+  if (!saved?.[mon]) {
+    if (stats[mon] && saved && typeof saved === 'object') {
+      delete stats[mon]
+      evolveDue = null
+      $.ui.invalidate('ui.render')
+    }
+    return
+  }
   const { parked, ...theirs } = saved[mon]
   if (JSON.stringify(theirs) === JSON.stringify(stats[mon])) return
   stats[mon] = theirs
@@ -1135,16 +1189,22 @@ function stepWake($) {
 }
 
 // Five icons, each worth 20%, rounding up so any food or love left shows at least one.
-const filledIcons = (key) => Math.ceil(statNow(mon, key) / (100 / STAT_ICONS))
+const filledIcons = (key, name = mon) => Math.ceil(statNow(name, key) / (100 / STAT_ICONS))
 // Full when every food icon is filled
 const isFull = () => filledIcons('food') === STAT_ICONS
 // As happy as can be when every heart is filled
 const isHappiest = () => filledIcons('happiness') === STAT_ICONS
 
-function iconsFor(key) {
-  const filled = filledIcons(key)
+function iconsFor(key, name = mon) {
+  const filled = filledIcons(key, name)
   return STATS[key].icon.repeat(filled) + (STATS[key].emptyIcon + ' ').repeat(STAT_ICONS - filled)
 }
+
+// A nickname lives in the mon's record too, so it follows the mon through evolution
+const nameOf = (name) => stats[name]?.nickname ?? displayName(name)
+
+// Like "Sparky (Pikachu)", or just "Pikachu" without a nickname
+const fullNameOf = (name) => (stats[name]?.nickname ? stats[name].nickname + ' (' + displayName(name) + ')' : displayName(name))
 
 // XP lives in each mon's record. A mon that hasn't earned any starts at its first level.
 const xpOf = (name) => stats[name]?.xp ?? xpAt(startLevel(name))
@@ -1164,7 +1224,7 @@ async function gainXp($, durationMs) {
   await saveStats($, [mon])
   const level = levelOf(mon)
   if (level === was) return
-  $.ui.toast(displayName(mon) + ' grew to Lv. ' + level + '!')
+  $.ui.toast(nameOf(mon) + ' grew to Lv. ' + level + '!')
   $.ui.invalidate('ui.render')
   const evolution = levelEvolutionOf(mon)
   if (evolution && level >= evolution.level && !evolving) evolveDue = evolution.into
@@ -1182,7 +1242,58 @@ async function statsText($) {
     : ' Needs are off.'
   const pets = Number((await $.store.get('pets')) ?? 0)
   const feeds = Number((await $.store.get('feeds')) ?? 0)
-  return displayName(mon) + ', Lv. ' + level + ', ' + xpOf(mon) + ' XP' + next + '.' + becomes + meters + ' ' + pets + ' pets, ' + feeds + ' feeds.'
+  return fullNameOf(mon) + ', Lv. ' + level + ', ' + xpOf(mon) + ' XP' + next + '.' + becomes + meters + ' ' + pets + ' pets, ' + feeds + ' feeds.'
+}
+
+// Every mon with a saved record, highest level first, one a line, like
+// "Charizard, Lv. 36 🍓🍓🍓○ ○ 💗💗💗♡ ♡ (active)"
+function boxText() {
+  const raised = Object.keys(stats).filter((name) => MONS.includes(name) && stats[name] && typeof stats[name] === 'object')
+  if (raised.length === 0) return 'Your box is empty. Pet or feed ' + displayName(mon) + ', or finish a turn, to start raising it.'
+  raised.sort((a, b) => levelOf(b) - levelOf(a) || displayName(a).localeCompare(displayName(b)) || a.localeCompare(b))
+  const lines = raised.map((name) => {
+    const meters = needsOn ? ' ' + iconsFor('food', name).trimEnd() + ' ' + iconsFor('happiness', name).trimEnd() : ''
+    return fullNameOf(name) + ', Lv. ' + levelOf(name) + meters + (name === mon ? ' (active)' : '')
+  })
+  const count = raised.length + (raised.length === 1 ? ' mon' : ' mons')
+  const alone = raised.length === 1 && raised[0] === mon ? '\nOnly ' + nameOf(mon) + ' so far. /pokemon <mon> picks another.' : ''
+  return count + ' in your box:\n' + lines.join('\n') + alone
+}
+
+// Drop a mon's record from the box, so it starts over at its first level with fresh
+// meters. The active mon stays on screen and starts over in place.
+function releaseCommand(wanted) {
+  if (!wanted) return { text: 'Name the mon to release, like /pokemon release ' + mon + '. /pokemon box lists yours.' }
+  if (!MONS.includes(wanted)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
+  if (!stats[wanted]) return { text: displayName(wanted) + ' isn\'t in your box.' }
+  const name = nameOf(wanted)
+  delete stats[wanted]
+  if (wanted !== mon) return { text: 'You release ' + name + '. Bye-bye, ' + name + '!' }
+  evolveDue = null
+  return { text: 'You release ' + name + '. Bye-bye, ' + name + '! A fresh ' + displayName(mon) + ' takes its place.' }
+}
+
+const NICKNAME_MAX = 12
+
+// Name the active mon. Its species name, as in the games, takes the nickname away.
+function nicknameCommand(wanted) {
+  const species = displayName(mon)
+  const nickname = wanted.replace(/\p{C}/gu, '').replace(/\s+/g, ' ').trim()
+  if (!nickname) {
+    const now = stats[mon]?.nickname ? species + ' goes by ' + stats[mon].nickname + '. ' : ''
+    return { text: now + 'Name it with /pokemon nickname <name>, up to ' + NICKNAME_MAX + ' characters.' }
+  }
+  if ([...nickname].length > NICKNAME_MAX) return { text: 'That\'s too long. A nickname fits ' + NICKNAME_MAX + ' characters.' }
+  const old = stats[mon]?.nickname
+  if (moveKey(nickname) === moveKey(species) || moveKey(nickname) === moveKey(mon)) {
+    if (!old) return { text: species + ' has no nickname.' }
+    const { nickname: _, ...rest } = stats[mon]
+    if (Object.keys(rest).length > 0) stats[mon] = rest
+    else delete stats[mon]
+    return { text: old + ' is just ' + species + ' again.' }
+  }
+  stats[mon] = { ...stats[mon], nickname }
+  return { text: (old ?? species) + ' is now ' + nickname + '!' }
 }
 
 // A hungry mon drags its feet, except on its way to a berry
@@ -1200,7 +1311,7 @@ function hopForJoy() {
   }
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'pet', 'feed', 'sleep', 'attack', 'moves', 'evolve', 'stop', 'stats', 'list']
+const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'pet', 'feed', 'sleep', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'nickname', 'release', 'list']
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
@@ -1210,12 +1321,12 @@ const moveKey = (name) => name.toLowerCase().replace(/[\s\-_'.]/g, '')
 function movesText(name) {
   const known = movesOf(name)
   const moves = known.length > 0 ? known : FALLBACK_MOVES
-  return { text: displayName(name) + ' knows ' + moves.map((m) => m.name).join(', ') + '.' }
+  return { text: nameOf(name) + ' knows ' + moves.map((m) => m.name).join(', ') + '.' }
 }
 
 // Play a random move, or the one named, and announce it. "list" lists the moves instead.
 function attackCommand(wanted) {
-  const name = displayName(mon)
+  const name = nameOf(mon)
   if (wanted === 'list') return movesText(mon)
   if (attack) return { text: name + ' is still attacking.' }
   if (food) return { text: name + ' is busy eating.' }
@@ -1374,7 +1485,7 @@ export function register(on) {
     clearAlert()
     nowMs = await $.clock.now()
     const asked = e.args.trim().toLowerCase()
-    if (waitsForEvolution(asked)) return { text: displayName(mon) + ' is evolving! /pokemon stop cancels it.' }
+    if (waitsForEvolution(asked)) return { text: nameOf(mon) + ' is evolving! /pokemon stop cancels it.' }
     if (MONS.includes(asked)) {
       const wasHome = isHome()
       evolveDue = null
@@ -1397,14 +1508,14 @@ export function register(on) {
       wander = !wander
       wanderTarget = null
       await $.store.set('wander', wander)
-      return { text: displayName(mon) + (wander ? ' is free to wander.' : ' is heading home.') }
+      return { text: nameOf(mon) + (wander ? ' is free to wander.' : ' is heading home.') }
     } else if (asked === 'pet') {
       // A mon as happy as can be, every heart filled, still enjoys it, but it fills no
       // meter and doesn't count as a pet
       const happiest = isHappiest()
       pet()
-      const line = displayName(mon) + ' ' + PET_LINES[Math.floor(Math.random() * PET_LINES.length)] + ' ♥'
-      if (happiest) return { text: line + ' ' + displayName(mon) + ' is already as happy as can be.' }
+      const line = nameOf(mon) + ' ' + PET_LINES[Math.floor(Math.random() * PET_LINES.length)] + ' ♥'
+      if (happiest) return { text: line + ' ' + nameOf(mon) + ' is already as happy as can be.' }
       // Petting again before the last pet's hearts are gone pays that one now
       if (pettingFills) owed.push({ name: pettingFills, happiness: PET_HAPPINESS })
       pettingFills = mon
@@ -1412,21 +1523,21 @@ export function register(on) {
       await $.store.set('pets', pets)
       return { text: line + ' (pets: ' + pets + ')' }
     } else if (asked === 'feed') {
-      if (food) return { text: displayName(mon) + ' is still busy with the last one.' }
+      if (food) return { text: nameOf(mon) + ' is still busy with the last one.' }
       // A full mon, every food icon filled, still eats the berry, but it fills no meter
       // and doesn't count as a feed
       const full = isFull()
       const berry = feed()
       const article = /^[aeiou]/.test(berry.name) ? 'an ' : 'a '
-      const tossed = 'You toss ' + displayName(mon) + ' ' + article + berry.name + ' ' + berry.emoji
-      if (full) return { text: tossed + '. ' + displayName(mon) + ' is already full, so it just nibbles it.' }
+      const tossed = 'You toss ' + nameOf(mon) + ' ' + article + berry.name + ' ' + berry.emoji
+      if (full) return { text: tossed + '. ' + nameOf(mon) + ' is already full, so it just nibbles it.' }
       // The meters fill once it has eaten the berry
       food.fills = mon
       const feeds = Number((await $.store.get('feeds')) ?? 0) + 1
       await $.store.set('feeds', feeds)
       return { text: tossed + ' (feeds: ' + feeds + ')' }
     } else if (asked === 'sleep') {
-      const name = displayName(mon)
+      const name = nameOf(mon)
       if (isTuckedIn()) {
         await setAsleep($, false)
         return { text: name + ' wakes up.' }
@@ -1444,7 +1555,7 @@ export function register(on) {
       needsOn = !needsOn
       await $.store.set('needs', needsOn)
       $.ui.invalidate('ui.render')
-      const name = displayName(mon)
+      const name = nameOf(mon)
       return { text: needsOn ? 'Needs are on. Keep ' + name + ' fed and happy.' : 'Needs are off. ' + name + ' won\'t get hungry or lonely.' }
     } else if (asked === 'evolve' || asked.startsWith('evolve ')) {
       return evolveCommand($, asked.slice('evolve'.length).trim())
@@ -1452,6 +1563,24 @@ export function register(on) {
       return stopEvolution($)
     } else if (asked === 'stats') {
       return { text: await statsText($) }
+    } else if (asked === 'box') {
+      // List every record as last saved by any session
+      const saved = await $.store.get('stats')
+      if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
+      return { text: boxText() }
+    } else if (asked === 'release' || asked.startsWith('release ')) {
+      const wanted = asked.slice('release'.length).trim()
+      if (MONS.includes(wanted)) await freshen($, [wanted])
+      const result = releaseCommand(wanted)
+      if (MONS.includes(wanted)) await saveRecords($, [wanted])
+      $.ui.invalidate('ui.render')
+      return result
+    } else if (asked === 'nickname' || asked.startsWith('nickname ')) {
+      await freshen($, [mon])
+      const result = nicknameCommand(e.args.trim().slice('nickname'.length))
+      await saveRecords($, [mon])
+      $.ui.invalidate('ui.render')
+      return result
     } else if (asked === 'list') {
       return { text: MONS.length + ' mons: ' + MONS.join(', ') }
     } else if (asked) {
@@ -1459,11 +1588,11 @@ export function register(on) {
     } else {
       const mode = (isTuckedIn() ? ', asleep' : '') + (wander ? ', wandering' : '')
       const levels = 'food ' + Math.round(statNow(mon, 'food')) + '%, happiness ' + Math.round(statNow(mon, 'happiness')) + '%'
-      const shown = displayName(mon) + ' Lv. ' + levelOf(mon)
+      const shown = nameOf(mon) + ' Lv. ' + levelOf(mon)
       return { text: 'Showing ' + variant + ' ' + shown + mode + ' (' + (needsOn ? levels : 'needs off') + '). Options: ' + OPTIONS.join(', ') + '.' }
     }
     $.ui.invalidate('ui.render')
-    return { text: 'Now showing ' + variant + ' ' + displayName(mon) + '.' }
+    return { text: 'Now showing ' + variant + ' ' + nameOf(mon) + '.' }
   })
 
   // Typing or sending a prompt wakes the mon up and answers its "!"
@@ -1550,7 +1679,7 @@ export function register(on) {
     } else {
       // Too short even for a shrunk mon: its name, level, and meters on one line, and no blits
       bandId = null
-      const name = Text({ children: [displayName(mon) + ' ' + levelLine()] })
+      const name = Text({ children: [nameOf(mon) + ' ' + levelLine()] })
       const meters = needsOn ? [meter('food', ' '), meter('happiness', ' ')] : []
       corner = [Box({ flexDirection: 'row', children: [name, ...meters] })]
     }
@@ -1565,6 +1694,8 @@ export function register(on) {
 
   // Show the main loop's running tools in the bubble, and call you over while one
   // asks you something. A call resolving also settles a dialog waiting on its tool.
+  // A call that errors or throws makes the mon flinch, unless you interrupted it or
+  // it was refused: by the permission check, at its dialog, or by a hook beneath.
   on('tool.call', async ($, e, next) => {
     const name = String(e.tool)
     let id = null
@@ -1574,12 +1705,27 @@ export function register(on) {
       runningTools.set(id, name)
       if (QUESTION_TOOLS.includes(name)) raiseAlert({ tool: name })
     }
+    let failed = true
     try {
-      return await next(e)
+      const result = await next(e)
+      failed = result?.isError === true && !REFUSED.test(String(result.text ?? ''))
+      return result
     } finally {
-      if (id !== null) runningTools.delete(id)
+      if (id !== null) {
+        runningTools.delete(id)
+        if (failed && !next.signal?.aborted && verdicts.get(id) !== 'deny') flinch()
+        verdicts.delete(id)
+      }
       alertTools.delete(name)
     }
+  })
+
+  // Note what the permission check decides for the main loop's calls, so a call it
+  // denies isn't taken for a tool failing
+  on('tool.check', async ($, e, next) => {
+    const result = await next(e)
+    if (e.tool_use_id !== undefined && runningTools.has(e.tool_use_id)) verdicts.set(e.tool_use_id, result?.decision)
+    return result
   })
 
   // Call you over while a permission dialog waits, until the call it holds resolves.

@@ -1,178 +1,175 @@
-# pokemon
+<div align="center">
 
-A Claude Code mod that draws one pixel Pokémon at the right edge of the band
-above the prompt, reacting to what Claude is doing. It shows which tool Claude is
-using, drops a Poké Ball for each subagent, and levels up and evolves as you work.
-The mon, hearts, berries, bubbles, balls, and Zs are pixel art in one `Raster`. The
-meters are one-cell characters.
+# claude-pokemon
 
-Pet it and feed it. Here Bulbasaur gets a pat and an oran berry.
+**A pixel Pokémon that lives above your Claude Code prompt and reacts to everything Claude does.**
+
+[![CI](https://github.com/dgokcin/claude-pokemon-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/dgokcin/claude-pokemon-mod/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/dgokcin/claude-pokemon-mod)](https://github.com/dgokcin/claude-pokemon-mod/releases)
+![151 Pokémon](https://img.shields.io/badge/Pok%C3%A9mon-151-ffcb05)
+![135 moves](https://img.shields.io/badge/moves-135-ee1515)
 
 ![Bulbasaur gets petted and eats an oran berry above the Claude Code prompt](gifs/bulbasaur-pet-feed.gif)
 
-Its bubble shows the tool Claude is running, a magnifier and then a pencil while Claude
-reads files and writes a haiku. The answered turn takes Pikachu to Lv 6.
-
-![Pikachu's bubble shows a magnifier, then a pencil, while Claude reads files and writes a haiku](gifs/pikachu-haiku.gif)
-
-Every subagent drops a Poké Ball, and the ball pops open when its subagent reports back.
-
-![Four Poké Balls drop beside Squirtle while four subagents run, and pop as they finish](gifs/squirtle-subagents.gif)
-
-Mons evolve at the levels from the games, or with a stone. Here Growlithe becomes Arcanine.
-
-![Growlithe glows, flickers into Arcanine's silhouette, and flashes into Arcanine](gifs/growlithe-evolution.gif)
-
-Every mon knows its moves from the games. Magikarp uses Splash, and nothing happens.
-Then Gengar uses Night Shade.
-
-![Magikarp splashes to no effect, then Gengar casts Night Shade](gifs/magikarp-gengar-attack.gif)
-
-The sprites come from [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon)
-by Jakob Hoeg Mørk. This is an unofficial fan project, not affiliated with Nintendo
-or The Pokémon Company. See [Credits](#credits) and [Disclaimer](#disclaimer).
-
-## Requirements
-
-- Claude Code v2.1.287 or later
-- The terminal app. The Desktop app has no `Raster`, so the mod draws nothing there.
-- A truecolor terminal (iTerm2, Ghostty, kitty, WezTerm). The band follows Claude
-  Code's theme, so the bubble, the Zs, and the icons stay visible on light themes too.
-
-## Install
+</div>
 
 ```bash
 claude plugin marketplace add dgokcin/claude-pokemon-mod
 claude plugin install pokemon@claude-pokemon
 ```
 
-To hack on it, clone the repo and add the clone instead
-(`claude plugin marketplace add ./claude-pokemon-mod`). A local marketplace loads the
-mod in place, so edits apply on `/reload-plugins`.
+Then pick your partner with `/pokemon <mon>`.
 
-## Usage
+## Why you'll keep it on
+
+- 🔎 **It watches Claude work.** A pencil for edits, a magnifier for reads, `>_` for shell commands.
+- ⚪ **Every subagent is a Poké Ball.** It drops when the subagent starts and pops when it reports back.
+- ❗ **It tells you when Claude needs you.** A red "!" for questions, plan approvals, and permission prompts.
+- 💦 **It flinches when a tool fails.** A shake and a sweat drop, so you notice.
+- 📈 **It levels up as you ship.** Every answered turn earns XP, and mons evolve at their levels from the games.
+- 🫐 **It needs you too.** Feed it and pet it, or it gets hungry and lonely.
+- ⚡ **It fights.** 135 moves from gen 1, each with its own pixel animation.
+- 🎨 **All 151 gen 1 Pokémon**, each in default and shiny.
+
+## See it
+
+**Watch it follow Claude's tools.** A magnifier for reads, a pencil for writes, and a level-up when the answer lands.
+
+![Pikachu's bubble shows a magnifier, then a pencil, while Claude reads files and writes a haiku](gifs/pikachu-haiku.gif)
+
+**Run subagents and watch the balls drop.**
+
+![Four Poké Balls drop beside Squirtle while four subagents run, and pop as they finish](gifs/squirtle-subagents.gif)
+
+**Evolve it.** At the right level, or with a stone.
+
+![Growlithe glows, flickers into Arcanine's silhouette, and flashes into Arcanine](gifs/growlithe-evolution.gif)
+
+**Make it attack.** Magikarp uses Splash. Nothing happens. Gengar uses Night Shade.
+
+![Magikarp splashes to no effect, then Gengar casts Night Shade](gifs/magikarp-gengar-attack.gif)
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `/pokemon <mon>` | Pick a mon, like `/pokemon charmander` |
+| `/pokemon pet` | Pet it |
+| `/pokemon feed` | Toss it a berry |
+| `/pokemon attack [move]` | Use a random move, or a named one like `thunderbolt` |
+| `/pokemon evolve` | Evolve with a stone or a trade |
+| `/pokemon stats` | Level, XP, evolution, and meters |
+| `/pokemon box` | Every mon you've raised |
+
+<details>
+<summary>All commands</summary>
 
 | Command | Effect |
 | --- | --- |
-| `/pokemon` | Show the active mon, its variant, its level, its food and happiness, and the options |
-| `/pokemon <mon>` | Pick a mon, like `/pokemon pikachu`. Every open session shows the same one, and a pick in one switches the others within a couple of seconds |
+| `/pokemon` | Show the active mon, its variant, level, meters, and the options |
+| `/pokemon <mon>` | Pick a mon, saved across sessions |
 | `/pokemon list` | List every mon name |
 | `/pokemon shiny`, `/pokemon default` | Pick a variant, saved across sessions |
-| `/pokemon wander` | Toggle idle wandering (on by default), saved across sessions |
-| `/pokemon pet` | Pet the mon. Wakes it up, and counts pets across sessions. With every heart already filled, it still enjoys it, but the pet fills nothing and isn't counted |
-| `/pokemon feed` | Toss it a random oran 🫐, pecha 🍑, razz 🍓, or sitrus 🍋 berry. Counts feeds across sessions. With every food icon already filled, it still eats the berry, but the berry fills nothing and isn't counted |
+| `/pokemon wander` | Toggle idle wandering (on by default) |
+| `/pokemon pet` | Pet the mon. Wakes it up and counts pets across sessions |
+| `/pokemon feed` | Toss it a random oran 🫐, pecha 🍑, razz 🍓, or sitrus 🍋 berry |
 | `/pokemon attack` | Use a random move from the mon's moveset |
-| `/pokemon attack <move>` | Use a specific move, like `/pokemon attack thunderbolt` |
+| `/pokemon attack <move>` | Use a named move, ignoring case, spaces, and dashes |
 | `/pokemon moves`, `/pokemon attack list` | List the active mon's moves |
-| `/pokemon moves <mon>` | List another mon's moves, like `/pokemon moves charizard` |
-| `/pokemon evolve` | Evolve with a stone or a trade, or now when a cancelled evolution's level is reached |
+| `/pokemon moves <mon>` | List another mon's moves |
+| `/pokemon evolve` | Evolve with a stone or a trade. Also restarts an evolution you cancelled |
 | `/pokemon evolve <mon>` | Pick what Eevee becomes, like `/pokemon evolve jolteon` |
 | `/pokemon stop` | Cancel an evolution |
 | `/pokemon sleep` | Tuck the mon in, so its meters drain slower until Claude starts working. Run it again to wake it |
-| `/pokemon needs` | Toggle food and happiness (on by default), saved across sessions |
-| `/pokemon stats` | Show the level, the XP to the next one, how it evolves, the meters, and your pets and feeds |
+| `/pokemon needs` | Toggle food and happiness (on by default) |
+| `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
+| `/pokemon box` | List every mon you've raised, highest level first |
+| `/pokemon nickname <name>` | Nickname the mon, up to 12 characters. It keeps the name when it evolves, and its species name takes the nickname away |
+| `/pokemon release <mon>` | Release a mon from your box. It starts over at its first level with fresh meters |
 | Ctrl+X Ctrl+A | Collapse or expand the band (Claude Code's own binding) |
 
-## Behavior
+</details>
+
+## Requirements
+
+- Claude Code v2.1.287 or later, in the terminal. The Desktop app can't draw the band.
+- A truecolor terminal, like iTerm2, Ghostty, kitty, or WezTerm. Light and dark themes both work.
+
+## How it works
+
+<details>
+<summary>What the mon reacts to</summary>
 
 | When | The mon | Driven by |
 | --- | --- | --- |
 | Claude works | Paces back and forth across the strip | band `isWorking` |
-| Claude thinks | Shows a pixel thought bubble with animated dots, on the side it's walking toward, or the left while it stands still | spinner `mode === 'thinking'` |
-| Claude runs a tool | The bubble shows the tool: a pencil for edits, a magnifier for reads and searches, `>_` for shell commands, a Poké Ball for subagents, and a wrench for anything else | `tool.call` (main agent only) |
-| Claude needs you | Stops, faces you, and shows a red "!" until you answer. A minute after a turn with no word from you, it shows the "!" for 2 minutes | The AskUserQuestion and ExitPlanMode tools, `turn.complete`, and `classic.PermissionRequest` and `classic.Notification` for permission dialogs |
-| A subagent runs | A Poké Ball drops into the strip, wobbles while the subagent works, and pops open when its turn ends. Past six, the last slot counts the rest as `+n` | `agent.spawn`, `turn.complete` |
+| Claude thinks | Shows a thought bubble with animated dots | spinner `mode === 'thinking'` |
+| Claude runs a tool | Shows the tool in its bubble: a pencil for edits, a magnifier for reads and searches, `>_` for shell, a Poké Ball for subagents, a wrench for the rest | `tool.call` (main agent only) |
+| A tool call fails | Shakes, then holds still with a blue sweat drop. Calls you deny or interrupt don't count. It skips the flinch while a move or a "!" is showing | `tool.call` (main agent only), `tool.check` |
+| Claude needs you | Stops, faces you, and shows a red "!" until you answer. If you don't reply within a minute of a turn ending, it shows the "!" for 2 minutes | AskUserQuestion, ExitPlanMode, `turn.complete`, `classic.PermissionRequest`, `classic.Notification` |
+| A subagent runs | Drops a Poké Ball that wobbles while the subagent works and pops when it ends. Past six, the last slot shows `+n` | `agent.spawn`, `turn.complete` |
 | A turn ends | Hops twice, unless you interrupted it | `turn.complete` (main agent only) |
-| A turn ends with an answer | Earns XP. A level-up shows a toast, and an evolution level makes it evolve. See [Levels and evolution](#levels-and-evolution) | `turn.complete` (main agent only) |
-| You're idle | Strolls to random spots in the strip, resting 3 to 8 s between walks | |
-| You're idle, wandering off | Walks home to the right edge and bobs there | |
-| 5 minutes with no turns or typing | Walks home, then falls asleep with its eyes shut, and small and big pixel Zs rising from just left of the middle of its body and drifting up and away | `prompt.edit`, `prompt.submit`, turns |
-| `/pokemon pet` | Stops, hops, and sends up a stream of big and small pixel hearts. Happiness fills once the hearts have floated away | |
-| `/pokemon feed` | A random pixel berry drops nearby, the mon walks over to stand with the berry in front of the middle of its body, eats it a column at a time from both edges, and shows a bubble with a star. The meters fill once it has eaten | |
-| `/pokemon attack` | Turns toward the side with more room, backs up to the edge behind it, and plays one of its moves for 1.5 to 4 s, so the whole animation stays in view. Moves on itself play in place, facing you | |
-| Food or happiness under 30% | While idle and awake, shows a pixel thought bubble with a red berry (hungry) or a pink heart (lonely), taking turns when both are low | |
-| Food under 30% | Walks slower, except on its way to a berry | |
-| Happiness at 80% or more | Hops for joy every 20 to 40 s while idle and awake | |
+| A turn ends with an answer | Earns XP, and may level up or evolve | `turn.complete` (main agent only) |
+| You're idle | Strolls to random spots, resting 3 to 8 s between walks. With wandering off, it walks home and bobs | |
+| 5 minutes with no activity | Falls asleep with pixel Zs | `prompt.edit`, `prompt.submit`, turns |
+| Food or happiness under 30% | Thinks of a berry (hungry) or a heart (lonely). Walks slower when hungry | |
+| Happiness at 80% or more | Hops for joy every 20 to 40 s | |
 
-Some organizations run a policy plugin that keeps the settings hooks' events
-(`classic.*`) from reaching plugins you install yourself. Under one, the "!" still shows
-for questions, plan approval, and the idle minute, but not for permission dialogs.
+Some organizations run a policy plugin that blocks `classic.*` events from user plugins.
+Under one, the "!" still shows for questions, plan approval, and the idle minute, but not
+for permission dialogs.
 
-## Needs
+</details>
 
-Each mon has two meters at the bottom right of the band:
+<details>
+<summary>Food and happiness</summary>
 
-| Meter | Icons | Drains from full in | Filled by |
+Two meters sit at the bottom right of the band. Each icon is 20%.
+
+| Meter | Icons | Empties from full in | Filled by |
 | --- | --- | --- | --- |
-| Food | `🍓🍓🍓○ ○`, empty in strawberry red | 8 hours | `/pokemon feed`: +20, one icon |
-| Happiness | `💗💗💗♡ ♡`, empty in the heart's pink | 12 hours | `/pokemon pet`: +25, `/pokemon feed`: +5 |
+| Food | `🍓🍓🍓○ ○` | 8 hours | `/pokemon feed`: +20 |
+| Happiness | `💗💗💗♡ ♡` | 12 hours | `/pokemon pet`: +25, `/pokemon feed`: +5 |
 
-Each icon is 20%. A filled icon is an emoji, so it looks the same whatever font the terminal uses, and each empty one is followed by a space so a font that draws `○` or `♡` too wide can't make it overlap the next. The meters drain over real time, so the mon needs care after time away,
-but at a quarter speed while no session runs: Claude Code closed, or the laptop off or
-asleep. Every open session marks the store as seen every 10 seconds, and a gap of over a
-minute counts as time away. Only a mon on show drains: switching to another one parks
-the old one's meters where they are, and they pick up from there when you switch back,
-so the mons you aren't using don't go hungry. XP is only earned by the mon on show too. A new mon starts at 80%. On a narrow band the strip shrinks to
-keep the meters, and they hide only when the mon itself barely fits. At home, every mon
-stands at least three columns clear of the level and meters, however much empty space
-its sprite leaves on its right. Bubbles, hearts, and Zs can float over the space above them.
+The meters drain at a quarter speed while Claude Code is closed. A new mon starts at 80%. The meters
+scale the XP a turn earns, from half when both are empty to one and a half when both are
+full. `/pokemon needs` turns them off, and XP then ignores them.
 
-`/pokemon sleep` tucks the mon in: it walks home, then falls asleep. Asleep, food drains at half speed and happiness at a
-quarter. This sleep is shared by every open session:
-it wakes when Claude starts working in any of them, when you feed it, when it attacks or
-evolves, or when you run `/pokemon sleep` again, and it can't be tucked in while Claude
-works in any session. The nap it takes after five idle minutes is each session's own and
-doesn't slow the meters.
+</details>
 
-The meters also scale the XP a turn earns, from half when both are empty to one and a
-half when both are full. `/pokemon needs` turns needs off. The meters, the need bubbles,
-and the hungry and happy behavior then go away, and XP ignores the meters. Petting and
-feeding still play and still fill them.
+<details>
+<summary>Levels and evolution</summary>
 
-## Levels and evolution
+Each answered turn of the main agent earns `10 + 2 × level` XP, doubled for turns of two
+minutes or more and scaled by the meters. Levels follow the games' medium fast curve, where
+level L takes L³ XP. A new mon starts at 5, or at the level it evolves at, so Charmeleon
+starts at 16. With 30 s turns and full meters, 5 to 16 takes about 75 turns.
 
-Each turn of the main agent that ends with an answer earns `10 + 2 × level` XP. A turn
-of two minutes or more earns double, and the meters scale it as above. Levels follow
-the medium fast curve from the games, where level L takes L³ XP. A new mon starts at
-the lowest level the games allow it, which is 5 or the level it evolves at, so
-Charmeleon starts at 16. With 30 s turns and well kept meters, a mon goes from 5 to 16
-in about 75 turns and from 16 to 36 in about 400.
+When the mon reaches its evolution level from Red and Blue, it evolves once idle. It glows,
+flickers between its two shapes, and flashes into its new form. `/pokemon stop` cancels,
+and the next level-up tries again. Level, XP, and meters carry over.
 
-When a level-up reaches the mon's evolution level from Red and Blue, the evolution
-starts once the mon is idle. It glows, flickers between its two shapes faster and
-faster, and flashes into its new form. `/pokemon stop` cancels it, and the next level-up
-tries again. The level, XP, and meters carry over to the evolved mon.
+The 19 mons that evolve with a stone or a trade, like Pikachu, Eevee, and Kadabra, use
+`/pokemon evolve`. Eevee needs a pick, like `/pokemon evolve jolteon`.
 
-The 19 mons that evolve with a stone or a trade, like Pikachu, Eevee, and Kadabra,
-evolve with `/pokemon evolve`. Eevee needs a pick, like `/pokemon evolve jolteon`.
+</details>
 
-The level shows above the meters as `Lv 12`, and in `/pokemon`.
+<details>
+<summary>Attacks</summary>
 
-## Attacks
+A move takes over the mon's body. For a move aimed ahead, the mon turns toward the roomier
+side, backs up to the far edge, and then winds up, lunges, or leaps as the effect plays
+across the strip. A move on itself, like Harden or Recover, plays in place, and the mon
+braces, shrinks, glows, or falls asleep. Teleport moves it to a random spot, Dig tunnels it
+forward, Transform borrows another mon's sprite, and Splash does nothing at all.
 
-`/pokemon attack` picks a random move from the mon's moveset in `hooks/moves.js` and
-replies `Pikachu used Thunderbolt!`. `/pokemon attack <move>` picks one by name,
-ignoring case, spaces, and dashes. An unknown move lists the mon's moves, and so do
-`/pokemon moves` and `/pokemon attack list`. While a move plays, the mon stops walking
-and wakes up, and a second attack waits for it to end.
+`hooks/moves.js` holds two tables. `MOVE_FX` maps each move to an effect, with an optional
+`color`, a `power` of 1 or 2, and a `text` line. `MOVES` lists each mon's moves. An entry
+can be `{ name, from: 'top' }` to launch from the top of the sprite, like Vine Whip from
+Bulbasaur's bulb, or `{ name, from: 'body' }` to pour from the whole body, like Koffing's
+Smog. An unknown effect plays `impact`.
 
-A move takes over the mon's body. A move aimed ahead turns the mon side on toward the
-roomier side of the strip and backs it up to the edge behind it, a column a tick, so
-the move plays across the whole strip, the framing every effect was tuned in. Then the
-mon winds up, lunges, recoils, or leaps as it hits. A move on itself, like Harden or
-Recover, plays where the mon stands and faces you, and the mon braces, shrinks, melts,
-glows, or falls asleep instead.
-
-`hooks/moves.js` has two tables. `MOVE_FX` gives each move its effect, plus an optional
-`color`, a `power` of 1 or 2 for moves that share an effect at two sizes, and a `text`
-line printed after the announcement. `MOVES` lists each mon's moves by name. An entry can
-be `{ name, from: 'top' }` to send a move out of the top of the sprite, as Vine Whip and
-the powders leave the Bulbasaur line's bulb, or `{ name, from: 'body' }` to pour it from
-the whole body, as Koffing and Weezing do with Smog. An unknown effect plays `impact`.
-
-The effects live in `hooks/effects/`, one file per family:
-
-| File | Effects |
+| File in `hooks/effects/` | Effects |
 | --- | --- |
 | `beams.js` | `hyperbeam`, `solarbeam`, `psybeam`, `aurorabeam`, `icebeam`, `bubblebeam` |
 | `electric.js` | `thundershock`, `thunderbolt`, `thunder`, `thunderwave` |
@@ -190,116 +187,109 @@ The effects live in `hooks/effects/`, one file per family:
 | `guard.js` | `harden`, `withdraw`, `defensecurl`, `minimize`, `focusenergy`, `meditate`, `amnesia`, `barrier`, `reflect`, `lightscreen`, `acidarmor` |
 | `self.js` | `recover`, `softboiled`, `rest`, `splash`, `teleport`, `transform`, `explosion` |
 | `special.js` | `swift`, `payday`, `triattack`, `eggbomb` |
-| `evolve.js` | `evolve`, the evolution sequence, played by evolving rather than as a move |
+| `evolve.js` | `evolve`, the evolution sequence |
 | `basic.js` | `impact`, the fallback |
 
-`hooks/effects/draw.js` holds the shared drawing helpers and lists what an effect can do
-to a frame. Teleport leaves the mon at a random spot, Dig tunnels it forward, Transform
-borrows another mon's sprite for a few seconds, and Splash does nothing at all.
+`hooks/effects/draw.js` holds the shared drawing helpers.
 
-To watch a move frame by frame without a terminal, render it to a PNG contact sheet:
+</details>
+
+<details>
+<summary>Sprites and sizing</summary>
+
+All 151 gen 1 Pokémon are included, plus `pikachu_female` and `venusaur_female`. Names
+match the source folders, so use `mrmime`, `farfetchd`, `nidoran_female`, and
+`nidoran_male`.
+
+Each terminal cell holds two pixels with `▀`/`▄` half blocks, and the mon paces inside a
+40 column strip. The build crops each 32x32 GIF to the smallest box that fits all its
+frames, so the band height depends on the mon. Diglett is the smallest at 7 rows. Fearow,
+Gyarados, and Pidgeot are the tallest at 17.
+
+When the pane is too short, the band shrinks the whole scene to fit. Each shrunk pixel
+takes the most common color of its block, and ties go to the darker color, so outlines and
+eyes survive. Below 4 rows it shows a line of text instead, like
+`Pikachu Lv 12 🍓🍓🍓🍓○  💗💗💗💗♡`.
+
+</details>
+
+## Hack on it
 
 ```bash
-node scripts/preview-attack.mjs pikachu thunderbolt          # from home, aiming left
-node scripts/preview-attack.mjs pikachu thunderbolt --at 2   # from the left edge, aiming right
+git clone https://github.com/dgokcin/claude-pokemon-mod
+claude plugin marketplace add ./claude-pokemon-mod
+claude plugin install pokemon@claude-pokemon
 ```
 
-## Mons
+A local marketplace loads the mod in place, so your edits apply on `/reload-plugins`.
 
-All 151 gen 1 Pokémon are included, plus the `pikachu_female` and `venusaur_female`
-variants. Names match the source folders, so use `mrmime`, `farfetchd`,
-`nidoran_female`, and `nidoran_male`. Each mon has a default and a shiny variant.
+<details>
+<summary>Add a mon</summary>
 
-The source GIFs are 32x32. The build crops each mon to the smallest box that fits
-all its frames, so the band height depends on the cropped height. The band uses
-one row per two pixels, plus one row of headroom for the hop. Diglett is the
-smallest at 12 px (7 rows). Fearow, Gyarados, and Pidgeot are the tallest at
-31 px (17 rows).
-
-In fullscreen, Claude Code gives the band at most half the pane, minus the prompt and
-the status line, so a split pane can leave it only a few rows. When the mon doesn't
-fit, the band draws the scene at full size and then shrinks the whole strip to fit.
-Each shrunk pixel takes the most common color of the block it covers, and ties go to
-the darker color so outlines and eyes survive. Below 4 rows the band shows a line of
-text instead, like `Pikachu Lv 12 🍓🍓🍓🍓○  💗💗💗💗♡ `. A pane that only changes height gets
-its new fit on the next redraw, within a minute.
-
-## Add a mon
-
-1. Copy the four GIFs from `media/gen<N>/<mon>/` in [jakobhoeg/vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) into `sprites/<mon>/`.
-   The files are `default_idle_8fps.gif`, `default_walk_8fps.gif`, `shiny_idle_8fps.gif`, and `shiny_walk_8fps.gif`.
+1. Copy the four GIFs from `media/gen<N>/<mon>/` in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) into `sprites/<mon>/`: `default_idle_8fps.gif`, `default_walk_8fps.gif`, `shiny_idle_8fps.gif`, and `shiny_walk_8fps.gif`.
 2. Run `node scripts/build-frames.mjs`.
-3. Run `/reload-plugins`. The mod loads in place from the repo, so no version bump or reinstall is needed.
+3. Give it a moveset in `MOVES` in `hooks/moves.js`. Every mon needs at least one move.
+4. If it evolves, add it to `hooks/evolutions.js`. If its name isn't just the key capitalized, add it to `hooks/names.js`.
+5. Run `node scripts/check-data.mjs`, then `/reload-plugins`.
 
-## Layout
+</details>
+
+<details>
+<summary>Development</summary>
+
+```bash
+node scripts/build-frames.mjs                    # after changing sprites/
+node scripts/preview-attack.mjs <mon> <move>     # contact sheet in /tmp/<mon>-<move>.png
+node scripts/preview-attack.mjs <mon> <move> --at 2   # start from the left edge
+node scripts/check-data.mjs                      # moves, evolutions, and sprites agree
+npx @biomejs/biome@2.5.15 ci --error-on-warnings .   # lint, same as CI
+claude plugin validate .
+claude plugin test
+claude --plugin-dir .                            # live-reloading session
+```
 
 | Path | Contents |
 | --- | --- |
 | `hooks/register.js` | Band renderer, animation timer, `/pokemon` command |
 | `hooks/attacks.js` | Attack registry: each move's pose, aim, and frame |
-| `hooks/effects/*.js` | Attack animations, one file per family, on the helpers in `draw.js` |
+| `hooks/effects/*.js` | Attack animations, one file per family |
 | `hooks/moves.js` | Each move's effect, and each mon's moveset |
 | `hooks/names.js` | Display names, like `Nidoran♀` and `Mr. Mime` |
 | `hooks/levels.js` | The XP curve, and the XP a turn earns |
 | `hooks/evolutions.js` | Gen 1 evolutions, and each mon's start level |
 | `hooks/party.js` | The Poké Balls of running subagents |
-| `hooks/zoom.js` | Shrinks the band's frame to fit a short pane |
-| `hooks/eyes.js` | Shuts a sprite's eyes for its sleeping frame |
-| `hooks/frames.js` | Generated pixel frames. Don't edit by hand. |
+| `hooks/zoom.js` | Shrinks the band to fit a short pane |
+| `hooks/frames.js` | Generated pixel frames. Don't edit by hand |
 | `sprites/<mon>/*.gif` | Source GIFs, 32x32 |
-| `scripts/build-frames.mjs` | Regenerates `frames.js` from the GIFs with ffmpeg |
-| `scripts/preview-attack.mjs` | Renders a move to a PNG contact sheet, one frame per tick |
-| `scripts/check-data.mjs` | Checks that the moves, evolutions, and sprite frames agree |
+| `scripts/` | Frame builder, attack previewer, data check |
 | `tests/pokemon.test.ts` | `claude plugin test` suite |
-| `biome.json` | Lint rules |
-| `cliff.toml` | How git-cliff writes `CHANGELOG.md` and release notes |
-| `.github/workflows/ci.yml` | Lint, checks, tests, and releases |
 
-## Development
-
-```bash
-node scripts/build-frames.mjs      # after changing sprites/
-node scripts/preview-attack.mjs <mon> <move>   # writes /tmp/<mon>-<move>.png
-node scripts/check-data.mjs        # moves, evolutions, and sprite frames agree
-npx @biomejs/biome@2.5.15 ci .     # lint
-claude plugin validate .
-claude plugin test
-claude --plugin-dir .              # live-reloading session
-```
-
-Each terminal cell holds two vertical pixels with `▀`/`▄` half blocks. The
-sprite paces inside a 40 column strip.
-
-CI runs the lint, the table check, and `claude plugin test` on every pull request and
-push to `main`. Commits follow [Conventional Commits](https://www.conventionalcommits.org).
-When a push to `main` passes and brings a `feat`, `fix`, or `perf` commit since the last
-release, CI opens a `chore(release)` pull request, or updates the one that's open.
-git-cliff picks the version (a feature bumps the minor version, a fix the patch), and the
-PR bumps `plugin.json` and `CHANGELOG.md`. Merging it tags the merge commit and publishes
-the GitHub release with git-cliff's notes. Docs, tests, and chores don't release on their
-own. Opening that PR needs "Allow GitHub Actions to create and approve pull requests" on,
+CI runs the lint, the data check, and the tests on every pull request and push to `main`.
+Commits follow [Conventional Commits](https://www.conventionalcommits.org). When `main`
+gains a `feat`, `fix`, or `perf` commit, CI opens a `chore(release)` PR that bumps
+`plugin.json` and `CHANGELOG.md` with git-cliff. Merging it tags the release and publishes
+the notes. This needs "Allow GitHub Actions to create and approve pull requests" turned on
 in the repository's Actions settings.
+
+</details>
 
 ## Credits
 
-The sprites come from [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon)
-by [Jakob Hoeg Mørk](https://github.com/jakobhoeg), the extension that puts Pokémon
-in your VS Code window. Those GIFs took slow, manual work to extract and make, and
-this mod would not exist without them. If you like the mod, give the original a star.
+The sprites come from [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon) by
+[Jakob Hoeg Mørk](https://github.com/jakobhoeg), the extension that puts Pokémon in your VS
+Code window. Those GIFs took slow, manual work to make, and this mod would not exist
+without them. If you like the mod, give the original a star. vscode-pokemon builds on
+[vscode-pets](https://github.com/tonybaloney/vscode-pets) by
+[Anthony Shaw](https://github.com/tonybaloney).
 
-- `sprites/` holds unmodified copies of the gen 1 GIFs from vscode-pokemon's
-  [`media/`](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) folder.
-- `hooks/frames.js` holds the pixel frames that `scripts/build-frames.mjs` generates
-  from those GIFs.
-- vscode-pokemon builds on [vscode-pets](https://github.com/tonybaloney/vscode-pets)
-  by [Anthony Shaw](https://github.com/tonybaloney).
+`sprites/` holds unmodified copies of the gen 1 GIFs from vscode-pokemon's
+[`media/`](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) folder, and
+`hooks/frames.js` holds the pixel frames built from them.
 
 ## Disclaimer
 
-This is an unofficial, non-commercial fan project. It is not affiliated with,
-endorsed by, or sponsored by Nintendo, Creatures Inc., GAME FREAK inc., or The
-Pokémon Company.
-
-Pokémon and Pokémon character names are trademarks of Nintendo. The sprite artwork
-is © Nintendo, Creatures Inc., GAME FREAK inc., and The Pokémon Company. Rights
-holders who want anything removed can open an issue.
+This is an unofficial, non-commercial fan project. It is not affiliated with, endorsed by,
+or sponsored by Nintendo, Creatures Inc., GAME FREAK inc., or The Pokémon Company. Pokémon
+and Pokémon character names are trademarks of Nintendo. The sprite artwork is © Nintendo,
+Creatures Inc., GAME FREAK inc., and The Pokémon Company. Rights holders who want anything
+removed can open an issue.

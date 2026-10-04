@@ -32,6 +32,7 @@ const EFFECTS = {
 }
 
 const FALLBACK = 'impact'
+const MOUTH = 0.35
 const POSE = { view: 'side', stride: false, swap: false, asleep: false }
 
 export const effectOf = (id) => (EFFECTS[id] ? id : FALLBACK)
@@ -45,6 +46,7 @@ export function prepareAttack(move, { side, seed, x, home }) {
     effect,
     color: move.color ?? null,
     from: move.from ?? null,
+    mouth: move.mouth ?? MOUTH,
     power: move.power ?? spec.power ?? 1,
     ticks: spec.ticks,
     side,
@@ -74,7 +76,7 @@ export function attackFrame(attack, t, g) {
 
 // Where the attack starts and lands. frontAt(y) is just in front of the sprite on row y.
 // The mouth is the front a third of the way down, which is the face for nearly every
-// side-on mon.
+// side-on mon. A move can set its own `mouth` height for a mon whose face sits lower.
 function aim(g, a) {
   const cx = Math.round((g.left + g.right) / 2)
   const cy = Math.round((g.top + g.bottom) / 2)
@@ -83,7 +85,7 @@ function aim(g, a) {
     while (x !== cx && !g.solid(x, y)) x -= g.side
     return x + g.side
   }
-  const my = g.top + Math.round((g.bottom - g.top + 1) * 0.35)
+  const my = g.top + Math.round((g.bottom - g.top + 1) * a.mouth)
   const mouth = { x: frontAt(my), y: my }
   const ground = g.pixels - 1
   const reach = g.side > 0 ? g.columns - 1 - mouth.x : mouth.x

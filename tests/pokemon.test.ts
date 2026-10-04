@@ -745,6 +745,19 @@ test('feeding or petting in another session shows here within a second', async (
   expect(await ui.find({ type: 'Text', text: '🍓🍓🍓○ ○ ' })).toBeDefined()
 })
 
+test('a release keeps the records other sessions saved, and one in another session shows here', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'abra', stats: { abra: { xp: 900, nickname: 'Spoon' }, pikachu: { xp: 1728 } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  // Another session raises Bulbasaur after this one started
+  saved.stats = { ...saved.stats, bulbasaur: { xp: 125 } }
+  expect((await $.command.run({ command: 'pokemon', args: 'release pikachu' })).text).toBe('You release Pikachu. Bye-bye, Pikachu!')
+  expect(Object.keys(saved.stats).sort()).toEqual(['abra', 'bulbasaur'])
+  // Another session releases the shown mon
+  saved.stats = { bulbasaur: { xp: 125 } }
+  await clock.advance(1100)
+  expect((await $.command.run({ command: 'pokemon', args: 'stats' })).text).toMatch(/^Abra, Lv\. 5,/)
+})
+
 test('each feed adds exactly one strawberry', async ($, on) => {
   const saved: Record<string, any> = { stats: { abra: { food: { value: 39, at: 0 }, happiness: { value: 50, at: 0 } } } }
   const { clock } = await startedWith($, on, saved, 0)
@@ -1133,6 +1146,124 @@ test('/pokemon stats shows the level, the XP to the next one, the evolution, the
   )
 })
 
+test('/pokemon box lists every raised mon by level, then name, with meters drained to now and the active one marked', async ($, on) => {
+  const full = { value: 100, at: 0 }
+  const low = { value: 10, at: 0 }
+  const stats = {
+    pikachu: { xp: 12 ** 3, food: full, happiness: full },
+    charizard: { xp: 40 ** 3, food: low, happiness: { value: 50, at: 0 } },
+    bulbasaur: { xp: 12 ** 3 },
+    nidoran_female: { xp: 5 ** 3 },
+  }
+  await startedWith($, on, { mon: 'pikachu', stats }, 4 * HOUR)
+  const box = await $.command.run({ command: 'pokemon', args: 'box' })
+  expect(box.text).toBe(
+    [
+      '4 mons in your box:',
+      'Charizard, Lv. 40 ○ ○ ○ ○ ○ 💗♡ ♡ ♡ ♡',
+      'Bulbasaur, Lv. 12 🍓🍓🍓🍓○ 💗💗💗💗♡',
+      'Pikachu, Lv. 12 🍓🍓🍓○ ○ 💗💗💗💗♡ (active)',
+      'Nidoran♀, Lv. 5 🍓🍓🍓🍓○ 💗💗💗💗♡',
+    ].join('\n'),
+  )
+})
+
+test('/pokemon box leaves out the meters with needs off', async ($, on) => {
+  await startedWith($, on, { mon: 'pikachu', needs: false, stats: { pikachu: { xp: 12 ** 3 }, charizard: { xp: 40 ** 3 } } }, 0)
+  const box = await $.command.run({ command: 'pokemon', args: 'box' })
+  expect(box.text).toBe('2 mons in your box:\nCharizard, Lv. 40\nPikachu, Lv. 12 (active)')
+})
+
+test('/pokemon box says when the box is empty, or holds only the active mon', async ($, on) => {
+  const saved: Record<string, any> = {}
+  const { clock } = await startedWith($, on, saved, 0)
+  const run = async () => (await $.command.run({ command: 'pokemon', args: 'box' })).text
+  expect(await run()).toBe('Your box is empty. Pet or feed Abra, or finish a turn, to start raising it.')
+  await $.command.run({ command: 'pokemon', args: 'pet' })
+  // The pet pays out once its hearts have floated away
+  await clock.advance(4000)
+  expect(await run()).toBe('1 mon in your box:\nAbra, Lv. 5 🍓🍓🍓🍓○ 💗💗💗💗💗 (active)\nOnly Abra so far. /pokemon <mon> picks another.')
+})
+
+test('/pokemon release drops a mon from the box, so it starts over at its first level with fresh meters', async ($, on) => {
+  const low = { value: 10, at: 0 }
+  const saved: Record<string, any> = { mon: 'pikachu', stats: { pikachu: { xp: 12 ** 3, food: low, happiness: low }, charizard: { xp: 40 ** 3 } } }
+  await startedWith($, on, saved, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+
+  expect(await run('release')).toBe('Name the mon to release, like /pokemon release pikachu. /pokemon box lists yours.')
+  expect(await run('release agumon')).toBe('Unknown mon "agumon". /pokemon box lists yours.')
+  expect(await run('release bulbasaur')).toBe('Bulbasaur isn\'t in your box.')
+
+  expect(await run('release charizard')).toBe('You release Charizard. Bye-bye, Charizard!')
+  expect(Object.keys(saved.stats)).toEqual(['pikachu'])
+
+  expect(await run('release pikachu')).toBe('You release Pikachu. Bye-bye, Pikachu! A fresh Pikachu takes its place.')
+  expect(saved.stats).toEqual({})
+  expect(saved.mon).toBe('pikachu')
+  expect(await run('box')).toBe('Your box is empty. Pet or feed Pikachu, or finish a turn, to start raising it.')
+  expect(await run('')).toContain('Pikachu Lv. 5, wandering (food 80%, happiness 80%)')
+})
+
+test('/pokemon release waits while the mon evolves', async ($, on) => {
+  await startedWith($, on, { mon: 'pikachu', stats: { pikachu: { xp: 12 ** 3 } } }, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await run('evolve')).toBe('You use a Thunder Stone on Pikachu.')
+  expect(await run('release pikachu')).toBe('Pikachu is evolving! /pokemon stop cancels it.')
+})
+
+test('/pokemon nickname names the active mon, keeps its case, and its species name takes it away', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'pikachu', stats: { pikachu: { xp: 12 ** 3 } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+
+  expect(await run('nickname')).toBe('Name it with /pokemon nickname <name>, up to 12 characters.')
+  expect(await run('nickname Sir Sparks A Lot')).toBe('That\'s too long. A nickname fits 12 characters.')
+  expect(await run('nickname  Sparky ')).toBe('Pikachu is now Sparky!')
+  expect(saved.stats.pikachu).toEqual({ xp: 12 ** 3, nickname: 'Sparky' })
+  expect(await run('nickname')).toBe('Pikachu goes by Sparky. Name it with /pokemon nickname <name>, up to 12 characters.')
+  expect(await run('nickname Zappy')).toBe('Sparky is now Zappy!')
+
+  expect(await run('pet')).toMatch(/^Zappy /)
+  // The pet pays out once its hearts have floated away
+  await clock.advance(4000)
+  expect(await run('stats')).toMatch(/^Zappy \(Pikachu\), Lv\. 12,/)
+  expect(await run('box')).toBe('1 mon in your box:\nZappy (Pikachu), Lv. 12 🍓🍓🍓🍓○ 💗💗💗💗💗 (active)\nOnly Zappy so far. /pokemon <mon> picks another.')
+  expect(await run('')).toContain('Zappy Lv. 12')
+
+  expect(await run('nickname PIKACHU')).toBe('Zappy is just Pikachu again.')
+  expect(saved.stats.pikachu.nickname).toBeUndefined()
+  expect(await run('nickname pikachu')).toBe('Pikachu has no nickname.')
+})
+
+test('a nickname with no other record leaves no record behind when taken away, and release drops it', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'abra' }
+  await startedWith($, on, saved, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+
+  await run('nickname Spoony')
+  await run('nickname abra')
+  expect(saved.stats).toEqual({})
+
+  await run('nickname Spoony')
+  expect(await run('release abra')).toBe('You release Spoony. Bye-bye, Spoony! A fresh Abra takes its place.')
+  expect(saved.stats).toEqual({})
+})
+
+test('a nickname carries through evolution', { timeoutMs: 30000 }, async ($, on) => {
+  const toasts = toastsOf(on)
+  const saved: Record<string, any> = { mon: 'pikachu', stats: { pikachu: { xp: 12 ** 3 } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+
+  await run('nickname Sparky')
+  expect(await run('evolve')).toBe('You use a Thunder Stone on Sparky.')
+  await clock.advance(7100)
+  expect(toasts).toEqual(['What? Sparky is evolving!', 'Congratulations! Your Sparky evolved into Raichu!'])
+  expect(saved.stats).toEqual({ raichu: { xp: 12 ** 3, nickname: 'Sparky' } })
+  expect(await run('nickname')).toBe('Raichu goes by Sparky. Name it with /pokemon nickname <name>, up to 12 characters.')
+})
+
 test('a refused frame, as when a resize remounts the band, asks for a redraw at most once a second', async ($, on) => {
   const clock = mock.clock(on)
   let renders = 0
@@ -1188,7 +1319,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('session.start', () => ({ cwd: '/work' }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|pet|feed|sleep|attack|moves|evolve|stop|stats|list]')
+  expect(hint).toBe('[<mon>|default|shiny|wander|needs|pet|feed|sleep|attack|moves|evolve|stop|stats|box|nickname|release|list]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
@@ -1290,6 +1421,97 @@ test('a permission request stops the mon with a "!" until its call resolves or y
   await $.command.run({ command: 'pokemon', args: '' })
   await clock.advance(100)
   expect(paints(await shown(ui, blits), ALERT)).toBe(false)
+})
+
+const SWEAT = 0x6ec8ff
+const REFUSAL = 'The user doesn\'t want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).'
+
+// Answer each Bash call as core does: `false` errors, `refused` is turned down at the
+// dialog, `blocked` is denied by the permission check, `hooked` by a hook, and the rest run
+function bashTools($, on) {
+  on('tool.check', (_, e) => ((e.input as any)?.command === 'blocked' ? { decision: 'deny', reason: 'Bash(blocked) is denied' } : { decision: 'allow' }))
+  on('tool.call', { tool: 'Bash' }, async (_, e) => {
+    const failed = (text: string) => ({ isError: true as const, result: text, text })
+    if (e.command === 'false') return failed('Exit code 1')
+    if (e.command === 'refused') return failed(REFUSAL)
+    if (e.command === 'hooked') return { deny: 'Not here.' }
+    if (e.command === 'blocked') {
+      await $.tool.check({ tool: 'Bash', input: { command: e.command }, tool_use_id: e.tool_use_id })
+      return failed('Permission to use Bash has been denied.')
+    }
+    return { result: { stdout: 'ok', stderr: '', interrupted: false } }
+  })
+}
+
+test('a failed tool call shakes the mon in place with a sweat drop for about a second', async ($, on) => {
+  bashTools($, on)
+  const { clock, blits } = await startedWith($, on, { wander: false }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(100)
+  const home = rightEdge(await shown(ui, blits))
+  expect(paints(await shown(ui, blits), SWEAT)).toBe(false)
+
+  const failed = await $.tool.call({ tool: 'Bash', command: 'false' })
+  expect(failed.isError).toBe(true)
+  const seen = blits.length
+  await clock.advance(500)
+  const shaking = blits.slice(seen)
+  expect(shaking.length).toBeGreaterThan(0)
+  expect(shaking.every((cells) => paints(cells, SWEAT))).toBe(true)
+  expect(shaking.some((cells) => rightEdge(cells) !== home)).toBe(true)
+  await clock.advance(1000)
+  expect(paints(await shown(ui, blits), SWEAT)).toBe(false)
+  expect(rightEdge(await shown(ui, blits))).toBe(home)
+
+  // A second failure mid-flinch starts it over, so the drop outlasts the first one
+  await $.tool.call({ tool: 'Bash', command: 'false' })
+  await clock.advance(600)
+  await $.tool.call({ tool: 'Bash', command: 'false' })
+  await clock.advance(900)
+  expect(paints(await shown(ui, blits), SWEAT)).toBe(true)
+  await clock.advance(500)
+  expect(paints(await shown(ui, blits), SWEAT)).toBe(false)
+})
+
+test('a call turned down, denied, or run by a subagent leaves the mon calm', async ($, on) => {
+  bashTools($, on)
+  const { clock, blits } = await startedWith($, on, { wander: false }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const calm = async (call: Promise<unknown>) => {
+    await call
+    const seen = blits.length
+    await clock.advance(500)
+    return [await shown(ui, blits), ...blits.slice(seen)].every((cells) => !paints(cells, SWEAT))
+  }
+  expect(await calm($.tool.call({ tool: 'Bash', command: 'ls' }))).toBe(true)
+  expect(await calm($.tool.call({ tool: 'Bash', command: 'refused' }))).toBe(true)
+  expect(await calm($.tool.call({ tool: 'Bash', command: 'blocked', tool_use_id: 'blocked-1' }))).toBe(true)
+  expect(await calm($.tool.call({ tool: 'Bash', command: 'hooked' }))).toBe(true)
+  expect(await calm($.tool.call({ tool: 'Bash', command: 'false', agentId: 'sub1' }))).toBe(true)
+  expect(await calm($.tool.call({ tool: 'Bash', command: 'false' }))).toBe(false)
+})
+
+test('a move under way or a "!" wins over the flinch', async ($, on) => {
+  bashTools($, on)
+  on('classic.Notification', () => ({}))
+  const { clock, blits } = await startedWith($, on, { wander: false }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  await $.command.run({ command: 'pokemon', args: 'attack confusion' })
+  await clock.advance(100)
+  await $.tool.call({ tool: 'Bash', command: 'false' })
+  const seen = blits.length
+  await clock.advance(1000)
+  expect(blits.slice(seen).some((cells) => paints(cells, CONFUSION))).toBe(true)
+  expect(blits.slice(seen).every((cells) => !paints(cells, SWEAT))).toBe(true)
+  await clock.advance(3000)
+
+  await $.classic.Notification({ message: 'Claude needs your input', notification_type: 'elicitation_dialog' })
+  await $.tool.call({ tool: 'Bash', command: 'false' })
+  await clock.advance(300)
+  const alerted = await shown(ui, blits)
+  expect(paints(alerted, ALERT)).toBe(true)
+  expect(paints(alerted, SWEAT)).toBe(false)
 })
 
 test('a minute after a turn with no word from you, a "!" shows for two minutes', { timeoutMs: 30000 }, async ($, on) => {

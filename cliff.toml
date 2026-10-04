@@ -26,13 +26,30 @@ trim = true
 [git]
 conventional_commits = true
 filter_unconventional = true
+
+# The commits before 1.0.0 moved the mod out of a dotfiles repo, so their messages
+# describe the move. These rewrite them as the features they shipped.
+commit_preprocessors = [
+  { pattern = "(?s)^feat\\(claude\\): replace abra mod with pokemon mod.*", replace = "feat(pokemon): a pixel Pokémon above the prompt that paces while Claude works, thinks in a bubble, and hops when a turn ends" },
+  { pattern = "(?s)^feat\\(pokemon\\): walk back to right edge after a turn.*", replace = "feat(pokemon): idle wandering, or a home spot at the right edge with /pokemon wander" },
+  { pattern = "(?s)^feat\\(pokemon\\): add pet, feed, needs, sleep and idle wandering.*", replace = "feat(pokemon): pet and feed it, with food and happiness meters that drain over real time, and it falls asleep after five quiet minutes" },
+  { pattern = "(?s)^feat\\(pokemon\\): add gen 1 sprites.*", replace = "feat(pokemon): all 151 gen 1 Pokémon, each in a default and a shiny variant, picked with /pokemon <mon>" },
+  { pattern = "(?s)^feat\\(pokemon\\): add attacks, moves and mon picker names.*", replace = "feat(pokemon): /pokemon attack plays one of the mon's moves from the games as a pixel animation" },
+  { pattern = "(?s)^feat\\(plugin\\): add marketplace manifest and install docs.*", replace = "feat(plugin): install from the claude-pokemon plugin marketplace" },
+  { pattern = "(?s)^feat: Add reactions, levels and evolution.*", replace = "feat(pokemon): tool icons in the bubble, a \"!\" when Claude needs you, a Poké Ball per subagent, and XP, levels and evolution from the games" },
+]
+
 commit_parsers = [
-  { message = "^feat", group = "<!-- 0 -->Features" },
-  { message = "^fix", group = "<!-- 1 -->Fixes" },
-  { message = "^perf", group = "<!-- 2 -->Performance" },
-  { message = "^refactor", group = "<!-- 3 -->Refactoring" },
-  { message = "^docs", group = "<!-- 4 -->Docs" },
-  { message = "^test", group = "<!-- 5 -->Tests" },
+  # Folded into the rewritten features above, or only true of the dotfiles repo
+  { sha = "456c90710a204dfe5c1aff989136b4384062a5ad", skip = true },
+  { sha = "a3c3b6c4d2ff45732d50f361de2fd0bce73f40fa", skip = true },
+  { sha = "342f9465af098240c191f6c9ff7e56cf25d28e11", skip = true },
+  { message = "^feat", group = "<!-- 0 -->✨ Features" },
+  { message = "^fix", group = "<!-- 1 -->🐛 Fixes" },
+  { message = "^perf", group = "<!-- 2 -->⚡ Performance" },
+  { message = "^refactor", group = "<!-- 3 -->♻️ Refactoring" },
+  { message = "^docs", group = "<!-- 4 -->📝 Docs" },
+  { message = "^test", group = "<!-- 5 -->🧪 Tests" },
   { message = "^(chore|ci|build|style)", skip = true },
 ]
 filter_commits = false
@@ -40,5 +57,5 @@ tag_pattern = "v[0-9]+\\.[0-9]+\\.[0-9]+"
 sort_commits = "oldest"
 
 [bump]
-initial_tag = "v0.6.0"
+initial_tag = "v1.0.0"
 no_increment_regex = "^(docs|test|refactor|chore|ci|build|style)"
