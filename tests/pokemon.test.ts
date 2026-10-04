@@ -685,6 +685,43 @@ test('/pokemon stats shows the level, the XP to the next one, the evolution, the
   )
 })
 
+test('/pokemon box lists every raised mon by level, then name, with meters drained to now and the active one marked', async ($, on) => {
+  const full = { value: 100, at: 0 }
+  const low = { value: 10, at: 0 }
+  const stats = {
+    pikachu: { xp: 12 ** 3, food: full, happiness: full },
+    charizard: { xp: 40 ** 3, food: low, happiness: { value: 50, at: 0 } },
+    bulbasaur: { xp: 12 ** 3 },
+    nidoran_female: { xp: 5 ** 3 },
+  }
+  await startedWith($, on, { mon: 'pikachu', stats }, 4 * HOUR)
+  const box = await $.command.run({ command: 'pokemon', args: 'box' })
+  expect(box.text).toBe(
+    [
+      '4 mons in your box:',
+      'Charizard, Lv. 40 ○○○○○ ❤♡♡♡♡',
+      'Bulbasaur, Lv. 12 ●●●●○ ❤❤❤❤♡',
+      'Pikachu, Lv. 12 ●●●○○ ❤❤❤❤♡ (active)',
+      'Nidoran♀, Lv. 5 ●●●●○ ❤❤❤❤♡',
+    ].join('\n'),
+  )
+})
+
+test('/pokemon box leaves out the meters with needs off', async ($, on) => {
+  await startedWith($, on, { mon: 'pikachu', needs: false, stats: { pikachu: { xp: 12 ** 3 }, charizard: { xp: 40 ** 3 } } }, 0)
+  const box = await $.command.run({ command: 'pokemon', args: 'box' })
+  expect(box.text).toBe('2 mons in your box:\nCharizard, Lv. 40\nPikachu, Lv. 12 (active)')
+})
+
+test('/pokemon box says when the box is empty, or holds only the active mon', async ($, on) => {
+  const saved: Record<string, any> = {}
+  await startedWith($, on, saved, 0)
+  const run = async () => (await $.command.run({ command: 'pokemon', args: 'box' })).text
+  expect(await run()).toBe('Your box is empty. Pet or feed Abra, or finish a turn, to start raising it.')
+  await $.command.run({ command: 'pokemon', args: 'pet' })
+  expect(await run()).toBe('1 mon in your box:\nAbra, Lv. 5 ●●●●○ ❤❤❤❤❤ (active)\nOnly Abra so far. /pokemon <mon> picks another.')
+})
+
 test('a refused frame, as when a resize remounts the band, asks for a redraw at most once a second', async ($, on) => {
   const clock = mock.clock(on)
   let renders = 0
@@ -740,7 +777,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('session.start', () => ({ cwd: '/work' }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|pet|feed|attack|moves|evolve|stop|stats|list]')
+  expect(hint).toBe('[<mon>|default|shiny|wander|needs|pet|feed|attack|moves|evolve|stop|stats|box|list]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
@@ -842,6 +879,97 @@ test('a permission request stops the mon with a "!" until its call resolves or y
   await $.command.run({ command: 'pokemon', args: '' })
   await clock.advance(100)
   expect(paints(await shown(ui, blits), ALERT)).toBe(false)
+})
+
+const SWEAT = 0x6ec8ff
+const REFUSAL = 'The user doesn\'t want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).'
+
+// Answer each Bash call as core does: `false` errors, `refused` is turned down at the
+// dialog, `blocked` is denied by the permission check, `hooked` by a hook, and the rest run
+function bashTools($, on) {
+  on('tool.check', (_, e) => ((e.input as any)?.command === 'blocked' ? { decision: 'deny', reason: 'Bash(blocked) is denied' } : { decision: 'allow' }))
+  on('tool.call', { tool: 'Bash' }, async (_, e) => {
+    const failed = (text: string) => ({ isError: true as const, result: text, text })
+    if (e.command === 'false') return failed('Exit code 1')
+    if (e.command === 'refused') return failed(REFUSAL)
+    if (e.command === 'hooked') return { deny: 'Not here.' }
+    if (e.command === 'blocked') {
+      await $.tool.check({ tool: 'Bash', input: { command: e.command }, tool_use_id: e.tool_use_id })
+      return failed('Permission to use Bash has been denied.')
+    }
+    return { result: { stdout: 'ok', stderr: '', interrupted: false } }
+  })
+}
+
+test('a failed tool call shakes the mon in place with a sweat drop for about a second', async ($, on) => {
+  bashTools($, on)
+  const { clock, blits } = await startedWith($, on, { wander: false }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(100)
+  const home = rightEdge(await shown(ui, blits))
+  expect(paints(await shown(ui, blits), SWEAT)).toBe(false)
+
+  const failed = await $.tool.call({ tool: 'Bash', command: 'false' })
+  expect(failed.isError).toBe(true)
+  const seen = blits.length
+  await clock.advance(500)
+  const shaking = blits.slice(seen)
+  expect(shaking.length).toBeGreaterThan(0)
+  expect(shaking.every((cells) => paints(cells, SWEAT))).toBe(true)
+  expect(shaking.some((cells) => rightEdge(cells) !== home)).toBe(true)
+  await clock.advance(1000)
+  expect(paints(await shown(ui, blits), SWEAT)).toBe(false)
+  expect(rightEdge(await shown(ui, blits))).toBe(home)
+
+  // A second failure mid-flinch starts it over, so the drop outlasts the first one
+  await $.tool.call({ tool: 'Bash', command: 'false' })
+  await clock.advance(600)
+  await $.tool.call({ tool: 'Bash', command: 'false' })
+  await clock.advance(900)
+  expect(paints(await shown(ui, blits), SWEAT)).toBe(true)
+  await clock.advance(500)
+  expect(paints(await shown(ui, blits), SWEAT)).toBe(false)
+})
+
+test('a call turned down, denied, or run by a subagent leaves the mon calm', async ($, on) => {
+  bashTools($, on)
+  const { clock, blits } = await startedWith($, on, { wander: false }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const calm = async (call: Promise<unknown>) => {
+    await call
+    const seen = blits.length
+    await clock.advance(500)
+    return [await shown(ui, blits), ...blits.slice(seen)].every((cells) => !paints(cells, SWEAT))
+  }
+  expect(await calm($.tool.call({ tool: 'Bash', command: 'ls' }))).toBe(true)
+  expect(await calm($.tool.call({ tool: 'Bash', command: 'refused' }))).toBe(true)
+  expect(await calm($.tool.call({ tool: 'Bash', command: 'blocked', tool_use_id: 'blocked-1' }))).toBe(true)
+  expect(await calm($.tool.call({ tool: 'Bash', command: 'hooked' }))).toBe(true)
+  expect(await calm($.tool.call({ tool: 'Bash', command: 'false', agentId: 'sub1' }))).toBe(true)
+  expect(await calm($.tool.call({ tool: 'Bash', command: 'false' }))).toBe(false)
+})
+
+test('a move under way or a "!" wins over the flinch', async ($, on) => {
+  bashTools($, on)
+  on('classic.Notification', () => ({}))
+  const { clock, blits } = await startedWith($, on, { wander: false }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  await $.command.run({ command: 'pokemon', args: 'attack confusion' })
+  await clock.advance(100)
+  await $.tool.call({ tool: 'Bash', command: 'false' })
+  const seen = blits.length
+  await clock.advance(1000)
+  expect(blits.slice(seen).some((cells) => paints(cells, CONFUSION))).toBe(true)
+  expect(blits.slice(seen).every((cells) => !paints(cells, SWEAT))).toBe(true)
+  await clock.advance(3000)
+
+  await $.classic.Notification({ message: 'Claude needs your input', notification_type: 'elicitation_dialog' })
+  await $.tool.call({ tool: 'Bash', command: 'false' })
+  await clock.advance(300)
+  const alerted = await shown(ui, blits)
+  expect(paints(alerted, ALERT)).toBe(true)
+  expect(paints(alerted, SWEAT)).toBe(false)
 })
 
 test('a minute after a turn with no word from you, a "!" shows for two minutes', { timeoutMs: 30000 }, async ($, on) => {

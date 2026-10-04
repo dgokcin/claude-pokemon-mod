@@ -70,6 +70,7 @@ mod in place, so edits apply on `/reload-plugins`.
 | `/pokemon stop` | Cancel an evolution |
 | `/pokemon needs` | Toggle food and happiness (on by default), saved across sessions |
 | `/pokemon stats` | Show the level, the XP to the next one, how it evolves, the meters, and your pets and feeds |
+| `/pokemon box` | List every mon you've raised, highest level first, with its level and meters, and mark the active one |
 | Ctrl+X Ctrl+A | Collapse or expand the band (Claude Code's own binding) |
 
 ## Behavior
@@ -79,6 +80,7 @@ mod in place, so edits apply on `/reload-plugins`.
 | Claude works | Paces back and forth across the strip | band `isWorking` |
 | Claude thinks | Shows a pixel thought bubble with animated dots | spinner `mode === 'thinking'` |
 | Claude runs a tool | The bubble shows the tool: a pencil for edits, a magnifier for reads and searches, `>_` for shell commands, a Poké Ball for subagents, and a wrench for anything else | `tool.call` (main agent only) |
+| A tool call fails | Flinches. It shakes in place, then holds still for a moment with a blue pixel sweat drop on its head. Calls you turn down or interrupt, and calls a permission rule denies, don't count. A move or a "!" in progress wins | `tool.call` (main agent only), `tool.check` |
 | Claude needs you | Stops, faces you, and shows a red "!" until you answer. A minute after a turn with no word from you, it shows the "!" for 2 minutes | The AskUserQuestion and ExitPlanMode tools, `turn.complete`, and `classic.PermissionRequest` and `classic.Notification` for permission dialogs |
 | A subagent runs | A Poké Ball drops into the strip, wobbles while the subagent works, and pops open when its turn ends. Past six, the last slot counts the rest as `+n` | `agent.spawn`, `turn.complete` |
 | A turn ends | Hops twice, unless you interrupted it | `turn.complete` (main agent only) |
