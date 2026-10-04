@@ -6,86 +6,31 @@ using, drops a Poké Ball for each subagent, and levels up and evolves as you wo
 The mon, hearts, berries, bubbles, balls, and Zs are pixel art in one `Raster`. The
 meters are one-cell characters.
 
+Pet it and feed it. Here Bulbasaur gets a pat and an oran berry.
+
 ![Bulbasaur gets petted and eats an oran berry above the Claude Code prompt](gifs/bulbasaur-pet-feed.gif)
+
+Its bubble shows the tool Claude is running, a magnifier and then a pencil while Claude
+reads files and writes a haiku. The answered turn takes Pikachu to Lv 6.
+
+![Pikachu's bubble shows a magnifier, then a pencil, while Claude reads files and writes a haiku](gifs/pikachu-haiku.gif)
+
+Every subagent drops a Poké Ball, and the ball pops open when its subagent reports back.
+
+![Four Poké Balls drop beside Squirtle while four subagents run, and pop as they finish](gifs/squirtle-subagents.gif)
+
+Mons evolve at the levels from the games, or with a stone. Here Growlithe becomes Arcanine.
+
+![Growlithe glows, flickers into Arcanine's silhouette, and flashes into Arcanine](gifs/growlithe-evolution.gif)
+
+Every mon knows its moves from the games. Magikarp uses Splash, and nothing happens.
+Then Gengar uses Night Shade.
+
+![Magikarp splashes to no effect, then Gengar casts Night Shade](gifs/magikarp-gengar-attack.gif)
 
 The sprites come from [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon)
 by Jakob Hoeg Mørk. This is an unofficial fan project, not affiliated with Nintendo
 or The Pokémon Company. See [Credits](#credits) and [Disclaimer](#disclaimer).
-
-## Behavior
-
-| When | The mon | Driven by |
-| --- | --- | --- |
-| Claude works | Paces back and forth across the strip | band `isWorking` |
-| Claude thinks | Shows a pixel thought bubble with animated dots | spinner `mode === 'thinking'` |
-| Claude runs a tool | The bubble shows the tool: a pencil for edits, a magnifier for reads and searches, `>_` for shell commands, a Poké Ball for subagents, and a wrench for anything else | `tool.call` (main agent only) |
-| Claude needs you | Stops, faces you, and shows a red "!" until you answer. A minute after a turn with no word from you, it shows the "!" for 2 minutes | The AskUserQuestion and ExitPlanMode tools, `turn.complete`, and `classic.PermissionRequest` and `classic.Notification` for permission dialogs |
-| A subagent runs | A Poké Ball drops into the strip, wobbles while the subagent works, and pops open when its turn ends. Past six, the last slot counts the rest as `+n` | `agent.spawn`, `turn.complete` |
-| A turn ends | Hops twice, unless you interrupted it | `turn.complete` (main agent only) |
-| A turn ends with an answer | Earns XP. A level-up shows a toast, and an evolution level makes it evolve. See [Levels and evolution](#levels-and-evolution) | `turn.complete` (main agent only) |
-| You're idle | Strolls to random spots in the strip, resting 3 to 8 s between walks | |
-| You're idle, wandering off | Walks home to the right edge and bobs there | |
-| 5 minutes with no turns or typing | Falls asleep, with a small and a big pixel Z beside its head | `prompt.edit`, `prompt.submit`, turns |
-| `/pokemon pet` | Stops, hops, and sends up a stream of big and small pixel hearts | |
-| `/pokemon feed` | A random pixel berry drops nearby, the mon walks over, eats it a column at a time, and shows a bubble with a star | |
-| `/pokemon attack` | Turns toward the side with more room, backs up to the edge behind it, and plays one of its moves for 1.5 to 4 s, so the whole animation stays in view. Moves on itself play in place, facing you | |
-| Food or happiness under 30% | While idle and awake, shows a pixel thought bubble with a red berry (hungry) or a pink heart (lonely), taking turns when both are low | |
-| Food under 30% | Walks slower, except on its way to a berry | |
-| Happiness at 80% or more | Hops for joy every 20 to 40 s while idle and awake | |
-
-Pikachu's bubble shows each tool while Claude reads `README.md`, lists `hooks`, and
-writes a haiku. The answered turn takes Pikachu to Lv 6.
-
-![Pikachu's bubble shows a magnifier, then a pencil, while Claude reads files and writes a haiku](gifs/pikachu-haiku.gif)
-
-Four Explore subagents drop four Poké Balls beside Squirtle, and each ball pops open
-when its subagent reports back.
-
-![Four Poké Balls drop beside Squirtle while four subagents run, and pop as they finish](gifs/squirtle-subagents.gif)
-
-Some organizations run a policy plugin that keeps the settings hooks' events
-(`classic.*`) from reaching plugins you install yourself. Under one, the "!" still shows
-for questions, plan approval, and the idle minute, but not for permission dialogs.
-
-## Needs
-
-Each mon has two meters at the bottom right of the band:
-
-| Meter | Icons | Drains from full in | Filled by |
-| --- | --- | --- | --- |
-| Food | `●●●○○` in salmon pink | 8 hours | `/pokemon feed`: +35 |
-| Happiness | `❤❤❤♡♡` in pink | 12 hours | `/pokemon pet`: +25, `/pokemon feed`: +5 |
-
-Each icon is 20%. The meters are stored with a timestamp, so they keep draining while
-Claude Code is closed. A new mon starts at 80%. The meters hide when the band is too
-narrow for them.
-
-The meters also scale the XP a turn earns, from half when both are empty to one and a
-half when both are full. `/pokemon needs` turns needs off. The meters, the need bubbles,
-and the hungry and happy behavior then go away, and XP ignores the meters. Petting and
-feeding still play and still fill them.
-
-## Levels and evolution
-
-Each turn of the main agent that ends with an answer earns `10 + 2 × level` XP. A turn
-of two minutes or more earns double, and the meters scale it as above. Levels follow
-the medium fast curve from the games, where level L takes L³ XP. A new mon starts at
-the lowest level the games allow it, which is 5 or the level it evolves at, so
-Charmeleon starts at 16. With 30 s turns and well kept meters, a mon goes from 5 to 16
-in about 75 turns and from 16 to 36 in about 400.
-
-When a level-up reaches the mon's evolution level from Red and Blue, the evolution
-starts once the mon is idle. It glows, flickers between its two shapes faster and
-faster, and flashes into its new form. `/pokemon stop` cancels it, and the next level-up
-tries again. The level, XP, and meters carry over to the evolved mon.
-
-The 19 mons that evolve with a stone or a trade, like Pikachu, Eevee, and Kadabra,
-evolve with `/pokemon evolve`. Eevee needs a pick, like `/pokemon evolve jolteon`.
-Here Growlithe evolves into Arcanine with a Fire Stone.
-
-![Growlithe glows, flickers into Arcanine's silhouette, and flashes into Arcanine](gifs/growlithe-evolution.gif)
-
-The level shows above the meters as `Lv 12`, and in `/pokemon`.
 
 ## Requirements
 
@@ -127,11 +72,69 @@ mod in place, so edits apply on `/reload-plugins`.
 | `/pokemon stats` | Show the level, the XP to the next one, how it evolves, the meters, and your pets and feeds |
 | Ctrl+X Ctrl+A | Collapse or expand the band (Claude Code's own binding) |
 
+## Behavior
+
+| When | The mon | Driven by |
+| --- | --- | --- |
+| Claude works | Paces back and forth across the strip | band `isWorking` |
+| Claude thinks | Shows a pixel thought bubble with animated dots | spinner `mode === 'thinking'` |
+| Claude runs a tool | The bubble shows the tool: a pencil for edits, a magnifier for reads and searches, `>_` for shell commands, a Poké Ball for subagents, and a wrench for anything else | `tool.call` (main agent only) |
+| Claude needs you | Stops, faces you, and shows a red "!" until you answer. A minute after a turn with no word from you, it shows the "!" for 2 minutes | The AskUserQuestion and ExitPlanMode tools, `turn.complete`, and `classic.PermissionRequest` and `classic.Notification` for permission dialogs |
+| A subagent runs | A Poké Ball drops into the strip, wobbles while the subagent works, and pops open when its turn ends. Past six, the last slot counts the rest as `+n` | `agent.spawn`, `turn.complete` |
+| A turn ends | Hops twice, unless you interrupted it | `turn.complete` (main agent only) |
+| A turn ends with an answer | Earns XP. A level-up shows a toast, and an evolution level makes it evolve. See [Levels and evolution](#levels-and-evolution) | `turn.complete` (main agent only) |
+| You're idle | Strolls to random spots in the strip, resting 3 to 8 s between walks | |
+| You're idle, wandering off | Walks home to the right edge and bobs there | |
+| 5 minutes with no turns or typing | Falls asleep, with a small and a big pixel Z beside its head | `prompt.edit`, `prompt.submit`, turns |
+| `/pokemon pet` | Stops, hops, and sends up a stream of big and small pixel hearts | |
+| `/pokemon feed` | A random pixel berry drops nearby, the mon walks over, eats it a column at a time, and shows a bubble with a star | |
+| `/pokemon attack` | Turns toward the side with more room, backs up to the edge behind it, and plays one of its moves for 1.5 to 4 s, so the whole animation stays in view. Moves on itself play in place, facing you | |
+| Food or happiness under 30% | While idle and awake, shows a pixel thought bubble with a red berry (hungry) or a pink heart (lonely), taking turns when both are low | |
+| Food under 30% | Walks slower, except on its way to a berry | |
+| Happiness at 80% or more | Hops for joy every 20 to 40 s while idle and awake | |
+
+Some organizations run a policy plugin that keeps the settings hooks' events
+(`classic.*`) from reaching plugins you install yourself. Under one, the "!" still shows
+for questions, plan approval, and the idle minute, but not for permission dialogs.
+
+## Needs
+
+Each mon has two meters at the bottom right of the band:
+
+| Meter | Icons | Drains from full in | Filled by |
+| --- | --- | --- | --- |
+| Food | `●●●○○` in salmon pink | 8 hours | `/pokemon feed`: +35 |
+| Happiness | `❤❤❤♡♡` in pink | 12 hours | `/pokemon pet`: +25, `/pokemon feed`: +5 |
+
+Each icon is 20%. The meters are stored with a timestamp, so they keep draining while
+Claude Code is closed. A new mon starts at 80%. The meters hide when the band is too
+narrow for them.
+
+The meters also scale the XP a turn earns, from half when both are empty to one and a
+half when both are full. `/pokemon needs` turns needs off. The meters, the need bubbles,
+and the hungry and happy behavior then go away, and XP ignores the meters. Petting and
+feeding still play and still fill them.
+
+## Levels and evolution
+
+Each turn of the main agent that ends with an answer earns `10 + 2 × level` XP. A turn
+of two minutes or more earns double, and the meters scale it as above. Levels follow
+the medium fast curve from the games, where level L takes L³ XP. A new mon starts at
+the lowest level the games allow it, which is 5 or the level it evolves at, so
+Charmeleon starts at 16. With 30 s turns and well kept meters, a mon goes from 5 to 16
+in about 75 turns and from 16 to 36 in about 400.
+
+When a level-up reaches the mon's evolution level from Red and Blue, the evolution
+starts once the mon is idle. It glows, flickers between its two shapes faster and
+faster, and flashes into its new form. `/pokemon stop` cancels it, and the next level-up
+tries again. The level, XP, and meters carry over to the evolved mon.
+
+The 19 mons that evolve with a stone or a trade, like Pikachu, Eevee, and Kadabra,
+evolve with `/pokemon evolve`. Eevee needs a pick, like `/pokemon evolve jolteon`.
+
+The level shows above the meters as `Lv 12`, and in `/pokemon`.
+
 ## Attacks
-
-Magikarp uses Splash, and nothing happens. Then Gengar uses Night Shade.
-
-![Magikarp splashes to no effect, then Gengar casts Night Shade](gifs/magikarp-gengar-attack.gif)
 
 `/pokemon attack` picks a random move from the mon's moveset in `hooks/moves.js` and
 replies `Pikachu used Thunderbolt!`. `/pokemon attack <move>` picks one by name,
