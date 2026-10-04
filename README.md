@@ -83,6 +83,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon needs` | Toggle food and happiness (on by default) |
 | `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
 | `/pokemon box` | List every mon you've raised, highest level first |
+| `/pokemon nickname <name>` | Nickname the mon, up to 12 characters. It keeps the name when it evolves, and its species name takes the nickname away |
 | `/pokemon release <mon>` | Release a mon from your box. It starts over at its first level with fresh meters |
 | Ctrl+X Ctrl+A | Collapse or expand the band (Claude Code's own binding) |
 

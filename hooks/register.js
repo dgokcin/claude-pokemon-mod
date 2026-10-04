@@ -478,7 +478,7 @@ const waitsForEvolution = (asked) => evolving !== null && (MONS.includes(asked) 
 
 // Play the evolve effect with the evolved mon swapped in, in a band grown to fit both
 function startEvolution($, into) {
-  $.ui.toast('What? ' + displayName(mon) + ' is evolving!')
+  $.ui.toast('What? ' + nameOf(mon) + ' is evolving!')
   startAttack({ effect: 'evolve', color: ink.silhouette })
   attack.swap = into
   evolving = { from: mon, into }
@@ -500,17 +500,18 @@ function finishEvolution($) {
   mon = into
   if (wasHome) x = homeX()
   clampX()
+  const name = nameOf(from)
   stats[into] = { ...stats[from], xp: xpOf(from) }
   delete stats[from]
   $.store.set('mon', mon).catch((err) => logOnce($, err))
   $.store.set('stats', stats).catch((err) => logOnce($, err))
-  $.ui.toast('Congratulations! Your ' + displayName(from) + ' evolved into ' + displayName(into) + '!')
+  $.ui.toast('Congratulations! Your ' + name + ' evolved into ' + displayName(into) + '!')
   $.ui.invalidate('ui.render')
 }
 
 // Call off an evolution under way or due. The mon stays as it is.
 function stopEvolution($) {
-  const name = displayName(mon)
+  const name = nameOf(mon)
   if (!evolving && !evolveDue) return { text: name + ' isn\'t evolving.' }
   if (evolving) attack = null
   evolving = null
@@ -532,7 +533,7 @@ function evolutionText(entry) {
 // A stone, a trade, or a level the mon has reached starts its evolution now. Several
 // ways and none named get a list.
 function evolveCommand($, wanted) {
-  const name = displayName(mon)
+  const name = nameOf(mon)
   const entries = evolutionsOf(mon)
   if (entries.length === 0) return { text: name + ' doesn\'t evolve.' }
   if (attack || food) return { text: name + ' is busy right now.' }
@@ -870,6 +871,12 @@ function iconsFor(key, name = mon) {
   return STATS[key].icon.repeat(filled) + STATS[key].emptyIcon.repeat(STAT_ICONS - filled)
 }
 
+// A nickname lives in the mon's record too, so it follows the mon through evolution
+const nameOf = (name) => stats[name]?.nickname ?? displayName(name)
+
+// Like "Sparky (Pikachu)", or just "Pikachu" without a nickname
+const fullNameOf = (name) => (stats[name]?.nickname ? stats[name].nickname + ' (' + displayName(name) + ')' : displayName(name))
+
 // XP lives in each mon's record. A mon that hasn't earned any starts at its first level.
 const xpOf = (name) => stats[name]?.xp ?? xpAt(startLevel(name))
 const levelOf = (name) => levelAt(xpOf(name))
@@ -887,7 +894,7 @@ async function gainXp($, durationMs) {
   await $.store.set('stats', stats)
   const level = levelOf(mon)
   if (level === was) return
-  $.ui.toast(displayName(mon) + ' grew to Lv. ' + level + '!')
+  $.ui.toast(nameOf(mon) + ' grew to Lv. ' + level + '!')
   $.ui.invalidate('ui.render')
   const evolution = levelEvolutionOf(mon)
   if (evolution && level >= evolution.level && !evolving) evolveDue = evolution.into
@@ -905,7 +912,7 @@ async function statsText($) {
     : ' Needs are off.'
   const pets = Number((await $.store.get('pets')) ?? 0)
   const feeds = Number((await $.store.get('feeds')) ?? 0)
-  return displayName(mon) + ', Lv. ' + level + ', ' + xpOf(mon) + ' XP' + next + '.' + becomes + meters + ' ' + pets + ' pets, ' + feeds + ' feeds.'
+  return fullNameOf(mon) + ', Lv. ' + level + ', ' + xpOf(mon) + ' XP' + next + '.' + becomes + meters + ' ' + pets + ' pets, ' + feeds + ' feeds.'
 }
 
 // Every mon with a saved record, highest level first, one a line, like
@@ -916,10 +923,10 @@ function boxText() {
   raised.sort((a, b) => levelOf(b) - levelOf(a) || displayName(a).localeCompare(displayName(b)) || a.localeCompare(b))
   const lines = raised.map((name) => {
     const meters = needsOn ? ' ' + iconsFor('food', name) + ' ' + iconsFor('happiness', name) : ''
-    return displayName(name) + ', Lv. ' + levelOf(name) + meters + (name === mon ? ' (active)' : '')
+    return fullNameOf(name) + ', Lv. ' + levelOf(name) + meters + (name === mon ? ' (active)' : '')
   })
   const count = raised.length + (raised.length === 1 ? ' mon' : ' mons')
-  const alone = raised.length === 1 && raised[0] === mon ? '\nOnly ' + displayName(mon) + ' so far. /pokemon <mon> picks another.' : ''
+  const alone = raised.length === 1 && raised[0] === mon ? '\nOnly ' + nameOf(mon) + ' so far. /pokemon <mon> picks another.' : ''
   return count + ' in your box:\n' + lines.join('\n') + alone
 }
 
@@ -928,12 +935,35 @@ function boxText() {
 function releaseCommand(wanted) {
   if (!wanted) return { text: 'Name the mon to release, like /pokemon release ' + mon + '. /pokemon box lists yours.' }
   if (!MONS.includes(wanted)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
-  const name = displayName(wanted)
-  if (!stats[wanted]) return { text: name + ' isn\'t in your box.' }
+  if (!stats[wanted]) return { text: displayName(wanted) + ' isn\'t in your box.' }
+  const name = nameOf(wanted)
   delete stats[wanted]
   if (wanted !== mon) return { text: 'You release ' + name + '. Bye-bye, ' + name + '!' }
   evolveDue = null
-  return { text: 'You release ' + name + '. Bye-bye, ' + name + '! A fresh ' + name + ' takes its place.' }
+  return { text: 'You release ' + name + '. Bye-bye, ' + name + '! A fresh ' + displayName(mon) + ' takes its place.' }
+}
+
+const NICKNAME_MAX = 12
+
+// Name the active mon. Its species name, as in the games, takes the nickname away.
+function nicknameCommand(wanted) {
+  const species = displayName(mon)
+  const nickname = wanted.replace(/\p{C}/gu, '').replace(/\s+/g, ' ').trim()
+  if (!nickname) {
+    const now = stats[mon]?.nickname ? species + ' goes by ' + stats[mon].nickname + '. ' : ''
+    return { text: now + 'Name it with /pokemon nickname <name>, up to ' + NICKNAME_MAX + ' characters.' }
+  }
+  if ([...nickname].length > NICKNAME_MAX) return { text: 'That\'s too long. A nickname fits ' + NICKNAME_MAX + ' characters.' }
+  const old = stats[mon]?.nickname
+  if (moveKey(nickname) === moveKey(species) || moveKey(nickname) === moveKey(mon)) {
+    if (!old) return { text: species + ' has no nickname.' }
+    const { nickname: _, ...rest } = stats[mon]
+    if (Object.keys(rest).length > 0) stats[mon] = rest
+    else delete stats[mon]
+    return { text: old + ' is just ' + species + ' again.' }
+  }
+  stats[mon] = { ...stats[mon], nickname }
+  return { text: (old ?? species) + ' is now ' + nickname + '!' }
 }
 
 // A hungry mon drags its feet, except on its way to a berry
@@ -951,7 +981,7 @@ function hopForJoy() {
   }
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'pet', 'feed', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'release', 'list']
+const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'pet', 'feed', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'nickname', 'release', 'list']
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
@@ -961,12 +991,12 @@ const moveKey = (name) => name.toLowerCase().replace(/[\s\-_'.]/g, '')
 function movesText(name) {
   const known = movesOf(name)
   const moves = known.length > 0 ? known : FALLBACK_MOVES
-  return { text: displayName(name) + ' knows ' + moves.map((m) => m.name).join(', ') + '.' }
+  return { text: nameOf(name) + ' knows ' + moves.map((m) => m.name).join(', ') + '.' }
 }
 
 // Play a random move, or the one named, and announce it. "list" lists the moves instead.
 function attackCommand(wanted) {
-  const name = displayName(mon)
+  const name = nameOf(mon)
   if (wanted === 'list') return movesText(mon)
   if (attack) return { text: name + ' is still attacking.' }
   if (food) return { text: name + ' is busy eating.' }
@@ -1075,7 +1105,7 @@ export function register(on) {
     clearAlert()
     nowMs = await $.clock.now()
     const asked = e.args.trim().toLowerCase()
-    if (waitsForEvolution(asked)) return { text: displayName(mon) + ' is evolving! /pokemon stop cancels it.' }
+    if (waitsForEvolution(asked)) return { text: nameOf(mon) + ' is evolving! /pokemon stop cancels it.' }
     if (MONS.includes(asked)) {
       const wasHome = isHome()
       evolveDue = null
@@ -1090,7 +1120,7 @@ export function register(on) {
       wander = !wander
       wanderTarget = null
       await $.store.set('wander', wander)
-      return { text: displayName(mon) + (wander ? ' is free to wander.' : ' is heading home.') }
+      return { text: nameOf(mon) + (wander ? ' is free to wander.' : ' is heading home.') }
     } else if (asked === 'pet') {
       pet()
       bumpStat('happiness', PET_HAPPINESS)
@@ -1099,9 +1129,9 @@ export function register(on) {
       const pets = Number((await $.store.get('pets')) ?? 0) + 1
       await $.store.set('pets', pets)
       const line = PET_LINES[Math.floor(Math.random() * PET_LINES.length)]
-      return { text: displayName(mon) + ' ' + line + ' ❤ (pets: ' + pets + ')' }
+      return { text: nameOf(mon) + ' ' + line + ' ❤ (pets: ' + pets + ')' }
     } else if (asked === 'feed') {
-      if (food) return { text: displayName(mon) + ' is still busy with the last one.' }
+      if (food) return { text: nameOf(mon) + ' is still busy with the last one.' }
       const berry = feed()
       bumpStat('food', FEED_FOOD)
       bumpStat('happiness', FEED_HAPPINESS)
@@ -1110,7 +1140,7 @@ export function register(on) {
       const feeds = Number((await $.store.get('feeds')) ?? 0) + 1
       await $.store.set('feeds', feeds)
       const article = /^[aeiou]/.test(berry.name) ? 'an ' : 'a '
-      return { text: 'You toss ' + displayName(mon) + ' ' + article + berry.name + ' ' + berry.emoji + ' (feeds: ' + feeds + ')' }
+      return { text: 'You toss ' + nameOf(mon) + ' ' + article + berry.name + ' ' + berry.emoji + ' (feeds: ' + feeds + ')' }
     } else if (asked === 'attack' || asked.startsWith('attack ')) {
       return attackCommand(asked.slice('attack'.length).trim())
     } else if (asked === 'moves' || asked.startsWith('moves ')) {
@@ -1121,7 +1151,7 @@ export function register(on) {
       needsOn = !needsOn
       await $.store.set('needs', needsOn)
       $.ui.invalidate('ui.render')
-      const name = displayName(mon)
+      const name = nameOf(mon)
       return { text: needsOn ? 'Needs are on. Keep ' + name + ' fed and happy.' : 'Needs are off. ' + name + ' won\'t get hungry or lonely.' }
     } else if (asked === 'evolve' || asked.startsWith('evolve ')) {
       return evolveCommand($, asked.slice('evolve'.length).trim())
@@ -1136,6 +1166,11 @@ export function register(on) {
       await $.store.set('stats', stats)
       $.ui.invalidate('ui.render')
       return result
+    } else if (asked === 'nickname' || asked.startsWith('nickname ')) {
+      const result = nicknameCommand(e.args.trim().slice('nickname'.length))
+      await $.store.set('stats', stats)
+      $.ui.invalidate('ui.render')
+      return result
     } else if (asked === 'list') {
       return { text: MONS.length + ' mons: ' + MONS.join(', ') }
     } else if (asked) {
@@ -1143,11 +1178,11 @@ export function register(on) {
     } else {
       const mode = wander ? ', wandering' : ''
       const levels = 'food ' + Math.round(statNow(mon, 'food')) + '%, happiness ' + Math.round(statNow(mon, 'happiness')) + '%'
-      const shown = displayName(mon) + ' Lv. ' + levelOf(mon)
+      const shown = nameOf(mon) + ' Lv. ' + levelOf(mon)
       return { text: 'Showing ' + variant + ' ' + shown + mode + ' (' + (needsOn ? levels : 'needs off') + '). Options: ' + OPTIONS.join(', ') + '.' }
     }
     $.ui.invalidate('ui.render')
-    return { text: 'Now showing ' + variant + ' ' + displayName(mon) + '.' }
+    return { text: 'Now showing ' + variant + ' ' + nameOf(mon) + '.' }
   })
 
   // Typing or sending a prompt wakes the mon up and answers its "!"
@@ -1217,7 +1252,7 @@ export function register(on) {
     } else {
       // Too short even for a shrunk mon: its name, level, and meters on one line, and no blits
       bandId = null
-      const name = Text({ children: [displayName(mon) + ' ' + levelLine()] })
+      const name = Text({ children: [nameOf(mon) + ' ' + levelLine()] })
       const meters = needsOn ? [meter('food', ' '), meter('happiness', ' ')] : []
       corner = [Box({ flexDirection: 'row', children: [name, ...meters] })]
     }
