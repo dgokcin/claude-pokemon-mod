@@ -2,7 +2,8 @@
 
 // Renders a move frame by frame into a PNG contact sheet, so attacks can be
 // tuned without a terminal. It drives the real band renderer in hooks/register.js
-// with a stand-in host, then paints each blit the way the half blocks look.
+// with a stand-in host, then paints the frame on screen after each tick the way the
+// half blocks look.
 //
 // node scripts/preview-attack.mjs <mon> <move> [options]
 //   --at <column>   where the mon stands first (default: home at the right edge)
@@ -67,21 +68,35 @@ function seeded(seed) {
   }
 }
 
-// A stand-in host: hooks by event, a store, a clock driven by hand, and every blit
+// A stand-in host: hooks by event, a store, a clock driven by hand, the theme, and the
+// frame on screen. The band only blits a frame that changed, so a tick with no blit
+// leaves the last frame showing.
 const hooks = {}
 const store = new Map([['mon', mon], ['variant', opts.shiny ? 'shiny' : 'default'], ['wander', opts.at !== undefined]])
-const blits = []
+let shown = null
 let tickFn = null
 
 const $ = {
   command: { register: async () => {} },
+  config: { list: async () => [{ key: 'theme', value: opts.light ? 'light' : 'dark' }] },
   store: { get: async (k) => store.get(k), set: async (k, v) => void store.set(k, v) },
   clock: { now: async () => 0, every: (ms, fn) => void (tickFn = fn) },
   ui: {
     invalidate: () => {},
-    blit: async (args) => void blits.push(args.cells),
+    log: (text) => console.error(text),
+    blit: async (args) => void (shown = args.cells),
     resolve: () => ({ Box: (props) => ({ props }), Raster: (props) => ({ props }), Text: (props) => ({ props }) }),
   },
+}
+
+// The band Raster's cells in a drawn tree
+function cellsIn(node) {
+  if (node?.props?.key === 'pokemon') return node.props.cells
+  for (const child of node?.props?.children ?? []) {
+    const cells = cellsIn(child)
+    if (cells) return cells
+  }
+  return null
 }
 
 function matches(matcher, e) {
@@ -101,17 +116,17 @@ register((event, matcher, fn) => {
 })
 
 await fire('session.start', {})
-await fire('ui.render', {
+shown = cellsIn(await fire('ui.render', {
   component: 'AbovePrompt',
   surface: 'terminal',
   requestId: 'band',
   props: { isWorking: false, hasSurvey: false, bodyColumns: 120 },
-})
+}))
 
 // Stroll to the asked column: the next wander target comes from Math.random
 const home = STRIP - SPRITES[mon].width
+const at = opts.at === undefined ? home : Math.max(0, Math.min(home, Number(opts.at)))
 if (opts.at !== undefined) {
-  const at = Math.max(0, Math.min(home, Number(opts.at)))
   const random = Math.random
   Math.random = () => (at + 0.5) / (home + 1)
   for (let k = 0; k < (home - at + 2) * MOVE_TICKS; k++) tickFn()
@@ -127,12 +142,16 @@ if (!move) {
 
 const answer = await fire('command.run', { command: 'pokemon', args: 'attack ' + moveName })
 console.log(answer.text)
-blits.length = 0
+// A move aimed ahead first backs the mon up to the nearer edge, a column a tick
 const { ticks } = prepareAttack(move, { side: 'left', seed: 0, x: 0, home: 0 })
-for (let k = 0; k < ticks + 6; k++) tickFn()
+const backup = Math.min(at, home - at)
+const played = []
+for (let age = 1; age <= ticks + backup + 6; age++) {
+  tickFn()
+  played.push({ cells: shown, age })
+}
 const last = opts.to === undefined ? Infinity : Number(opts.to)
-const frames = blits
-  .map((cells, i) => ({ cells, age: i + 1 }))
+const frames = played
   .filter((f) => f.age >= Number(opts.from) && f.age <= last)
   .filter((f, i) => i % EVERY === 0)
 
