@@ -749,6 +749,56 @@ test('/pokemon release waits while the mon evolves', async ($, on) => {
   expect(await run('release pikachu')).toBe('Pikachu is evolving! /pokemon stop cancels it.')
 })
 
+test('/pokemon nickname names the active mon, keeps its case, and its species name takes it away', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'pikachu', stats: { pikachu: { xp: 12 ** 3 } } }
+  await startedWith($, on, saved, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+
+  expect(await run('nickname')).toBe('Name it with /pokemon nickname <name>, up to 12 characters.')
+  expect(await run('nickname Sir Sparks A Lot')).toBe('That\'s too long. A nickname fits 12 characters.')
+  expect(await run('nickname  Sparky ')).toBe('Pikachu is now Sparky!')
+  expect(saved.stats.pikachu).toEqual({ xp: 12 ** 3, nickname: 'Sparky' })
+  expect(await run('nickname')).toBe('Pikachu goes by Sparky. Name it with /pokemon nickname <name>, up to 12 characters.')
+  expect(await run('nickname Zappy')).toBe('Sparky is now Zappy!')
+
+  expect(await run('pet')).toMatch(/^Zappy /)
+  expect(await run('stats')).toMatch(/^Zappy \(Pikachu\), Lv\. 12,/)
+  expect(await run('box')).toBe('1 mon in your box:\nZappy (Pikachu), Lv. 12 ●●●●○ ❤❤❤❤❤ (active)\nOnly Zappy so far. /pokemon <mon> picks another.')
+  expect(await run('')).toContain('Zappy Lv. 12')
+
+  expect(await run('nickname PIKACHU')).toBe('Zappy is just Pikachu again.')
+  expect(saved.stats.pikachu.nickname).toBeUndefined()
+  expect(await run('nickname pikachu')).toBe('Pikachu has no nickname.')
+})
+
+test('a nickname with no other record leaves no record behind when taken away, and release drops it', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'abra' }
+  await startedWith($, on, saved, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+
+  await run('nickname Spoony')
+  await run('nickname abra')
+  expect(saved.stats).toEqual({})
+
+  await run('nickname Spoony')
+  expect(await run('release abra')).toBe('You release Spoony. Bye-bye, Spoony! A fresh Abra takes its place.')
+  expect(saved.stats).toEqual({})
+})
+
+test('a nickname carries through evolution', { timeoutMs: 30000 }, async ($, on) => {
+  const toasts = toastsOf(on)
+  const saved: Record<string, any> = { mon: 'pikachu', stats: { pikachu: { xp: 12 ** 3 } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+
+  await run('nickname Sparky')
+  expect(await run('evolve')).toBe('You use a Thunder Stone on Sparky.')
+  await clock.advance(7100)
+  expect(toasts).toEqual(['What? Sparky is evolving!', 'Congratulations! Your Sparky evolved into Raichu!'])
+  expect(saved.stats).toEqual({ raichu: { xp: 12 ** 3, nickname: 'Sparky' } })
+  expect(await run('nickname')).toBe('Raichu goes by Sparky. Name it with /pokemon nickname <name>, up to 12 characters.')
+})
+
 test('a refused frame, as when a resize remounts the band, asks for a redraw at most once a second', async ($, on) => {
   const clock = mock.clock(on)
   let renders = 0
@@ -804,7 +854,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('session.start', () => ({ cwd: '/work' }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|pet|feed|attack|moves|evolve|stop|stats|box|release|list]')
+  expect(hint).toBe('[<mon>|default|shiny|wander|needs|pet|feed|attack|moves|evolve|stop|stats|box|nickname|release|list]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
