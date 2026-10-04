@@ -55,12 +55,12 @@ mod in place, so edits apply on `/reload-plugins`.
 | Command | Effect |
 | --- | --- |
 | `/pokemon` | Show the active mon, its variant, its level, its food and happiness, and the options |
-| `/pokemon <mon>` | Pick a mon, like `/pokemon pikachu`, saved across sessions |
+| `/pokemon <mon>` | Pick a mon, like `/pokemon pikachu`. Every open session shows the same one, and a pick in one switches the others within a couple of seconds |
 | `/pokemon list` | List every mon name |
 | `/pokemon shiny`, `/pokemon default` | Pick a variant, saved across sessions |
 | `/pokemon wander` | Toggle idle wandering (on by default), saved across sessions |
-| `/pokemon pet` | Pet the mon. Wakes it up, and counts pets across sessions |
-| `/pokemon feed` | Toss it a random oran 🫐, pecha 🍑, razz 🍓, or sitrus 🍋 berry. Counts feeds across sessions |
+| `/pokemon pet` | Pet the mon. Wakes it up, and counts pets across sessions. With every heart already filled, it still enjoys it, but the pet fills nothing and isn't counted |
+| `/pokemon feed` | Toss it a random oran 🫐, pecha 🍑, razz 🍓, or sitrus 🍋 berry. Counts feeds across sessions. With every food icon already filled, it still eats the berry, but the berry fills nothing and isn't counted |
 | `/pokemon attack` | Use a random move from the mon's moveset |
 | `/pokemon attack <move>` | Use a specific move, like `/pokemon attack thunderbolt` |
 | `/pokemon moves`, `/pokemon attack list` | List the active mon's moves |
@@ -68,6 +68,7 @@ mod in place, so edits apply on `/reload-plugins`.
 | `/pokemon evolve` | Evolve with a stone or a trade, or now when a cancelled evolution's level is reached |
 | `/pokemon evolve <mon>` | Pick what Eevee becomes, like `/pokemon evolve jolteon` |
 | `/pokemon stop` | Cancel an evolution |
+| `/pokemon sleep` | Tuck the mon in, so its meters drain slower until Claude starts working. Run it again to wake it |
 | `/pokemon needs` | Toggle food and happiness (on by default), saved across sessions |
 | `/pokemon stats` | Show the level, the XP to the next one, how it evolves, the meters, and your pets and feeds |
 | Ctrl+X Ctrl+A | Collapse or expand the band (Claude Code's own binding) |
@@ -77,7 +78,7 @@ mod in place, so edits apply on `/reload-plugins`.
 | When | The mon | Driven by |
 | --- | --- | --- |
 | Claude works | Paces back and forth across the strip | band `isWorking` |
-| Claude thinks | Shows a pixel thought bubble with animated dots | spinner `mode === 'thinking'` |
+| Claude thinks | Shows a pixel thought bubble with animated dots, on the side it's walking toward, or the left while it stands still | spinner `mode === 'thinking'` |
 | Claude runs a tool | The bubble shows the tool: a pencil for edits, a magnifier for reads and searches, `>_` for shell commands, a Poké Ball for subagents, and a wrench for anything else | `tool.call` (main agent only) |
 | Claude needs you | Stops, faces you, and shows a red "!" until you answer. A minute after a turn with no word from you, it shows the "!" for 2 minutes | The AskUserQuestion and ExitPlanMode tools, `turn.complete`, and `classic.PermissionRequest` and `classic.Notification` for permission dialogs |
 | A subagent runs | A Poké Ball drops into the strip, wobbles while the subagent works, and pops open when its turn ends. Past six, the last slot counts the rest as `+n` | `agent.spawn`, `turn.complete` |
@@ -85,9 +86,9 @@ mod in place, so edits apply on `/reload-plugins`.
 | A turn ends with an answer | Earns XP. A level-up shows a toast, and an evolution level makes it evolve. See [Levels and evolution](#levels-and-evolution) | `turn.complete` (main agent only) |
 | You're idle | Strolls to random spots in the strip, resting 3 to 8 s between walks | |
 | You're idle, wandering off | Walks home to the right edge and bobs there | |
-| 5 minutes with no turns or typing | Falls asleep, with a small and a big pixel Z beside its head | `prompt.edit`, `prompt.submit`, turns |
-| `/pokemon pet` | Stops, hops, and sends up a stream of big and small pixel hearts | |
-| `/pokemon feed` | A random pixel berry drops nearby, the mon walks over, eats it a column at a time, and shows a bubble with a star | |
+| 5 minutes with no turns or typing | Walks home, then falls asleep with its eyes shut, and small and big pixel Zs rising from just left of the middle of its body and drifting up and away | `prompt.edit`, `prompt.submit`, turns |
+| `/pokemon pet` | Stops, hops, and sends up a stream of big and small pixel hearts. Happiness fills once the hearts have floated away | |
+| `/pokemon feed` | A random pixel berry drops nearby, the mon walks over to stand with the berry in front of the middle of its body, eats it a column at a time from both edges, and shows a bubble with a star. The meters fill once it has eaten | |
 | `/pokemon attack` | Turns toward the side with more room, backs up to the edge behind it, and plays one of its moves for 1.5 to 4 s, so the whole animation stays in view. Moves on itself play in place, facing you | |
 | Food or happiness under 30% | While idle and awake, shows a pixel thought bubble with a red berry (hungry) or a pink heart (lonely), taking turns when both are low | |
 | Food under 30% | Walks slower, except on its way to a berry | |
@@ -103,12 +104,25 @@ Each mon has two meters at the bottom right of the band:
 
 | Meter | Icons | Drains from full in | Filled by |
 | --- | --- | --- | --- |
-| Food | `●●●○○` in salmon pink | 8 hours | `/pokemon feed`: +35 |
-| Happiness | `❤❤❤♡♡` in pink | 12 hours | `/pokemon pet`: +25, `/pokemon feed`: +5 |
+| Food | `🍓🍓🍓○ ○`, empty in strawberry red | 8 hours | `/pokemon feed`: +20, one icon |
+| Happiness | `💗💗💗♡ ♡`, empty in the heart's pink | 12 hours | `/pokemon pet`: +25, `/pokemon feed`: +5 |
 
-Each icon is 20%. The meters are stored with a timestamp, so they keep draining while
-Claude Code is closed. A new mon starts at 80%. The meters hide when the band is too
-narrow for them.
+Each icon is 20%. A filled icon is an emoji, so it looks the same whatever font the terminal uses, and each empty one is followed by a space so a font that draws `○` or `♡` too wide can't make it overlap the next. The meters drain over real time, so the mon needs care after time away,
+but at a quarter speed while no session runs: Claude Code closed, or the laptop off or
+asleep. Every open session marks the store as seen every 10 seconds, and a gap of over a
+minute counts as time away. Only a mon on show drains: switching to another one parks
+the old one's meters where they are, and they pick up from there when you switch back,
+so the mons you aren't using don't go hungry. XP is only earned by the mon on show too. A new mon starts at 80%. On a narrow band the strip shrinks to
+keep the meters, and they hide only when the mon itself barely fits. At home, every mon
+stands at least three columns clear of the level and meters, however much empty space
+its sprite leaves on its right. Bubbles, hearts, and Zs can float over the space above them.
+
+`/pokemon sleep` tucks the mon in: it walks home, then falls asleep. Asleep, food drains at half speed and happiness at a
+quarter. This sleep is shared by every open session:
+it wakes when Claude starts working in any of them, when you feed it, when it attacks or
+evolves, or when you run `/pokemon sleep` again, and it can't be tucked in while Claude
+works in any session. The nap it takes after five idle minutes is each session's own and
+doesn't slow the meters.
 
 The meters also scale the XP a turn earns, from half when both are empty to one and a
 half when both are full. `/pokemon needs` turns needs off. The meters, the need bubbles,
@@ -207,7 +221,7 @@ the status line, so a split pane can leave it only a few rows. When the mon does
 fit, the band draws the scene at full size and then shrinks the whole strip to fit.
 Each shrunk pixel takes the most common color of the block it covers, and ties go to
 the darker color so outlines and eyes survive. Below 4 rows the band shows a line of
-text instead, like `Pikachu Lv 12 ●●●●○ ❤❤❤❤♡`. A pane that only changes height gets
+text instead, like `Pikachu Lv 12 🍓🍓🍓🍓○  💗💗💗💗♡ `. A pane that only changes height gets
 its new fit on the next redraw, within a minute.
 
 ## Add a mon
@@ -230,6 +244,7 @@ its new fit on the next redraw, within a minute.
 | `hooks/evolutions.js` | Gen 1 evolutions, and each mon's start level |
 | `hooks/party.js` | The Poké Balls of running subagents |
 | `hooks/zoom.js` | Shrinks the band's frame to fit a short pane |
+| `hooks/eyes.js` | Shuts a sprite's eyes for its sleeping frame |
 | `hooks/frames.js` | Generated pixel frames. Don't edit by hand. |
 | `sprites/<mon>/*.gif` | Source GIFs, 32x32 |
 | `scripts/build-frames.mjs` | Regenerates `frames.js` from the GIFs with ffmpeg |

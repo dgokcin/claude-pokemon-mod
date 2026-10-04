@@ -1,4 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { closedEyes } from '../hooks/eyes.js'
+import { SPRITES } from '../hooks/frames.js'
 
 const BAND = {
   plugin: 'pokemon',
@@ -17,13 +19,23 @@ const BAND = {
 
 const THEIRS = { type: 'Text', props: {}, children: ['drawn by Claude Code'] }
 
-// The strip is 40 columns, and the meters are text to its right
+// The strip is 40 columns. The raster adds 12 empty ones on its left, room for a bubble,
+// and 11 under the level and meters on its right.
+const MARGIN = 12
 const STRIP = 40
-const RASTER = 40
+const RASTER = MARGIN + STRIP + 11
 
 function codePoints(cells: string): number[] {
   const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
   return Array.from(words).filter((_, i) => i % 3 === 0)
+}
+
+// Whether each cell paints anything: a glyph, or a space on a color of its own
+function paintedCells(cells: string): boolean[] {
+  const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
+  const out: boolean[] = []
+  for (let i = 0; i < words.length; i += 3) out.push(words[i] !== 0x20 || words[i + 2] !== 0x01000000)
+  return out
 }
 
 // Whether any cell paints a given color, as a foreground or a background
@@ -40,6 +52,19 @@ test('draws Abra by default as a half-block raster in the terminal band', async 
   expect(raster.props.columns).toBe(RASTER)
   expect(raster.props.rows).toBe(11)
   expect(codePoints(raster.props.cells)).toContain(0x2580)
+})
+
+test('cells one color top and bottom are spaces on that color, so no font can leave seams', async ($, on) => {
+  on('ui.render', () => THEIRS)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const words = new Uint32Array(Uint8Array.fromBase64((await ui.find({ key: 'pokemon' })).props.cells).buffer)
+  let solid = 0
+  for (let i = 0; i < words.length; i += 3) {
+    if (words[i] === 0x20 && words[i + 2] !== 0x01000000) solid += 1
+    // A half block never has the same color on both halves
+    if (words[i] === 0x2580) expect(words[i + 1]).not.toBe(words[i + 2])
+  }
+  expect(solid).toBeGreaterThan(20)
 })
 
 test('leaves the band alone on desktop and during a survey', async ($, on) => {
@@ -77,6 +102,7 @@ test('/pokemon switches the mon and the variant, and saves both', async ($, on) 
   mock.clock(on)
   const saved = new Map<string, unknown>()
   on('ui.render', () => THEIRS)
+  on('store.get', ($, e) => ({ value: saved.get(e.key) }))
   on('store.set', ($, e) => {
     saved.set(e.key, e.value)
     return { value: undefined }
@@ -103,6 +129,7 @@ test('/pokemon rejects an unknown name', async ($, on) => {
 test('/pokemon charmander draws Charmander', async ($, on) => {
   mock.clock(on)
   on('ui.render', () => THEIRS)
+  on('store.get', () => ({ value: undefined }))
   on('store.set', () => ({ value: undefined }))
   const answer = await $.command.run({ command: 'pokemon', args: 'charmander' })
   expect(answer.text).toBe('Now showing default Charmander.')
@@ -112,10 +139,10 @@ test('/pokemon charmander draws Charmander', async ($, on) => {
 
 // The rightmost strip column that holds part of the sprite, ignoring the meters
 function rightEdge(cells: string): number {
-  const points = codePoints(cells)
   let edge = -1
-  points.forEach((cp, i) => {
-    if (cp !== 0x20 && i % RASTER < STRIP) edge = Math.max(edge, i % RASTER)
+  paintedCells(cells).forEach((painted, i) => {
+    const column = (i % RASTER) - MARGIN
+    if (painted && column >= 0 && column < STRIP) edge = Math.max(edge, column)
   })
   return edge
 }
@@ -147,6 +174,17 @@ test('with wandering off, walks back to the right edge after a turn and idles th
   expect(rightEdge(blits[blits.length - 1])).toBe(home)
 })
 
+test('every mon at home leaves a gap of at least three columns before the level and meters', { timeoutMs: 60000 }, async ($, on) => {
+  await startedWith($, on, { wander: false }, 0)
+  for (const name of Object.keys(SPRITES)) {
+    await $.command.run({ command: 'pokemon', args: name })
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    const edge = rightEdge((await ui.find({ key: 'pokemon' })).props.cells)
+    expect({ name, ok: STRIP - 1 - edge >= 3 }).toEqual({ name, ok: true })
+    await ui.unmount()
+  }
+})
+
 // Fire session.start with the stubs it needs, and collect every blit
 async function started($, on) {
   const clock = mock.clock(on)
@@ -160,6 +198,8 @@ async function started($, on) {
   on('command.register', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
   on('store.set', () => ({ value: undefined }))
+  on('store.keys', () => ({ value: [] }))
+  on('store.delete', () => ({ value: undefined }))
   return { clock, blits }
 }
 
@@ -171,19 +211,59 @@ const SPINNER = {
   props: { word: 'Thinking', message: 'Thinking', suffix: '…', mode: 'thinking' },
 } as const
 
+// The mean strip column of the cells painting a color, or null when none does
+function meanColumn(cells: string, color: number): number | null {
+  const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
+  const columns: number[] = []
+  for (let i = 0; i < words.length; i += 3) {
+    if (words[i + 1] === color || words[i + 2] === color) columns.push(((i / 3) % RASTER) - MARGIN)
+  }
+  return columns.length > 0 ? columns.reduce((a, b) => a + b, 0) / columns.length : null
+}
+
+test('the thought bubble leads on the side the pacing mon walks toward', { timeoutMs: 30000 }, async ($, on) => {
+  // Bulbasaur's wide head leaves the bubble room on both sides for only a short stretch of
+  // the strip, so this needs the margin on the left and the early turn on the right
+  const BODY = 0x68d078
+  const { clock, blits } = await startedWith($, on, { mon: 'bulbasaur', needs: false }, 0)
+  await $.ui.mount({ ...SPINNER, surface: 'terminal' })
+  await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
+  await clock.advance(30000)
+  let left = 0
+  let right = 0
+  for (let k = 1; k < blits.length; k++) {
+    const was = meanColumn(blits[k - 1], BODY)
+    const now = meanColumn(blits[k], BODY)
+    const bubble = meanColumn(blits[k], BUBBLE_OUTLINE)
+    if (was === null || now === null || bubble === null || Math.abs(now - was) < 0.5) continue
+    // Only a real step counts: the body's mean moves by about a column
+    if (Math.abs(now - was) > 2) continue
+    if (now < was) {
+      left += 1
+      expect(bubble).toBeLessThan(now)
+    } else {
+      right += 1
+      expect(bubble).toBeGreaterThan(now)
+    }
+  }
+  expect(left).toBeGreaterThan(3)
+  expect(right).toBeGreaterThan(3)
+})
+
 test('shows a thought bubble while Claude thinks', async ($, on) => {
   await started($, on)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await $.ui.mount({ ...SPINNER, surface: 'terminal' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
   const cells = (await ui.find({ key: 'pokemon' })).props.cells
-  expect(paints(cells, 0xf0f0f0)).toBe(true)
-  expect(paints(cells, 0x9a9ab0)).toBe(true)
+  expect(paints(cells, BUBBLE_OUTLINE)).toBe(true)
+  expect(paints(cells, DOTS)).toBe(true)
 })
 
 // The bubble outline on a dark theme and on a light one
 const DARK_THEME_BUBBLE = 0xf0f0f0
 const LIGHT_THEME_BUBBLE = 0x4a4a58
+const BUBBLE_OUTLINE = DARK_THEME_BUBBLE
 const ENGINE = { plugin: 'engine', tier: 'core' } as const
 
 test('a light theme draws a dark bubble, and switching to a dark theme draws it light again', async ($, on) => {
@@ -221,14 +301,31 @@ test('hops when a turn ends', async ($, on) => {
   expect((await after.find({ key: 'pokemon' })).props.cells).not.toBe(still)
 })
 
+// The Zs on the dark theme
+const Z_COLOR = 0xe8e8ff
+
 test('falls asleep after five idle minutes', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, blits } = await started($, on)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await $.ui.mount({ ...BAND, surface: 'terminal' })
   await clock.advance(4 * 60 * 1000)
-  expect(paints(blits[blits.length - 1], 0xe8e8ff)).toBe(false)
-  await clock.advance(61 * 1000)
-  expect(paints(blits[blits.length - 1], 0xe8e8ff)).toBe(true)
+  expect(paints(blits[blits.length - 1], Z_COLOR)).toBe(false)
+  // Out wandering, it walks home first, a column every 150 ms
+  await clock.advance(66 * 1000)
+  expect(paints(blits[blits.length - 1], Z_COLOR)).toBe(true)
+})
+
+test('after five idle minutes, a mon out wandering walks home before it falls asleep', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, blits } = await started($, on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const home = rightEdge((await ui.find({ key: 'pokemon' })).props.cells)
+  await clock.advance(5 * 60 * 1000 + 6000)
+  // Every frame with Zs shows it at home
+  const zs = blits.filter((cells) => paints(cells, Z_COLOR))
+  expect(zs.length).toBeGreaterThan(0)
+  expect(zs.every((cells) => rightEdge(cells) === home)).toBe(true)
+  expect(blits.some((cells) => rightEdge(cells) < home)).toBe(true)
 })
 
 test('wanders while idle by default, and /pokemon wander sends it home', async ($, on) => {
@@ -252,7 +349,7 @@ test('/pokemon pet sends hearts up, then they fade', async ($, on) => {
   await $.ui.mount({ ...BAND, surface: 'terminal' })
 
   const answer = await $.command.run({ command: 'pokemon', args: 'pet' })
-  expect(answer.text).toMatch(/^Abra .+ ❤ \(pets: 1\)$/)
+  expect(answer.text).toMatch(/^Abra .+ ♥ \(pets: 1\)$/)
   const hearty = (cells: string) => paints(cells, 0xff4f8b)
   await clock.advance(400)
   expect(hearty(blits[blits.length - 1])).toBe(true)
@@ -306,40 +403,390 @@ async function startedWith($, on, saved: Record<string, unknown>, now: number) {
     saved[e.key] = e.value
     return { value: undefined }
   })
+  on('store.keys', () => ({ value: Object.keys(saved) }))
+  on('store.delete', ($, e) => {
+    delete saved[e.key]
+    return { value: undefined }
+  })
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   return { clock, blits }
 }
+
+// The lowest pixel row a frame paints, two pixel rows per cell
+function lowestPixel(cells: string): number {
+  const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
+  let lowest = -1
+  for (let i = 0; i < words.length; i += 3) {
+    const cy = Math.floor(i / 3 / RASTER)
+    const solid = words[i] === 0x20 && words[i + 2] !== 0x01000000
+    if (solid || words[i] === 0x2584 || (words[i] === 0x2580 && words[i + 2] !== 0x01000000)) lowest = Math.max(lowest, cy * 2 + 1)
+    else if (words[i] === 0x2580) lowest = Math.max(lowest, cy * 2)
+  }
+  return lowest
+}
+
+test('a walking mon stands on the same ground as an idle one', async ($, on) => {
+  // Bulbasaur's walk frames leave one more empty row under its feet than its idle frames
+  const { clock, blits } = await startedWith($, on, { mon: 'bulbasaur', wander: false, needs: false }, 0)
+  const idle = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(3000)
+  const idleFrames = [(await idle.find({ key: 'pokemon' })).props.cells, ...blits]
+  await idle.unmount()
+  blits.length = 0
+  const busy = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
+  await clock.advance(3000)
+  expect(blits.length).toBeGreaterThan(5)
+  const ground = Math.max(...idleFrames.map(lowestPixel))
+  expect(Math.max(...blits.map(lowestPixel))).toBe(ground)
+  await busy.unmount()
+})
+
+test('a sleeping mon lies on the same ground as an idle one', async ($, on) => {
+  // Bulbasaur sleeps in its first idle frame, which leaves an empty row under its feet
+  const { clock, blits } = await startedWith($, on, { mon: 'bulbasaur', wander: false, needs: false }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(3000)
+  const ground = Math.max(...[(await ui.find({ key: 'pokemon' })).props.cells, ...blits].map(lowestPixel))
+  await $.command.run({ command: 'pokemon', args: 'sleep' })
+  blits.length = 0
+  await clock.advance(3000)
+  expect(blits.length).toBeGreaterThan(0)
+  expect(blits.every((cells) => lowestPixel(cells) === ground)).toBe(true)
+})
 
 test('draws food circles and happiness hearts at the right edge', async ($, on) => {
   await startedWith($, on, {}, 0)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   // A new mon starts at 80%: four filled icons and one empty in each meter
-  expect(await ui.find({ type: 'Text', text: '●●●●○' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '❤❤❤❤♡' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '🍓🍓🍓🍓○ ' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '💗💗💗💗♡ ' })).toBeDefined()
 })
 
-test('hides the meters when the band is too narrow', async ($, on) => {
+test('narrows the strip to keep the meters, and hides them when even the mon barely fits', async ($, on) => {
   await startedWith($, on, {}, 0)
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: 44 } })
-  expect((await ui.find({ key: 'pokemon' })).props.columns).toBe(STRIP)
-  expect(await ui.find({ type: 'Text', text: /●/ })).toBeUndefined()
+  const narrow = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: 44 } })
+  expect((await narrow.find({ key: 'pokemon' })).props.columns).toBe(44)
+  expect(await narrow.find({ type: 'Text', text: /🍓/ })).toBeDefined()
+  await narrow.unmount()
+  const tight = SPRITES.abra.width + 5
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: tight } })
+  expect((await ui.find({ key: 'pokemon' })).props.columns).toBe(tight)
+  expect(await ui.find({ type: 'Text', text: /🍓/ })).toBeUndefined()
 })
 
-test('food and happiness drain over real time, even between sessions', async ($, on) => {
+test('a bubble beside the head floats over the meters column instead of being cut off', async ($, on) => {
+  const low = { value: 10, at: 0 }
+  const { clock, blits } = await startedWith($, on, { wander: false, stats: { abra: { food: low, happiness: low } } }, 0)
+  // A strip barely wider than Abra, so the bubble has no room on the left and goes right
+  const strip = SPRITES.abra.width + 2
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: strip + 11 } })
+  const raster = await ui.find({ key: 'pokemon' })
+  expect(raster.props.columns).toBe(strip + 11)
+  expect(await ui.find({ type: 'Text', text: /🍓/ })).toBeDefined()
+  await clock.advance(100)
+  const painted = paintedCells(await shown(ui, blits))
+  const width = strip + 11
+  const meterTop = raster.props.rows - 3
+  const past = painted.filter((p, i) => p && i % width >= strip)
+  const underMeters = painted.filter((p, i) => p && i % width >= strip && Math.floor(i / width) >= meterTop)
+  expect(past.length).toBeGreaterThan(0)
+  expect(underMeters.length).toBe(0)
+})
+
+test('food and happiness drain over real time while a session runs', async ($, on) => {
   const full = { value: 100, at: 0 }
-  await startedWith($, on, { stats: { abra: { food: full, happiness: full } } }, 4 * HOUR)
+  // Another session marked the store seen moments ago, so the whole time counts
+  await startedWith($, on, { stats: { abra: { food: full, happiness: full } }, seenAt: 4 * HOUR - 5000 }, 4 * HOUR)
   const status = await $.command.run({ command: 'pokemon', args: '' })
   expect(status.text).toContain('food 50%, happiness 67%')
 })
 
-test('feeding fills food, petting fills happiness, and both are saved', async ($, on) => {
-  const saved: Record<string, any> = { stats: { abra: { food: { value: 10, at: 0 }, happiness: { value: 10, at: 0 } } } }
+test('time with Claude Code closed or the laptop off drains at a quarter speed', async ($, on) => {
+  const full = { value: 100, at: 0 }
+  const saved: Record<string, any> = { stats: { abra: { food: full, happiness: full }, pikachu: { food: { value: 40, at: 0 } } }, seenAt: 0 }
+  await startedWith($, on, saved, 4 * HOUR)
+  // 4 hours closed count as 1, plus the 10 s beat before the gap at full speed
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).toContain('food 87%, happiness 92%')
+  // Every mon's meters moved on and were saved, and the store is marked seen now
+  expect(saved.stats.pikachu.food.at).toBe(0.75 * (4 * HOUR - 10 * 1000))
+  expect(saved.stats.pikachu.food.value).toBe(40)
+  expect(saved.seenAt).toBe(4 * HOUR)
+})
+
+test('switching away parks a mon, and its meters pick up where they stopped when it comes back', async ($, on) => {
+  const full = { value: 100, at: 0 }
+  const saved: Record<string, any> = { stats: { abra: { food: full, happiness: full } }, seenAt: 0 }
   await startedWith($, on, saved, 0)
+  await $.command.run({ command: 'pokemon', args: 'bulbasaur' })
+  expect(saved.stats.abra.parked).toBe(true)
+  expect(saved.stats.abra.food.value).toBe(100)
+})
+
+test('a parked mon loses nothing while another one is shown, even across sessions', async ($, on) => {
+  // Abra was parked at 60% food 8 hours ago, and another session has run since
+  const saved: Record<string, any> = {
+    mon: 'bulbasaur',
+    stats: { abra: { food: { value: 60, at: 0 }, happiness: { value: 70, at: 0 }, parked: true } },
+    seenAt: 8 * HOUR - 5000,
+  }
+  await startedWith($, on, saved, 8 * HOUR)
+  await $.command.run({ command: 'pokemon', args: 'abra' })
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).toContain('food 60%, happiness 70%')
+  expect(saved.stats.abra.parked).toBeUndefined()
+  expect(saved.stats.abra.food.at).toBe(8 * HOUR)
+})
+
+test('an open session keeps the store marked seen', async ($, on) => {
+  const saved: Record<string, any> = {}
+  const { clock } = await startedWith($, on, saved, 0)
+  await clock.advance(30 * 1000)
+  expect(saved.seenAt).toBeGreaterThanOrEqual(20 * 1000)
+})
+
+test('feeding fills food, petting fills happiness, and both are saved once the mon has eaten and enjoyed it', async ($, on) => {
+  const saved: Record<string, any> = { stats: { abra: { food: { value: 10, at: 0 }, happiness: { value: 10, at: 0 } } } }
+  const { clock } = await startedWith($, on, saved, 0)
   await $.command.run({ command: 'pokemon', args: 'feed' })
   await $.command.run({ command: 'pokemon', args: 'pet' })
+  // Nothing fills while the berry falls and the hearts float
+  const before = await $.command.run({ command: 'pokemon', args: '' })
+  expect(before.text).toContain('food 10%, happiness 10%')
+  // Long enough to land, walk the whole strip, and eat
+  await clock.advance(150 * 40 + 2000)
+  const after = await $.command.run({ command: 'pokemon', args: '' })
+  expect(after.text).toContain('food 30%, happiness 40%')
+  expect(Math.round(saved.stats.abra.food.value)).toBe(30)
+})
+
+test('a mon as happy as can be still enjoys a pet, but it fills no meter and doesn\'t count as one', async ($, on) => {
+  const saved: Record<string, any> = { pets: 5, stats: { abra: { food: { value: 50, at: 0 }, happiness: { value: 90, at: 0 } } } }
+  await startedWith($, on, saved, 0)
+  const answer = await $.command.run({ command: 'pokemon', args: 'pet' })
+  expect(answer.text).toMatch(/♥ Abra is already as happy as can be\.$/)
   const status = await $.command.run({ command: 'pokemon', args: '' })
-  expect(status.text).toContain('food 45%, happiness 40%')
-  expect(Math.round(saved.stats.abra.food.value)).toBe(45)
+  expect(status.text).toContain('food 50%, happiness 90%')
+  expect(saved.pets).toBe(5)
+})
+
+test('a full mon still eats the berry, but it fills no meter and doesn\'t count as a feed', async ($, on) => {
+  const saved: Record<string, any> = { feeds: 4, stats: { abra: { food: { value: 90, at: 0 }, happiness: { value: 50, at: 0 } } } }
+  await startedWith($, on, saved, 0)
+  const answer = await $.command.run({ command: 'pokemon', args: 'feed' })
+  expect(answer.text).toMatch(/Abra is already full, so it just nibbles it\.$/)
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).toContain('food 90%, happiness 50%')
+  expect(saved.feeds).toBe(4)
+})
+
+test('/pokemon sleep slows both meters, even between sessions, and shows in the status', async ($, on) => {
+  const full = { value: 100, at: 0 }
+  await startedWith($, on, { stats: { abra: { food: full, happiness: full, asleep: true } } }, 8 * HOUR)
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).toContain('food 50%, happiness 83%')
+  expect(status.text).toContain('Abra Lv. 5, asleep')
+})
+
+test('/pokemon sleep tucks the mon in until Claude starts working, and saves the meters at each switch', async ($, on) => {
+  const saved: Record<string, any> = { stats: { abra: { food: { value: 100, at: 0 }, happiness: { value: 100, at: 0 } } } }
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  const { clock } = await startedWith($, on, saved, 4 * HOUR)
+  const tucked = await $.command.run({ command: 'pokemon', args: 'sleep' })
+  expect(tucked.text).toContain('falls asleep')
+  expect(saved.stats.abra.asleep).toBe(true)
+  expect(saved.stats.abra.food).toEqual({ value: 50, at: 4 * HOUR })
+
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(60 * 1000)
+  expect(saved.stats.abra.asleep).toBe(true)
+
+  await $.turn.start({ text: 'hi', turnId: 't' })
+  await clock.advance(100)
+  expect(saved.stats.abra.asleep).toBe(false)
+  expect(saved.stats.abra.food.at).toBeGreaterThan(4 * HOUR)
+
+  const busy = await $.command.run({ command: 'pokemon', args: 'sleep' })
+  expect(busy.text).toContain("can't sleep while Claude is working")
+})
+
+test('/pokemon sleep goes by the turn events, not the band\'s isWorking', async ($, on) => {
+  const saved: Record<string, any> = {}
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  await startedWith($, on, saved, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
+  const tucked = await $.command.run({ command: 'pokemon', args: 'sleep' })
+  expect(tucked.text).toContain('falls asleep')
+  await $.command.run({ command: 'pokemon', args: 'sleep' })
+
+  await $.turn.start({ text: 'hi', turnId: 't' })
+  const busy = await $.command.run({ command: 'pokemon', args: 'sleep' })
+  expect(busy.text).toContain("can't sleep while Claude is working")
+  await $.turn.complete({ turnId: 't', answer: 'ok', durationMs: 1000, isAborted: false, usage: null })
+  const after = await $.command.run({ command: 'pokemon', args: 'sleep' })
+  expect(after.text).toContain('falls asleep')
+})
+
+test('a sleeping mon shuts its eyes', async ($, on) => {
+  const EYE_WHITE = 0xe8e8f8
+  const saved: Record<string, any> = { mon: 'pikachu' }
+  await startedWith($, on, saved, 0)
+  const awake = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(paints((await awake.find({ key: 'pokemon' })).props.cells, EYE_WHITE)).toBe(true)
+  await awake.unmount()
+  await $.command.run({ command: 'pokemon', args: 'sleep' })
+  const asleep = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(paints((await asleep.find({ key: 'pokemon' })).props.cells, EYE_WHITE)).toBe(false)
+})
+
+test('shutting the eyes keeps every frame\'s size and palette', async () => {
+  for (const sprite of Object.values(SPRITES)) {
+    for (const sheet of Object.values(sprite.variants)) {
+      const rows = sheet.idle[0].rows
+      const shut = closedEyes(rows, sheet.palette)
+      expect(shut.length).toBe(rows.length)
+      for (const [y, row] of shut.entries()) {
+        expect(row.length).toBe(rows[y].length)
+        for (const letter of row) if (letter !== '.') expect(letter.charCodeAt(0) - 97).toBeLessThan(sheet.palette.length)
+      }
+    }
+  }
+})
+
+test('/pokemon sleep walks the mon home before it shuts its eyes', async ($, on) => {
+  const EYE_WHITE = 0xe8e8f8
+  const { clock, blits } = await startedWith($, on, { mon: 'pikachu', wander: false }, 0)
+  const idle = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const home = rightEdge((await idle.find({ key: 'pokemon' })).props.cells)
+  await idle.unmount()
+
+  const busy = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
+  await clock.advance(150 * 8)
+  await busy.unmount()
+  await $.command.run({ command: 'pokemon', args: 'sleep' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(150)
+  const walking = await shown(ui, blits)
+  expect(rightEdge(walking)).toBeLessThan(home)
+  expect(paints(walking, EYE_WHITE)).toBe(true)
+
+  await clock.advance(150 * 40)
+  const asleep = await shown(ui, blits)
+  expect(rightEdge(asleep)).toBe(home)
+  expect(paints(asleep, EYE_WHITE)).toBe(false)
+})
+
+test('/pokemon sleep again wakes the mon up', async ($, on) => {
+  const saved: Record<string, any> = {}
+  await startedWith($, on, saved, 0)
+  await $.command.run({ command: 'pokemon', args: 'sleep' })
+  const woken = await $.command.run({ command: 'pokemon', args: 'sleep' })
+  expect(woken.text).toBe('Abra wakes up.')
+  expect(saved.stats.abra.asleep).toBe(false)
+})
+
+test('/pokemon sleep is refused while Claude works in another session, unless its mark is stale', async ($, on) => {
+  const saved: Record<string, any> = { 'busy:other': 0 }
+  const { clock } = await startedWith($, on, saved, 0)
+  const refused = await $.command.run({ command: 'pokemon', args: 'sleep' })
+  expect(refused.text).toBe("Abra can't sleep while Claude is working.")
+  expect(saved.stats?.abra?.asleep).toBeUndefined()
+  // A session that closed mid-turn stops refreshing its mark
+  await clock.advance(20000)
+  const slept = await $.command.run({ command: 'pokemon', args: 'sleep' })
+  expect(slept.text).toMatch(/falls asleep/)
+  expect(saved.stats.abra.asleep).toBe(true)
+})
+
+test('a session marks itself busy for the length of a turn', async ($, on) => {
+  const saved: Record<string, any> = {}
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  await startedWith($, on, saved, 0)
+  await $.turn.start({ text: 'hi', turnId: 't' })
+  expect(Object.keys(saved).some((k) => k.startsWith('busy:'))).toBe(true)
+  await $.turn.complete({ turnId: 't', answer: 'ok', durationMs: 1000, isAborted: false, usage: null })
+  expect(Object.keys(saved).some((k) => k.startsWith('busy:'))).toBe(false)
+})
+
+test('a save here lands on the XP and meters another session saved since the last sync', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'abra', stats: { abra: { xp: 100, food: { value: 50, at: 0 }, happiness: { value: 10, at: 0 } } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  await $.command.run({ command: 'pokemon', args: 'pet' })
+  // Before this session syncs, another one earns XP and feeds the same mon
+  saved.stats = { abra: { xp: 900, food: { value: 70, at: 0 }, happiness: { value: 10, at: 0 } } }
+  // The pet pays out once its hearts have floated away
+  await clock.advance(4000)
+  expect(saved.stats.abra.xp).toBe(900)
+  expect(Math.round(saved.stats.abra.food.value)).toBe(70)
+  expect(Math.round(saved.stats.abra.happiness.value)).toBe(35)
+})
+
+test('put to bed in another session, the mon wakes as soon as Claude works here', async ($, on) => {
+  const saved: Record<string, any> = {}
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  const { clock } = await startedWith($, on, saved, 0)
+  await $.turn.start({ text: 'hi', turnId: 't' })
+  // Another session tucks it in, as its /pokemon sleep would
+  saved.stats = { abra: { asleep: true, food: { value: 80, at: 0 }, happiness: { value: 80, at: 0 } } }
+  await clock.advance(3000)
+  expect(saved.stats.abra.asleep).toBe(false)
+})
+
+test('feeding or petting in another session shows here within a second', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'abra', stats: { abra: { food: { value: 30, at: 0 }, happiness: { value: 30, at: 0 } } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: '🍓🍓○ ○ ○ ' })).toBeDefined()
+  // Another session feeds it, as its /pokemon feed would
+  saved.stats = { abra: { food: { value: 50, at: 0 }, happiness: { value: 35, at: 0 } } }
+  await clock.advance(1100)
+  expect(await ui.find({ type: 'Text', text: '🍓🍓🍓○ ○ ' })).toBeDefined()
+})
+
+test('each feed adds exactly one strawberry', async ($, on) => {
+  const saved: Record<string, any> = { stats: { abra: { food: { value: 39, at: 0 }, happiness: { value: 50, at: 0 } } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: '🍓🍓○ ○ ○ ' })).toBeDefined()
+  await $.command.run({ command: 'pokemon', args: 'feed' })
+  // The meter fills once the berry is eaten
+  await clock.advance(15 * 1000)
+  expect(await ui.find({ type: 'Text', text: '🍓🍓🍓○ ○ ' })).toBeDefined()
+})
+
+test('a mon picked in another session shows here within a couple of seconds', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'abra' }
+  const { clock } = await startedWith($, on, saved, 0)
+  // Another session picks Seel, as its /pokemon seel would
+  saved.mon = 'seel'
+  await clock.advance(3000)
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).toMatch(/^Showing default Seel /)
+})
+
+test('a reload shows the mon last picked in any session, and old per-session picks are cleared', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'abra', 'mon:old-session': { name: 'ditto', at: 0 } }
+  await startedWith($, on, saved, 0)
+  await $.command.run({ command: 'pokemon', args: 'ditto' })
+  saved.mon = 'bulbasaur'
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).toMatch(/^Showing default Bulbasaur /)
+  expect(Object.keys(saved).some((key) => key.startsWith('mon:'))).toBe(false)
+})
+
+test('saving this mon\'s meters keeps the records other sessions saved', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'abra' }
+  const { clock } = await startedWith($, on, saved, 0)
+  // Another session feeds its Seel after this one started
+  saved.stats = { seel: { food: { value: 100, at: 0 }, happiness: { value: 90, at: 0 } } }
+  await $.command.run({ command: 'pokemon', args: 'pet' })
+  // The happiness is paid once the hearts have floated away
+  await clock.advance(10 * 1000)
+  expect(saved.stats.seel.food.value).toBe(100)
+  expect(saved.stats.abra.happiness).toBeDefined()
 })
 
 // The frame on screen: the last blit, or the drawn frame while every tick has repeated it
@@ -348,15 +795,15 @@ async function shown(ui, blits: string[]): Promise<string> {
 }
 
 test('a hungry idle mon shows a berry bubble until it is fed', async ($, on) => {
-  const low = { value: 10, at: 0 }
+  const low = { value: 15, at: 0 }
   const fine = { value: 90, at: 0 }
   const { clock, blits } = await startedWith($, on, { stats: { abra: { food: low, happiness: fine } } }, 0)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await clock.advance(100)
   const hungry = await shown(ui, blits)
-  expect(paints(hungry, 0xf0f0f0)).toBe(true)
+  expect(paints(hungry, BUBBLE_OUTLINE)).toBe(true)
   expect(paints(hungry, 0xd84040)).toBe(true)
-  expect(paints(hungry, 0xff6fa8)).toBe(false)
+  expect(paints(hungry, 0xf0609a)).toBe(false)
 
   await $.command.run({ command: 'pokemon', args: 'feed' })
   await $.command.run({ command: 'pokemon', args: 'feed' })
@@ -370,7 +817,7 @@ test('a lonely idle mon shows a heart bubble', async ($, on) => {
   const { clock, blits } = await startedWith($, on, { stats: { abra: { food: fine, happiness: low } } }, 0)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await clock.advance(100)
-  expect(paints(await shown(ui, blits), 0xff6fa8)).toBe(true)
+  expect(paints(await shown(ui, blits), 0xf0609a)).toBe(true)
 })
 
 const ANSWERED = { turnId: 't', answer: 'ok', durationMs: 30000, isAborted: false, reason: 'answer' } as const
@@ -504,7 +951,8 @@ test('/pokemon shows the level in its status and above the meters', async ($, on
   expect(await wide.find({ type: 'Text', text: 'Lv 12' })).toBeDefined()
   await wide.unmount()
   // Too narrow for the meters, the level line hides with them
-  const narrow = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: 44 } })
+  const tight = SPRITES.charmander.width + 5
+  const narrow = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: tight } })
   expect(await narrow.find({ type: 'Text', text: /^Lv/ })).toBeUndefined()
 })
 
@@ -520,7 +968,7 @@ test('/pokemon needs hides the meters and the need bubbles, and turning it back 
   expect(saved.needs).toBe(false)
   await clock.advance(100)
   expect(paints(await shown(ui, blits), 0xd84040)).toBe(false)
-  expect(await ui.find({ type: 'Text', text: /●/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /🍓/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: 'Lv 5' })).toBeDefined()
 
   const on2 = await $.command.run({ command: 'pokemon', args: 'needs' })
@@ -528,7 +976,7 @@ test('/pokemon needs hides the meters and the need bubbles, and turning it back 
   expect(saved.needs).toBe(true)
   await clock.advance(100)
   expect(paints(await shown(ui, blits), 0xd84040)).toBe(true)
-  expect(await ui.find({ type: 'Text', text: '●○○○○' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '🍓○ ○ ○ ○ ' })).toBeDefined()
 })
 
 // Every color a blit paints, as a foreground or a background
@@ -727,7 +1175,7 @@ test('a short pane shrinks the band to fit, and a very short one shows a one-lin
   const tiny = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, maxRows: 3 } })
   expect(await tiny.find({ key: 'pokemon' })).toBeUndefined()
   expect(await tiny.find({ type: 'Text', text: /^Abra Lv 5$/ })).toBeDefined()
-  expect(await tiny.find({ type: 'Text', text: ' ●●●●○' })).toBeDefined()
+  expect(await tiny.find({ type: 'Text', text: ' 🍓🍓🍓🍓○ ' })).toBeDefined()
 })
 
 test('/pokemon list names every mon, and the hint and status stay short', async ($, on) => {
@@ -740,7 +1188,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('session.start', () => ({ cwd: '/work' }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|pet|feed|attack|moves|evolve|stop|stats|list]')
+  expect(hint).toBe('[<mon>|default|shiny|wander|needs|pet|feed|sleep|attack|moves|evolve|stop|stats|list]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
@@ -749,8 +1197,8 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   expect(status.text).not.toContain('charmander')
 })
 
-// Colors on a dark theme: the shell prompt and the pencil in the bubble, the
-// thinking dots, the "!", a Poké Ball's red top and white bottom, and the +n label
+// The shell prompt and the pencil in the bubble, the thinking dots, the "!", a Poké Ball's
+// red top and white bottom, and the +n label, on the dark theme
 const SHELL_ICON = 0x5fe08a
 const PENCIL_ICON = 0xffc83d
 const DOTS = 0x9a9ab0
@@ -915,7 +1363,7 @@ function columnsPainting(cells: string, color: number): number[] {
   const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
   const columns: number[] = []
   for (let i = 0; i < words.length; i += 3) {
-    if (words[i + 1] === color || words[i + 2] === color) columns.push((i / 3) % RASTER)
+    if (words[i + 1] === color || words[i + 2] === color) columns.push(((i / 3) % RASTER) - MARGIN)
   }
   return columns
 }

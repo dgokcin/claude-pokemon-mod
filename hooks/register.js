@@ -1,5 +1,6 @@
 import { attackFrame, attackPose, prepareAttack } from './attacks.js'
 import { evolutionsOf, levelEvolutionOf, startLevel } from './evolutions.js'
+import { closedEyes } from './eyes.js'
 import { SPRITES } from './frames.js'
 import { MAX_LEVEL, careOf, levelAt, turnXp, xpAt } from './levels.js'
 import { movesOf } from './moves.js'
@@ -12,8 +13,9 @@ import { zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 // hops when a turn ends, then wanders while idle (or stays at the right edge,
 // after /pokemon wander) and falls asleep after five quiet minutes.
 // /pokemon pet makes pixel hearts float up, and /pokemon feed drops a random pixel
-// berry for it to walk over and eat. Food and happiness drain over real time,
-// shown as pink ●●●○○ and ❤❤❤♡♡ at the right edge, so it needs both now and then.
+// berry for it to walk over and eat. Food and happiness drain over time, slower while Claude Code is closed,
+// shown as 🍓🍓🍓○ ○ and 💗💗💗♡ ♡ at the right edge, so it needs both now and then.
+// /pokemon sleep tucks it in, so both meters drain slower until Claude starts working.
 // /pokemon attack plays one of its moves, with the animations in attacks.js.
 // While a tool runs, the bubble shows it, and when Claude waits on you the mon stops
 // and shows a "!". Each running subagent is a Poké Ball along the left of the strip.
@@ -71,6 +73,9 @@ let mon = MONS.includes('abra') ? 'abra' : MONS[0]
 let variant = 'default'
 let wander = true
 let working = false
+// Whether a model turn of the main agent is running, from the turn events alone. The
+// band's isWorking can read true while no turn runs, as when a slash command runs.
+let turnRunning = false
 let thinking = false
 const runningTools = new Map()
 let toolCalls = 0
@@ -80,6 +85,13 @@ let idleAlertAt = null
 let party = []
 let bandId = null
 let columns = STRIP_COLUMNS
+// The columns behind the level and meters at the strip's right, 0 when they sit beside
+// a shrunk band instead. The scene runs on under them, so a bubble, hearts, and Zs
+// can float over the meters, but the mon stays in the strip.
+let panel = 0
+// Empty columns drawn left of the strip, so a bubble always fits on the left of the head.
+// They take only band width that's free, and none in a shrunk band.
+let margin = 0
 let tick = 0
 let x = STRIP_COLUMNS
 let facing = 'left'
@@ -90,6 +102,10 @@ let restUntil = 0
 let petUntil = 0
 let hearts = []
 let food = null
+// Meter gains a berry or a pet has earned, paid once its animation ends
+const owed = []
+// The pet whose hearts are still floating, while it has a gain to pay
+let pettingFills = null
 let yumUntil = 0
 let attack = null
 let nowMs = 0
@@ -98,9 +114,9 @@ let needsOn = true
 let evolving = null
 let evolveDue = null
 let joyHopAt = null
-let ink = INKS.dark
 let sentCells = null
 let maxRows = Infinity
+let ink = INKS.dark
 
 // Palette letter to 0xRRGGBB, per mon and variant
 const COLORS = Object.fromEntries(
@@ -118,31 +134,90 @@ const COLORS = Object.fromEntries(
 )
 
 const spriteRows = (name) => Math.ceil(SPRITES[name].height / 2)
+
+// The empty pixel rows under the feet in a frame, and the fewest across an animation's frames
+const gapOf = (rows) => rows.length - 1 - rows.findLastIndex((row) => /[^.]/.test(row))
+const gapUnder = (anim) => Math.min(...anim.map(({ rows }) => gapOf(rows)))
+// How far to lower the walk frames so the feet stand where the idle frames' do,
+// per mon and variant. Some sheets leave more empty rows under a walking mon.
+const WALK_DROP = Object.fromEntries(
+  MONS.map((name) => [
+    name,
+    Object.fromEntries(VARIANTS.map((v) => [v, gapUnder(SPRITES[name].variants[v].walk) - gapUnder(SPRITES[name].variants[v].idle)])),
+  ]),
+)
+// The empty columns right of an idle mon, the fewest across its idle frames, per variant.
+// Many sheets draw the idle mon right up to the frame's edge.
+const IDLE_RIGHT_GAP = Object.fromEntries(
+  MONS.map((name) => [
+    name,
+    Object.fromEntries(
+      VARIANTS.map((v) => {
+        const { width, variants } = SPRITES[name]
+        const rights = variants[v].idle.flatMap(({ rows }) => rows.map((row) => row.search(/[^.]\.*$/)))
+        return [v, width - 1 - Math.max(...rights)]
+      }),
+    ),
+  ]),
+)
+// The rightmost head column of a mon walking right, across its walk frames, per variant
+const WALK_HEAD_RIGHT = Object.fromEntries(
+  MONS.map((name) => [
+    name,
+    Object.fromEntries(
+      VARIANTS.map((v) => [
+        v,
+        Math.max(...SPRITES[name].variants[v].walk.flatMap(({ rows }) => rows.slice(0, HEAD_PIXELS).map((row) => row.search(/[^.]\.*$/)))),
+      ]),
+    ),
+  ]),
+)
 const rowsOf = (name) => HEAD_ROWS + spriteRows(name)
 // While a mon evolves, the band is tall enough for both shapes
 const bandRows = () => (evolving ? Math.max(rowsOf(evolving.from), rowsOf(evolving.into)) : rowsOf(mon))
 // The band's size on screen, shrunk to fit a short pane, or null when only the badge fits
-const bandZoom = () => zoomFor({ columns, rows: bandRows(), maxRows })
+const bandZoom = () => zoomFor({ columns: sceneColumns(), rows: bandRows(), maxRows })
+// The strip and the panel, in the strip's own columns, and the whole scene with the margin
+const stripColumns = () => columns + panel
+const sceneColumns = () => margin + columns + panel
+// The rows the level and meters take at the bottom of the panel
+const panelRows = () => (needsOn ? 3 : 1)
 
-// The right edge of the strip, where the sprite idles
-const homeX = () => columns - SPRITES[mon].width
+// The fewest empty columns between a mon at home and the level and meters beside it
+const HOME_GAP = 3
+// The right edge of the strip, where the sprite idles, kept HOME_GAP columns clear of the
+// meters whatever empty space the sprite's frame leaves on its right
+const homeXOf = (name) => Math.max(0, columns - SPRITES[name].width - Math.max(0, HOME_GAP - IDLE_RIGHT_GAP[name][variant]))
+const homeX = () => homeXOf(mon)
 const isHome = () => x >= homeX()
 
 const isHopping = () => tick - hopStart < HOP_TICKS
 const isPetted = () => tick < petUntil
-const isAsleep = () => !working && (tick - lastActive) * TICK_MS >= SLEEP_AFTER_MS
+// Put to bed with /pokemon sleep, saved with the mon's meters so it stays asleep across sessions.
+const isTuckedIn = () => stats[mon]?.asleep === true
+// Five quiet minutes make it drowsy, in this session only
+const isDrowsy = () => (tick - lastActive) * TICK_MS >= SLEEP_AFTER_MS
+// Tucked in or drowsy, it walks home first and falls asleep once it gets there
+const isAsleep = () => !working && (isTuckedIn() || isDrowsy()) && isHome()
 
-// Where the sprite stands to eat: right beside the berry
+// How far right of the sprite's left edge a berry lies when it sits under the middle of
+// the body, which can be off the middle of the frame. An eating mon stands unmirrored.
+function berryUnderBody() {
+  const box = boxOf(SPRITES[mon].variants[variant].idle[0].rows, COLORS[mon][variant])
+  return Math.round((box.left + box.right + 1 - BERRY_SIZE) / 2)
+}
+
+// Where the sprite stands to eat: with the berry in front of the middle of its body,
+// kept inside the strip
 function foodTarget() {
-  const width = SPRITES[mon].width
-  return food.x > x ? food.x - width : food.x + BERRY_SIZE
+  return Math.max(0, Math.min(homeX(), food.x - berryUnderBody()))
 }
 
 // Where the idle sprite is headed. Pacing while working is handled in step().
 function idleTarget() {
   if (food) return food.eatStart === null ? foodTarget() : x
   if (isAsleep() || isHopping() || isPetted()) return x
-  if (!wander) return homeX()
+  if (!wander || isTuckedIn() || isDrowsy()) return homeX()
   return wanderTarget ?? x
 }
 
@@ -167,16 +242,24 @@ function frameAt(anim, elapsed) {
 }
 
 // Pixel art stamps: rows of letters, each letter a color, '.' transparent
-const BUBBLE = ['.WWWWWWW.', 'W.......W', 'W.......W', 'W.......W', 'W.......W', 'W.......W', 'W.......W', '.WWWWWWW.']
+// The thought bubble is an outline with no fill, drawn in the theme's bubble ink
+const BUBBLE = ['.OOOOOOO.', 'O.......O', 'O.......O', 'O.......O', 'O.......O', 'O.......O', 'O.......O', '.OOOOOOO.']
 const BUBBLE_WIDTH = BUBBLE[0].length
+// The columns a bubble and its tail take beside the head
+const BUBBLE_SPAN = BUBBLE_WIDTH + 3
 const BUBBLE_TAIL_ROW = 2
 const BUBBLE_ICONS = {
-  food: { rows: ['.rgr.', 'rrrrr', '.rrr.', '..r..'], colors: { r: 0xd84040, g: 0x6ab04c } },
-  happiness: { rows: ['pp.pp', 'ppppp', '.ppp.', '..p..'], colors: { p: 0xff6fa8 } },
+  food: { rows: ['.rgr.', 'rrrrr', '.rrr.', '..r..'], colors: { r: 0xd84040, g: 0x58a040 } },
+  happiness: { rows: ['pp.pp', 'ppppp', '.ppp.', '..p..'], colors: { p: 0xf0609a } },
 }
 const STAR = ['..s..', 'sssss', '.sss.', '.s.s.']
 const SMALL_Z = ['zzz', '.z.', 'zzz']
 const BIG_Z = ['zzzz', '..z.', '.z..', 'zzzz']
+const ZZZ_EVERY_MS = 1100
+const ZZZ_LIFE_MS = 2200
+// The gap between a new Z and the side of the body, and how far out it drifts from there, in pixels
+const ZZZ_GAP = 0
+const ZZZ_DRIFT = 4
 // The "!" of a trainer who spots you, shown while Claude waits on you
 const ALERT_ICON = { rows: ['..a..', '..a..', '.....', '..a..'], colors: { a: 0xff3d3d } }
 // What the bubble shows while a tool runs: a pencil (p body, e eraser, t wood, g lead),
@@ -224,10 +307,10 @@ function toolIcon() {
   const name = [...runningTools.values()].pop()
   const kind = Object.keys(TOOL_KINDS).find((k) => TOOL_KINDS[k].includes(name)) ?? 'wrench'
   const colors = {
-    p: ink.pencil, e: 0xf27a98, t: 0xd09860, g: 0x767688,
+    p: ink.pencil, e: 0xe06888, t: 0xb88048, g: 0x767688,
     l: ink.lens, h: 0xb07040,
     s: ink.shell,
-    r: 0xee4444, k: 0x60606c, w: 0xfafafc, b: ink.ball,
+    r: 0xee4444, k: 0x60606c, w: 0xc0c0cc, b: ink.ball,
     m: ink.wrench,
   }
   return { rows: TOOL_ICONS[kind], colors }
@@ -271,27 +354,45 @@ function stepIdleAlert() {
   if (!working) raiseAlert({ ticks: IDLE_ALERT_MS / TICK_MS })
 }
 
-// A framed thought bubble beside the head, on the left when there's room,
-// with a single pixel of tail between it and the head
-function bubbleStamps(icon, head) {
-  const span = BUBBLE_WIDTH + 3
-  const onLeft = head[0] - span >= 0
+// A framed thought bubble beside the head, with a single pixel of tail between it and
+// the head. It leads on the side a walking mon heads for, and sits on the left of a
+// standing one, unless that side has no room for it.
+function bubbleStamps(icon, head, side) {
+  const span = BUBBLE_SPAN
+  const fitsLeft = head[0] - span >= -margin
+  const fitsRight = head[1] + span + 1 <= stripColumns()
+  const onLeft = side === 'left' ? fitsLeft : fitsLeft && !fitsRight
   const left = onLeft ? head[0] - span : head[1] + 4
   const tail = onLeft ? head[0] - 2 : head[1] + 2
+  // The first stamp with a pixel wins, so the icon goes before the bubble
   return [
-    stamp(left, 0, BUBBLE, { W: ink.bubble }),
-    stamp(tail, BUBBLE_TAIL_ROW, ['w'], { w: ink.bubble }),
     stamp(left + 2, 2, icon.rows, icon.colors),
+    stamp(left, 0, BUBBLE, { O: ink.bubble }),
+    stamp(tail, BUBBLE_TAIL_ROW, ['O'], { O: ink.bubble }),
   ]
 }
 
-// Two Zs drifting up beside a sleeping head: a small one, then a big one above it
-function sleepStamps(head) {
-  const phase = Math.floor((tick * TICK_MS) / 700) % 3
-  const onLeft = head[0] - 9 >= 0
-  const small = stamp(onLeft ? head[0] - 4 : head[1] + 2, 4, SMALL_Z, { z: ink.z })
-  const big = stamp(onLeft ? head[0] - 8 : head[1] + 5, 0, BIG_Z, { z: ink.z })
-  return phase === 0 ? [small] : [small, big]
+// Zs rising from just left of the middle of a sleeping body and drifting out and up until
+// they float off the top of the band, small and big in turn, a new one every ZZZ_EVERY_MS.
+// body is the sprite's drawn pixels in strip columns and pixel rows, so every mon's Zs
+// start at the same spot on it whatever its shape. With no room on the left, they start
+// from the right edge instead.
+function sleepStamps(body) {
+  const elapsed = tick * TICK_MS
+  const middleY = Math.floor((body.top + body.bottom) / 2)
+  const onLeft = body.left - ZZZ_GAP - BIG_Z[0].length - ZZZ_DRIFT >= 0
+  const newest = Math.floor(elapsed / ZZZ_EVERY_MS)
+  const zs = []
+  for (let i = Math.max(0, newest - 2); i <= newest; i++) {
+    const p = (elapsed - i * ZZZ_EVERY_MS) / ZZZ_LIFE_MS
+    if (p >= 1) continue
+    const glyph = i % 2 === 0 ? SMALL_Z : BIG_Z
+    const drift = Math.round(p * ZZZ_DRIFT)
+    const x = onLeft ? body.left - ZZZ_GAP - glyph[0].length - drift : body.right + 1 + ZZZ_GAP + drift
+    const startY = middleY - Math.floor(glyph.length / 2)
+    zs.push(stamp(x, startY - Math.round(p * (startY + glyph.length)), glyph, { z: ink.z }))
+  }
+  return zs
 }
 
 // Stop to enjoy it, hop, and send a stream of hearts up around the sprite
@@ -312,15 +413,20 @@ function pet() {
   }
 }
 
-// Drop a random berry a few columns away, on whichever side has room, for the sprite to walk to
+// Drop a random berry a few columns away, on whichever side has room, for the sprite to
+// walk to. It lands where the sprite can stand over it, not so near an edge that the
+// body would leave the strip.
 function feed() {
   markActive()
   const width = SPRITES[mon].width
   const gap = 3 + Math.floor(Math.random() * 6)
+  const under = berryUnderBody()
+  const lowest = Math.max(0, under)
+  const highest = Math.min(columns - BERRY_SIZE, homeX() + under)
   const right = x + width + gap
-  const fx = right + BERRY_SIZE <= columns ? right : Math.max(0, x - gap - BERRY_SIZE)
+  const fx = Math.max(lowest, Math.min(highest, right <= highest ? right : x - gap - BERRY_SIZE))
   const berry = BERRIES[Math.floor(Math.random() * BERRIES.length)]
-  food = { x: fx, born: tick, eatStart: null, berry }
+  food = { x: fx, born: tick, eatStart: null, berry, fills: null }
   wanderTarget = null
   return berry
 }
@@ -331,8 +437,8 @@ function foodTop() {
   return Math.min(ground, -BERRY_SIZE + Math.floor((tick - food.born) / FALL_TICKS))
 }
 
-// The berry's color at a strip column and pixel row, or null. Bites take
-// a column at a time from the side the sprite eats from.
+// The berry's color at a strip column and pixel row, or null. Bites take a column
+// at a time from either edge in turn, until the middle is gone too.
 function foodPixel(cx, py) {
   if (!food) return null
   const fx = cx - food.x
@@ -340,8 +446,7 @@ function foodPixel(cx, py) {
   if (fx < 0 || fx >= BERRY_SIZE || fy < 0 || fy >= BERRY_SIZE) return null
   if (food.eatStart !== null) {
     const bites = Math.floor(((tick - food.eatStart) / EAT_TICKS) * BERRY_SIZE)
-    const fromLeft = food.x > x
-    if (fromLeft ? fx < bites : fx >= BERRY_SIZE - bites) return null
+    if (fx < Math.ceil(bites / 2) || BERRY_SIZE - 1 - fx < Math.floor(bites / 2)) return null
   }
   return food.berry.colors[BERRY[fy][fx]] ?? null
 }
@@ -352,6 +457,7 @@ function stepFood() {
   const landed = foodTop() === bandRows() * 2 - BERRY_SIZE
   if (food.eatStart !== null) {
     if (tick - food.eatStart < EAT_TICKS) return
+    if (food.fills) owed.push({ name: food.fills, food: FEED_FOOD, happiness: FEED_HAPPINESS })
     food = null
     yumUntil = tick + YUM_TICKS
     hopStart = tick
@@ -431,7 +537,7 @@ function stepAttack() {
 const isFree = () => !working && !attack && !food && !isAsleep() && !isAlerted()
 
 // Petting, feeding, attacking, and switching mons wait while it evolves
-const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'attack']
+const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack']
 const waitsForEvolution = (asked) => evolving !== null && (MONS.includes(asked) || WAITS_FOR_EVOLUTION.includes(asked.split(' ')[0]))
 
 // Play the evolve effect with the evolved mon swapped in, in a band grown to fit both
@@ -450,6 +556,14 @@ function stepEvolution($) {
   else if (evolveDue && isFree()) startEvolution($, evolveDue)
 }
 
+// The evolved mon takes over the record as last saved, so XP earned elsewhere comes along
+async function moveRecord($, from, into) {
+  await freshen($, [from])
+  stats[into] = { ...stats[from], xp: xpOf(from) }
+  delete stats[from]
+  await saveStats($, [from, into])
+}
+
 // The mon becomes the evolved one. Its record moves along, so level, XP, and meters carry over.
 function finishEvolution($) {
   const { from, into } = evolving
@@ -458,10 +572,8 @@ function finishEvolution($) {
   mon = into
   if (wasHome) x = homeX()
   clampX()
-  stats[into] = { ...stats[from], xp: xpOf(from) }
-  delete stats[from]
-  $.store.set('mon', mon).catch((err) => logOnce($, err))
-  $.store.set('stats', stats).catch((err) => logOnce($, err))
+  saveMon($).catch((err) => logOnce($, err))
+  moveRecord($, from, into).catch((err) => logOnce($, err))
   $.ui.toast('Congratulations! Your ' + displayName(from) + ' evolved into ' + displayName(into) + '!')
   $.ui.invalidate('ui.render')
 }
@@ -552,6 +664,13 @@ function needNow() {
   return needs[Math.floor((tick * TICK_MS) / 3000) % needs.length]
 }
 
+// A sleeping mon's frame with its eyes shut, cached per frame
+const sleepingFrames = new Map()
+function sleepingFrame(rows, palette) {
+  if (!sleepingFrames.has(rows)) sleepingFrames.set(rows, closedEyes(rows, palette))
+  return sleepingFrames.get(rows)
+}
+
 const NO_POSE = { view: 'front', stride: false, swap: false, asleep: false }
 // Backing up for a move: side on and striding, facing the target
 const BACKING_POSE = { ...NO_POSE, view: 'side', stride: true }
@@ -601,11 +720,12 @@ function attackGeometry(sprite, frame, colors, flip, at, top, rows, pixel) {
 function overlayOf(dots, rows) {
   if (dots.length === 0) return null
   const pixels = rows * 2
-  const overlay = new Int32Array(columns * pixels).fill(-1)
+  const width = stripColumns()
+  const overlay = new Int32Array(width * pixels).fill(-1)
   for (let k = 0; k < dots.length; k += 3) {
     const cx = dots[k]
     const py = dots[k + 1]
-    if (cx >= 0 && cx < columns && py >= 0 && py < pixels) overlay[py * columns + cx] = dots[k + 2]
+    if (cx >= 0 && cx < width && py >= 0 && py < pixels) overlay[py * width + cx] = dots[k + 2]
   }
   return overlay
 }
@@ -661,7 +781,7 @@ function cellsNow() {
   const anim = sideOn ? sheet.walk : sheet.idle
   const asleep = isAsleep() || pose.asleep
   let frame = frameAt(anim, tick * TICK_MS)
-  if (asleep) frame = anim[0].rows
+  if (asleep) frame = sleepingFrame(anim[0].rows, sheet.palette)
   else if (attack && sideOn) frame = anim[pose.stride ? Math.floor(age / STRIDE_TICKS) % anim.length : 0].rows
   const colors = COLORS[shown][variant]
   // Facing out, the sprite stays unmirrored like the idle mon, so it doesn't jump when the move ends
@@ -669,8 +789,10 @@ function cellsNow() {
   const rows = bandRows()
   // A swapped-in mon stands on the same ground and stays inside the strip. An evolving
   // mon at home keeps to the right edge in either shape.
-  const baseTop = (rows - spriteRows(shown)) * 2
-  const baseX = Math.max(0, Math.min(evolving && isHome() ? columns : x, columns - sprite.width))
+  // A sleeping mon holds one frame, lowered so its feet rest where the idle ones do
+  const drop = asleep ? gapOf(frame) - gapUnder(sheet.idle) : sideOn ? WALK_DROP[shown][variant] : 0
+  const baseTop = rows * 2 - SPRITES[shown].height + drop
+  const baseX = Math.max(0, Math.min(evolving && isHome() ? homeXOf(shown) : x, columns - sprite.width))
   const pixelOf = (mirror) => (px, py) => {
     if (px < 0 || px >= sprite.width || py < 0) return null
     const row = frame[py]
@@ -690,27 +812,32 @@ function cellsNow() {
   const ghost = ghostPixel(effect.ghosts, pixel, box, sprite.width, flip, baseX, baseTop)
   const head = headColumns(pixel, sprite.width, left)
   const icon = bubbleIcon()
-  const over = heartStamps()
+  // The frame's box as drawn, mirrored along with the sprite
+  const [boxLeft, boxRight] = flip ? [sprite.width - 1 - box.right, sprite.width - 1 - box.left] : [box.left, box.right]
+  const sleeper = { left: left + boxLeft, right: left + boxRight, top: top + box.top, bottom: top + box.bottom }
+  const over = [...heartStamps(), ...(asleep ? sleepStamps(sleeper) : [])]
   const balls = partyStamps(party, tick, { columns, ground: rows * 2 - 1, label: ink.party })
-  const under = [...(icon ? bubbleStamps(icon, head) : []), ...(asleep ? sleepStamps(head) : []), ...balls]
+  const under = [...(icon ? bubbleStamps(icon, head, walking ? facing : 'left') : []), ...balls]
   const pixels = rows * 2
+  const width = stripColumns()
   const colorAt = (cx, py) => {
     if (py < 0 || py >= pixels) return null
-    const i = py * columns + cx
-    if (overlay && overlay[i] >= 0) return overlay[i]
+    const i = cx >= 0 && cx < width ? py * width + cx : -1
+    if (overlay && i >= 0 && overlay[i] >= 0) return overlay[i]
     for (const s of over) {
       const h = stampPixel(s, cx, py)
       if (h !== null) return h
     }
+    // The berry sits in front of the mon, so it stays in sight while it's eaten
+    const f = foodPixel(cx, py)
+    if (f !== null) return f
     const c = effect.hidden ? null : body(cx, py)
     if (c !== null) return c
     if (effect.ghosts.length > 0) {
       const g = ghost(cx, py)
       if (g !== null) return g
     }
-    if (underlay && underlay[i] >= 0) return underlay[i]
-    const f = foodPixel(cx, py)
-    if (f !== null) return f
+    if (underlay && i >= 0 && underlay[i] >= 0) return underlay[i]
     for (const s of under) {
       const u = stampPixel(s, cx, py)
       if (u !== null) return u
@@ -718,14 +845,16 @@ function cellsNow() {
     return null
   }
 
-  // Shake the full-size scene, then shrink it to the band's size on screen
+  // Shake the full-size scene, then shrink it to the band's size on screen. The scene's
+  // columns start at the margin's left edge, the strip's at the margin's right.
   const [shakeX, shakeY] = effect.shake
-  const zoom = bandZoom() ?? { scale: 1, columns, rows }
-  const shaken = (cx, py) => (cx - shakeX < 0 || cx - shakeX >= columns ? null : colorAt(cx - shakeX, py - shakeY))
-  const at = zoomedPixel(shaken, { columns, pixels, scale: zoom.scale })
+  const scene = sceneColumns()
+  const zoom = bandZoom() ?? { scale: 1, columns: scene, rows }
+  const shaken = (cx, py) => (cx - shakeX < 0 || cx - shakeX >= scene ? null : colorAt(cx - shakeX - margin, py - shakeY))
+  const at = zoomedPixel(shaken, { columns: scene, pixels, scale: zoom.scale })
   const glyphs = new Map()
   for (let k = 0; k < effect.chars.length; k += 4) {
-    const gx = zoomedAt(effect.chars[k] + shakeX, zoom.scale)
+    const gx = zoomedAt(effect.chars[k] + shakeX + margin, zoom.scale)
     glyphs.set(gx + ',' + zoomedAt(effect.chars[k + 1], zoom.scale), [effect.chars[k + 2], effect.chars[k + 3]])
   }
   const words = new Uint32Array(zoom.columns * zoom.rows * 3)
@@ -735,7 +864,13 @@ function cellsNow() {
       const upper = at(cx, cy * 2)
       const lower = at(cx, cy * 2 + 1)
       const glyph = glyphs.get(cx + ',' + cy)
-      if (glyph) words.set([glyph[0], glyph[1], upper ?? lower ?? DEFAULT_COLOR], i)
+      // Left blank under the level and meters, which are drawn over it
+      if (cx >= margin + columns && cy >= zoom.rows - panelRows()) words.set([SPACE, DEFAULT_COLOR, DEFAULT_COLOR], i)
+      else if (glyph) words.set([glyph[0], glyph[1], upper ?? lower ?? DEFAULT_COLOR], i)
+      // A cell one color top and bottom is a space on that background, which every
+      // terminal fills edge to edge. Only a cell split in two needs a half block, whose
+      // shape depends on the font and can leave thin seams between rows.
+      else if (upper !== null && upper === lower) words.set([SPACE, DEFAULT_COLOR, upper], i)
       else if (upper !== null) words.set([UPPER_HALF, upper, lower ?? DEFAULT_COLOR], i)
       else if (lower !== null) words.set([LOWER_HALF, lower, DEFAULT_COLOR], i)
       else words.set([SPACE, DEFAULT_COLOR, DEFAULT_COLOR], i)
@@ -743,6 +878,10 @@ function cellsNow() {
   }
   return new Uint8Array(words.buffer).toBase64()
 }
+
+// Where a mon pacing right while Claude works turns back: before its bubble, which leads
+// on the right, would run past the panel, or at home if it never would
+const workTurnX = () => Math.max(0, Math.min(homeX(), stripColumns() - BUBBLE_SPAN - 1 - WALK_HEAD_RIGHT[mon][variant]))
 
 // Keep the sprite inside the strip
 function clampX() {
@@ -774,7 +913,7 @@ function step() {
 
   if (working) {
     if (facing === 'left' && x <= 0) facing = 'right'
-    else if (facing === 'right' && isHome()) facing = 'left'
+    else if (facing === 'right' && x >= workTurnX()) facing = 'left'
   } else {
     const target = idleTarget()
     if (target === x) {
@@ -790,21 +929,29 @@ function step() {
   clampX()
 }
 
-// Each stat drains from full to empty over its hours, per mon, and keeps
-// draining while Claude Code is closed because it's stored with a timestamp
+// Each stat drains from full to empty over its hours, per mon. It's stored with a
+// timestamp, which slowMeters moves on past most of the time when no session ran
 const STATS = {
-  food: { hoursToEmpty: 8, icon: '●', emptyIcon: '○', color: '#ea697d' },
-  happiness: { hoursToEmpty: 12, icon: '❤', emptyIcon: '♡', color: '#ff5f9e' },
+  // The empty icons take the color of the emoji they stand in for
+  food: { hoursToEmpty: 8, icon: '🍓', emptyIcon: '○', color: '#e0303e' },
+  happiness: { hoursToEmpty: 12, icon: '💗', emptyIcon: '♡', color: '#ff7aa8' },
 }
 const START_STAT = 80
-const FEED_FOOD = 35
+// One icon's worth, so each berry adds exactly one strawberry
+const FEED_FOOD = 20
 const FEED_HAPPINESS = 5
 const PET_HAPPINESS = 25
 const NEEDY_BELOW = 30
 const STAT_ICONS = 5
+// Each icon takes two columns: a filled one is an emoji, drawn two wide from the emoji font
+// whatever the terminal's font, and an empty one is followed by a space. Some fonts
+// lack ○ or ♡ and borrow a wider glyph, which then spills into the space, not the next icon.
+const METER_COLUMNS = STAT_ICONS * 2
 const STAT_REDRAW_TICKS = 1200
 const HUNGRY_MOVE_TICKS = 5
 const HAPPY_FROM = 80
+// How fast each meter drains while tucked in, as a share of its awake rate
+const SLEEP_DRAIN = { food: 0.5, happiness: 0.25 }
 const JOY_HOP_TICKS = [400, 800]
 
 const clampStat = (v) => Math.max(0, Math.min(100, v))
@@ -812,35 +959,209 @@ const clampStat = (v) => Math.max(0, Math.min(100, v))
 function statNow(name, key) {
   const saved = stats[name]?.[key]
   if (!saved) return START_STAT
-  const perMs = 100 / (STATS[key].hoursToEmpty * 3600 * 1000)
-  return clampStat(saved.value - perMs * (nowMs - saved.at))
+  if (stats[name].parked) return clampStat(saved.value)
+  const perMs = (100 / (STATS[key].hoursToEmpty * 3600 * 1000)) * (stats[name]?.asleep ? SLEEP_DRAIN[key] : 1)
+  return clampStat(saved.value - perMs * Math.max(0, nowMs - saved.at))
 }
 
-function bumpStat(key, amount) {
-  stats[mon] = { ...stats[mon], [key]: { value: clampStat(statNow(mon, key) + amount), at: nowMs } }
+function bumpStat(key, amount, name = mon) {
+  stats[name] = { ...stats[name], [key]: { value: clampStat(statNow(name, key) + amount), at: nowMs } }
+}
+
+// Fill the meters once the berry is eaten or the hearts have floated away, not when
+// asked, for the mon that was fed or petted
+function stepOwed($) {
+  if (pettingFills && !isPetted()) {
+    owed.push({ name: pettingFills, happiness: PET_HAPPINESS })
+    pettingFills = null
+  }
+  if (owed.length > 0) payOwed($, owed.splice(0)).catch((err) => logOnce($, err))
+}
+
+async function payOwed($, gains) {
+  nowMs = await $.clock.now()
+  const names = [...new Set(gains.map((g) => g.name))]
+  await freshen($, names)
+  for (const { name, ...meters } of gains) {
+    for (const [key, amount] of Object.entries(meters)) bumpStat(key, amount, name)
+  }
+  await saveRecords($, names)
+  $.ui.invalidate('ui.render')
+}
+
+// Only the mons on show drain. Switching away parks a mon's meters where they are, and
+// they pick up from there when it's shown again, so a mon left alone for weeks isn't
+// starving when it comes back. XP is the shown mon's alone already.
+function park(name) {
+  if (!stats[name] || stats[name].parked) return
+  const record = { ...stats[name], parked: true }
+  for (const key of Object.keys(STATS)) if (record[key]) record[key] = { value: statNow(name, key), at: nowMs }
+  stats[name] = record
+}
+
+function unpark(name) {
+  if (!stats[name]?.parked) return
+  const { parked, ...record } = stats[name]
+  for (const key of Object.keys(STATS)) if (record[key]) record[key] = { ...record[key], at: nowMs }
+  stats[name] = record
+}
+
+// Saves both meters as they are now before the drain rate changes, so the slower
+// rate only covers the time asleep
+async function setAsleep($, asleep) {
+  await freshen($, [mon])
+  for (const key of Object.keys(STATS)) bumpStat(key, 0)
+  stats[mon] = { ...stats[mon], asleep }
+  await saveStats($, [mon])
+  $.ui.invalidate('ui.render')
+}
+
+// Every open session shares the store, so a session saves only the records it changed
+// over the stored ones and picks up the others' as it goes. It counts its saves, and the
+// ones still being written, so a sync that read the store before one landed doesn't undo it.
+let statWrites = 0
+let statSaving = 0
+
+async function saveStats($, names) {
+  await saveRecords($, names)
+}
+
+// Take these mons' records as last saved by any session, right before changing them, so
+// a change lands on another session's newest XP and meters rather than on this one's
+// copy from the last sync. The shown mon is never parked here.
+async function freshen($, names) {
+  const saved = await $.store.get('stats')
+  for (const name of names) {
+    if (!saved?.[name]) continue
+    const { parked, ...shown } = saved[name]
+    stats[name] = name === mon ? shown : saved[name]
+  }
+}
+
+async function saveRecords($, names) {
+  statWrites += 1
+  statSaving += 1
+  try {
+    const saved = await $.store.get('stats')
+    const merged = saved && typeof saved === 'object' ? { ...saved } : {}
+    for (const name of names) {
+      if (stats[name]) merged[name] = stats[name]
+      else delete merged[name]
+    }
+    stats = merged
+    await $.store.set('stats', merged)
+  } finally {
+    statSaving -= 1
+  }
+}
+
+// One mon is shown in every open session: 'mon', the last one picked anywhere. A pick
+// in one session reaches the others at their next sync.
+async function saveMon($) {
+  await $.store.set('mon', mon)
+}
+
+// Earlier versions kept a mon per session under these keys
+async function forgetSessionMons($) {
+  for (const key of await $.store.keys()) if (key.startsWith('mon:')) await $.store.delete(key)
+}
+
+// Every open session shares the store, so each one keeps a busy mark there while a turn
+// runs, refreshed every couple of seconds. A mark not refreshed for a while is from a
+// session that closed mid-turn. Each session also follows the saved sleep state, so
+// putting the mon to bed or waking it in one session does it in all of them.
+const SESSION_ID = Math.random().toString(36).slice(2, 10)
+const BUSY_PREFIX = 'busy:'
+const BUSY_KEY = BUSY_PREFIX + SESSION_ID
+const BUSY_STALE_MS = 15000
+const SYNC_TICKS = 20
+
+async function setBusy($, busy) {
+  if (busy) await $.store.set(BUSY_KEY, await $.clock.now())
+  else await $.store.delete(BUSY_KEY)
+}
+
+// Whether Claude is working in another open session. Clears the marks of sessions that
+// closed mid-turn, so they don't pile up in the store.
+async function othersBusy($) {
+  const now = await $.clock.now()
+  let busy = false
+  for (const key of await $.store.keys()) {
+    if (!key.startsWith(BUSY_PREFIX) || key === BUSY_KEY) continue
+    if (now - Number(await $.store.get(key)) < BUSY_STALE_MS) busy = true
+    else await $.store.delete(key)
+  }
+  return busy
+}
+
+// Show the mon another session switched to, once nothing here is mid-move or evolving.
+// The switching session parked the old one and saved both records.
+function adoptMon(into, saved) {
+  if (into === mon || !MONS.includes(into) || evolving || attack) return
+  const wasHome = isHome()
+  for (const name of [mon, into]) {
+    if (saved?.[name]) stats[name] = saved[name]
+  }
+  evolveDue = null
+  mon = into
+  if (wasHome) x = homeX()
+  clampX()
+  sentCells = null
+}
+
+async function syncSessions($) {
+  if (turnRunning) await setBusy($, true)
+  const shared = await $.store.get('mon')
+  if (MONS.includes(shared) && shared !== mon) {
+    adoptMon(shared, await $.store.get('stats'))
+    $.ui.invalidate('ui.render')
+  }
+  // Take the shown mon's record as another session saved it: fed, petted, earned XP, or
+  // put to bed. Put to bed elsewhere while Claude works here, it wakes right back up in
+  // stepWake. The shown mon is never parked here, whatever another session saved.
+  const writes = statWrites
+  const saved = await $.store.get('stats')
+  if (statSaving > 0 || writes !== statWrites || !saved?.[mon]) return
+  const { parked, ...theirs } = saved[mon]
+  if (JSON.stringify(theirs) === JSON.stringify(stats[mon])) return
+  stats[mon] = theirs
+  $.ui.invalidate('ui.render')
+}
+
+// A tucked-in mon wakes when Claude starts working, or when it has a berry to eat,
+// a move to play, or an evolution to go through
+function stepWake($) {
+  if (isTuckedIn() && (turnRunning || food || attack || evolving || evolveDue)) setAsleep($, false).catch((err) => logOnce($, err))
 }
 
 // Five icons, each worth 20%, rounding up so any food or love left shows at least one.
+const filledIcons = (key) => Math.ceil(statNow(mon, key) / (100 / STAT_ICONS))
+// Full when every food icon is filled
+const isFull = () => filledIcons('food') === STAT_ICONS
+// As happy as can be when every heart is filled
+const isHappiest = () => filledIcons('happiness') === STAT_ICONS
+
 function iconsFor(key) {
-  const filled = Math.ceil(statNow(mon, key) / (100 / STAT_ICONS))
-  return STATS[key].icon.repeat(filled) + STATS[key].emptyIcon.repeat(STAT_ICONS - filled)
+  const filled = filledIcons(key)
+  return STATS[key].icon.repeat(filled) + (STATS[key].emptyIcon + ' ').repeat(STAT_ICONS - filled)
 }
 
 // XP lives in each mon's record. A mon that hasn't earned any starts at its first level.
 const xpOf = (name) => stats[name]?.xp ?? xpAt(startLevel(name))
 const levelOf = (name) => levelAt(xpOf(name))
 
-// The level line above the meters, five columns wide like them
+// The level line above the meters, at most five columns wide
 const levelLine = () => (levelOf(mon) < MAX_LEVEL ? 'Lv ' : 'Lv') + levelOf(mon)
 
 // An answered turn earns XP, scaled by care. A level-up toasts the new level once, and
 // an evolution it reaches is due.
 async function gainXp($, durationMs) {
   nowMs = await $.clock.now()
+  await freshen($, [mon])
   const was = levelOf(mon)
   const care = needsOn ? careOf(statNow(mon, 'food'), statNow(mon, 'happiness')) : 1
   stats[mon] = { ...stats[mon], xp: xpOf(mon) + turnXp({ level: was, durationMs, care }) }
-  await $.store.set('stats', stats)
+  await saveStats($, [mon])
   const level = levelOf(mon)
   if (level === was) return
   $.ui.toast(displayName(mon) + ' grew to Lv. ' + level + '!')
@@ -879,7 +1200,7 @@ function hopForJoy() {
   }
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'pet', 'feed', 'attack', 'moves', 'evolve', 'stop', 'stats', 'list']
+const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'pet', 'feed', 'sleep', 'attack', 'moves', 'evolve', 'stop', 'stats', 'list']
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
@@ -931,6 +1252,41 @@ function blitFrame($) {
 }
 
 // Ticks stop while the machine sleeps, so the meters resync with the real clock
+// The meters drain at OFF_DRAIN of their speed while no session runs: Claude Code closed,
+// or the laptop off or asleep. Every open session marks the store as seen every BEAT_MS.
+// A session that starts long after the last mark, or a running one whose own beat comes
+// late because the laptop slept, moves every meter's timestamp on by the rest of that
+// time, so only OFF_DRAIN of it counts. This stacks with /pokemon sleep's slower drain.
+const OFF_DRAIN = 0.25
+const BEAT_MS = 10 * 1000
+const BEAT_TICKS = BEAT_MS / TICK_MS
+const OFF_AFTER_MS = 60 * 1000
+let lastBeat = null
+
+async function slowMeters($, offMs) {
+  const skipped = offMs * (1 - OFF_DRAIN)
+  await freshen($, Object.keys(stats))
+  const draining = Object.keys(stats).filter((name) => !stats[name].parked)
+  for (const name of draining) {
+    const record = { ...stats[name] }
+    for (const key of Object.keys(STATS)) {
+      if (record[key]?.at !== undefined) record[key] = { ...record[key], at: record[key].at + skipped }
+    }
+    stats[name] = record
+  }
+  await saveRecords($, draining)
+}
+
+// At session start, since is the last mark any session left. While running, it's this
+// session's own last beat.
+async function beat($, since) {
+  const now = await $.clock.now()
+  nowMs = now
+  if (typeof since === 'number' && now - since > OFF_AFTER_MS) await slowMeters($, now - since - BEAT_MS)
+  lastBeat = now
+  await $.store.set('seenAt', now)
+}
+
 async function resyncMeters($) {
   nowMs = await $.clock.now()
   $.ui.invalidate('ui.render')
@@ -942,7 +1298,10 @@ function logOnce($, err) {
   const message = String(err?.message ?? err)
   if (logged.has(message)) return
   logged.add(message)
-  $.ui.log('pokemon: ' + message, { to: 'debug' })
+  // Logging is best effort: a log that fails must not break the hook that hit the error
+  try {
+    Promise.resolve($.ui.log('pokemon: ' + message, { to: 'debug' })).catch(() => {})
+  } catch {}
 }
 
 // Any light theme takes the light ink. Every other theme, or none, takes the dark.
@@ -957,16 +1316,18 @@ async function themeInk($) {
   }
 }
 
+
 export function register(on) {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'pokemon',
-      description: 'Pick the Pokémon above the prompt, pet it, feed it, make it attack, list its moves, or evolve it',
+      description: 'Pick the Pokémon above the prompt, pet it, feed it, put it to sleep, make it attack, list its moves, or evolve it',
       argumentHint: '[' + OPTIONS.join('|') + ']',
       immediate: true,
     })
     const savedMon = await $.store.get('mon')
     if (MONS.includes(savedMon)) mon = savedMon
+    forgetSessionMons($).catch((err) => logOnce($, err))
     const savedVariant = await $.store.get('variant')
     if (VARIANTS.includes(savedVariant)) variant = savedVariant
     wander = (await $.store.get('wander')) !== false
@@ -975,11 +1336,21 @@ export function register(on) {
     if (savedStats && typeof savedStats === 'object') stats = savedStats
     nowMs = await $.clock.now()
     ink = await themeInk($)
+    await beat($, await $.store.get('seenAt')).catch((err) => logOnce($, err))
+    // Shown again, a parked mon's meters pick up where they stopped
+    if (stats[mon]?.parked) {
+      unpark(mon)
+      await saveStats($, [mon]).catch((err) => logOnce($, err))
+    }
     $.clock.every(TICK_MS, () => {
       try {
         step()
         stepEvolution($)
+        stepWake($)
+        stepOwed($)
         if (tick % STAT_REDRAW_TICKS === 0) resyncMeters($).catch((err) => logOnce($, err))
+        if (tick % SYNC_TICKS === 0) syncSessions($).catch((err) => logOnce($, err))
+        if (tick % BEAT_TICKS === 0) beat($, lastBeat).catch((err) => logOnce($, err))
         if (bandId !== null) blitFrame($)
       } catch (err) {
         logOnce($, err)
@@ -1007,10 +1378,18 @@ export function register(on) {
     if (MONS.includes(asked)) {
       const wasHome = isHome()
       evolveDue = null
+      const left = mon
+      nowMs = await $.clock.now()
+      await freshen($, [left, asked])
+      if (asked !== left && (stats[left] || stats[asked])) {
+        park(left)
+        unpark(asked)
+        await saveRecords($, [left, asked])
+      }
       mon = asked
       if (wasHome) x = homeX()
       clampX()
-      await $.store.set('mon', mon)
+      await saveMon($)
     } else if (VARIANTS.includes(asked)) {
       variant = asked
       await $.store.set('variant', variant)
@@ -1020,25 +1399,41 @@ export function register(on) {
       await $.store.set('wander', wander)
       return { text: displayName(mon) + (wander ? ' is free to wander.' : ' is heading home.') }
     } else if (asked === 'pet') {
+      // A mon as happy as can be, every heart filled, still enjoys it, but it fills no
+      // meter and doesn't count as a pet
+      const happiest = isHappiest()
       pet()
-      bumpStat('happiness', PET_HAPPINESS)
-      await $.store.set('stats', stats)
-      $.ui.invalidate('ui.render')
+      const line = displayName(mon) + ' ' + PET_LINES[Math.floor(Math.random() * PET_LINES.length)] + ' ♥'
+      if (happiest) return { text: line + ' ' + displayName(mon) + ' is already as happy as can be.' }
+      // Petting again before the last pet's hearts are gone pays that one now
+      if (pettingFills) owed.push({ name: pettingFills, happiness: PET_HAPPINESS })
+      pettingFills = mon
       const pets = Number((await $.store.get('pets')) ?? 0) + 1
       await $.store.set('pets', pets)
-      const line = PET_LINES[Math.floor(Math.random() * PET_LINES.length)]
-      return { text: displayName(mon) + ' ' + line + ' ❤ (pets: ' + pets + ')' }
+      return { text: line + ' (pets: ' + pets + ')' }
     } else if (asked === 'feed') {
       if (food) return { text: displayName(mon) + ' is still busy with the last one.' }
+      // A full mon, every food icon filled, still eats the berry, but it fills no meter
+      // and doesn't count as a feed
+      const full = isFull()
       const berry = feed()
-      bumpStat('food', FEED_FOOD)
-      bumpStat('happiness', FEED_HAPPINESS)
-      await $.store.set('stats', stats)
-      $.ui.invalidate('ui.render')
+      const article = /^[aeiou]/.test(berry.name) ? 'an ' : 'a '
+      const tossed = 'You toss ' + displayName(mon) + ' ' + article + berry.name + ' ' + berry.emoji
+      if (full) return { text: tossed + '. ' + displayName(mon) + ' is already full, so it just nibbles it.' }
+      // The meters fill once it has eaten the berry
+      food.fills = mon
       const feeds = Number((await $.store.get('feeds')) ?? 0) + 1
       await $.store.set('feeds', feeds)
-      const article = /^[aeiou]/.test(berry.name) ? 'an ' : 'a '
-      return { text: 'You toss ' + displayName(mon) + ' ' + article + berry.name + ' ' + berry.emoji + ' (feeds: ' + feeds + ')' }
+      return { text: tossed + ' (feeds: ' + feeds + ')' }
+    } else if (asked === 'sleep') {
+      const name = displayName(mon)
+      if (isTuckedIn()) {
+        await setAsleep($, false)
+        return { text: name + ' wakes up.' }
+      }
+      if (turnRunning || (await othersBusy($))) return { text: name + " can't sleep while Claude is working." }
+      await setAsleep($, true)
+      return { text: name + ' curls up and falls asleep. Its meters drain slower until Claude starts working.' }
     } else if (asked === 'attack' || asked.startsWith('attack ')) {
       return attackCommand(asked.slice('attack'.length).trim())
     } else if (asked === 'moves' || asked.startsWith('moves ')) {
@@ -1062,7 +1457,7 @@ export function register(on) {
     } else if (asked) {
       return { text: 'Unknown option "' + asked + '". Try one of: ' + OPTIONS.join(', ') + '. See /pokemon list for every mon.' }
     } else {
-      const mode = wander ? ', wandering' : ''
+      const mode = (isTuckedIn() ? ', asleep' : '') + (wander ? ', wandering' : '')
       const levels = 'food ' + Math.round(statNow(mon, 'food')) + '%, happiness ' + Math.round(statNow(mon, 'happiness')) + '%'
       const shown = displayName(mon) + ' Lv. ' + levelOf(mon)
       return { text: 'Showing ' + variant + ' ' + shown + mode + ' (' + (needsOn ? levels : 'needs off') + '). Options: ' + OPTIONS.join(', ') + '.' }
@@ -1090,6 +1485,12 @@ export function register(on) {
     return next(e)
   })
 
+  on('turn.start', async ($, e, next) => {
+    turnRunning = true
+    if (!e.agentId) await setBusy($, true).catch((err) => logOnce($, err))
+    return next(e)
+  })
+
   // The main agent's turn ending answers any "!" and starts the idle minute. The mon
   // hops unless the turn was interrupted, and earns XP when it answered. A subagent's
   // turn ending pops its Poké Ball.
@@ -1097,7 +1498,11 @@ export function register(on) {
     thinking = false
     markActive()
     if (e.agentId) party = leaveParty(party, e.agentId, tick)
-    if (!e.agentId) clearAlert()
+    if (!e.agentId) {
+      turnRunning = false
+      clearAlert()
+      await setBusy($, false).catch((err) => logOnce($, err))
+    }
     if (!e.agentId && !e.isAborted) {
       hopStart = tick
       idleAlertAt = tick + IDLE_WAIT_MS / TICK_MS
@@ -1117,7 +1522,13 @@ export function register(on) {
     if (!working) thinking = false
     bandId = e.requestId
     maxRows = e.props.maxRows
-    columns = Math.max(SPRITES[mon].width, Math.min(STRIP_COLUMNS, e.props.bodyColumns))
+    // The panel goes over the scene's right end when the band shows at full size and
+    // has room for it, and beside a shrunk band otherwise
+    const meterColumns = METER_COLUMNS + 1
+    const fullSize = bandRows() <= maxRows
+    panel = fullSize && e.props.bodyColumns >= SPRITES[mon].width + meterColumns ? meterColumns : 0
+    columns = Math.max(SPRITES[mon].width, Math.min(STRIP_COLUMNS, e.props.bodyColumns - panel))
+    margin = fullSize ? Math.max(0, Math.min(BUBBLE_SPAN, e.props.bodyColumns - panel - columns)) : 0
     if (wasHome) x = homeX()
     clampX()
 
@@ -1128,13 +1539,14 @@ export function register(on) {
     if (zoom) {
       sentCells = cellsNow()
       const sprite = Raster({ key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells: sentCells })
-      const meters = Box({
-        flexDirection: 'column',
-        justifyContent: 'flex-end',
-        paddingLeft: 1,
-        children: needsOn ? [level, meter('food'), meter('happiness')] : [level],
-      })
-      corner = e.props.bodyColumns >= zoom.columns + STAT_ICONS + 1 ? [sprite, meters] : [sprite]
+      const meterLines = needsOn ? [level, meter('food'), meter('happiness')] : [level]
+      if (panel > 0) {
+        const meters = Box({ position: 'absolute', right: 0, bottom: 0, width: panel, paddingLeft: 1, flexDirection: 'column', children: meterLines })
+        corner = [Box({ position: 'relative', children: [sprite, meters] })]
+      } else {
+        const meters = Box({ flexDirection: 'column', justifyContent: 'flex-end', paddingLeft: 1, children: meterLines })
+        corner = e.props.bodyColumns >= zoom.columns + METER_COLUMNS + 1 ? [sprite, meters] : [sprite]
+      }
     } else {
       // Too short even for a shrunk mon: its name, level, and meters on one line, and no blits
       bandId = null
