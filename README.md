@@ -256,12 +256,14 @@ Each terminal cell holds two vertical pixels with `▀`/`▄` half blocks. The
 sprite paces inside a 40 column strip.
 
 CI runs the lint, the table check, and `claude plugin test` on every pull request and
-push to `main`. Commits follow [Conventional Commits](https://www.conventionalcommits.org),
-and a push to `main` that passes releases on its own when it brings a `feat`, `fix`, or
-`perf` commit since the last release. git-cliff works out the version (a feature bumps
-the minor version, a fix the patch), and the release job bumps `plugin.json`, updates
-`CHANGELOG.md`, tags the commit, and publishes the GitHub release. Docs, tests, and
-chores don't release on their own.
+push to `main`. Commits follow [Conventional Commits](https://www.conventionalcommits.org).
+When a push to `main` passes and brings a `feat`, `fix`, or `perf` commit since the last
+release, CI opens a `chore(release)` pull request, or updates the one that's open.
+git-cliff picks the version (a feature bumps the minor version, a fix the patch), and the
+PR bumps `plugin.json` and `CHANGELOG.md`. Merging it tags the merge commit and publishes
+the GitHub release with git-cliff's notes. Docs, tests, and chores don't release on their
+own. Opening that PR needs "Allow GitHub Actions to create and approve pull requests" on,
+in the repository's Actions settings.
 
 ## Credits
 
