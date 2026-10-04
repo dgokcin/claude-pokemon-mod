@@ -80,7 +80,6 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon evolve` | Evolve with a stone or a trade. Also restarts an evolution you cancelled |
 | `/pokemon evolve <mon>` | Pick what Eevee becomes, like `/pokemon evolve jolteon` |
 | `/pokemon stop` | Cancel an evolution |
-| `/pokemon sleep` | Tuck the mon in, so its meters drain slower until Claude starts working. Run it again to wake it |
 | `/pokemon needs` | Toggle food and happiness (on by default) |
 | `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
 | `/pokemon box` | List every mon you've raised, highest level first |
@@ -128,13 +127,11 @@ Two meters sit at the bottom right of the band. Each icon is 20%.
 
 | Meter | Icons | Empties from full in | Filled by |
 | --- | --- | --- | --- |
-| Food | `🍓🍓🍓○ ○` | 8 hours | `/pokemon feed`: +20 |
-| Happiness | `💗💗💗♡ ♡` | 12 hours | `/pokemon pet`: +25, `/pokemon feed`: +5 |
+| Food | `●●●○○` | 8 hours | `/pokemon feed`: +35 |
+| Happiness | `❤❤❤♡♡` | 12 hours | `/pokemon pet`: +25, `/pokemon feed`: +5 |
 
-The meters drain at a quarter speed while Claude Code is closed. Only the mon on show
-drains, so the others in your box keep their meters until you pick them again. Asleep with
-`/pokemon sleep`, food drains at half speed and happiness at a quarter. A new mon starts at
-80%. The meters scale the XP a turn earns, from half when both are empty to one and a half when both are
+The meters keep draining while Claude Code is closed. A new mon starts at 80%. The meters
+scale the XP a turn earns, from half when both are empty to one and a half when both are
 full. `/pokemon needs` turns them off, and XP then ignores them.
 
 </details>
@@ -211,7 +208,7 @@ Gyarados, and Pidgeot are the tallest at 17.
 When the pane is too short, the band shrinks the whole scene to fit. Each shrunk pixel
 takes the most common color of its block, and ties go to the darker color, so outlines and
 eyes survive. Below 4 rows it shows a line of text instead, like
-`Pikachu Lv 12 🍓🍓🍓🍓○  💗💗💗💗♡`.
+`Pikachu Lv 12 ●●●●○ ❤❤❤❤♡`.
 
 </details>
 
