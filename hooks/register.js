@@ -1198,10 +1198,12 @@ function followEvolution($, into, record) {
 async function syncSessions($) {
   const writes = statWrites
   const saved = await $.store.get('stats')
+  const evolved = await $.store.get('evolved')
+  // Nothing may await between this check and acting on what was read
   if (statSaving > 0 || writes !== statWrites) return
   // Evolved in another session, the shown mon evolves here too. Released, it starts over.
   if (!saved?.[mon]) {
-    const into = (await $.store.get('evolved'))?.[mon]
+    const into = evolved?.[mon]
     if (MONS.includes(into) && saved?.[into]) {
       followEvolution($, into, saved[into])
       return
