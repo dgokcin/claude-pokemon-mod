@@ -685,6 +685,31 @@ test('/pokemon stats shows the level, the XP to the next one, the evolution, the
   )
 })
 
+test('a refused frame, as when a resize remounts the band, asks for a redraw at most once a second', async ($, on) => {
+  const clock = mock.clock(on)
+  let renders = 0
+  let refuse = false
+  on('ui.render', () => {
+    renders += 1
+    return THEIRS
+  })
+  on('ui.blit', () => ({ value: refuse ? { deny: 'not mounted' } : {} }))
+  on('ui.log', () => ({ value: undefined }))
+  on('session.start', () => ({ cwd: '/work' }))
+  on('command.register', () => ({ value: undefined }))
+  on('store.get', () => ({ value: undefined }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
+  await clock.advance(500)
+  const before = renders
+
+  refuse = true
+  await clock.advance(500)
+  expect(renders).toBe(before + 1)
+  await clock.advance(1000)
+  expect(renders).toBe(before + 2)
+})
+
 test('a short pane shrinks the band to fit, and a very short one shows a one-line badge', async ($, on) => {
   const { clock, blits } = await started($, on)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })

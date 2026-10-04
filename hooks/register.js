@@ -906,14 +906,28 @@ function attackCommand(wanted) {
   return { text: name + ' used ' + move.name + '!' + (move.text ? '\n' + move.text : '') }
 }
 
-// Send the frame only when it differs from the last one sent or drawn
+// Send the frame only when it differs from the last one sent or drawn. A resize can
+// remount the band, and the host then refuses frames for the old one, so a refused
+// frame asks for a redraw, at most once a second, which draws the band anew.
+const REDRAW_AFTER_REFUSAL_TICKS = 20
+let refusedAt = -Infinity
 function blitFrame($) {
   const zoom = bandZoom()
   if (!zoom) return
   const cells = cellsNow()
   if (cells === sentCells) return
   sentCells = cells
-  $.ui.blit({ requestId: bandId, key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells })
+  $.ui
+    .blit({ requestId: bandId, key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells })
+    .then((result) => {
+      if (!result?.deny) return
+      sentCells = null
+      if (tick - refusedAt < REDRAW_AFTER_REFUSAL_TICKS) return
+      refusedAt = tick
+      logOnce($, 'frame refused: ' + result.deny)
+      $.ui.invalidate('ui.render')
+    })
+    .catch((err) => logOnce($, err))
 }
 
 // Ticks stop while the machine sleeps, so the meters resync with the real clock
