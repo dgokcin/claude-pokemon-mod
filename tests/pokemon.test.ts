@@ -372,7 +372,7 @@ test('/pokemon feed drops a random berry, the mon walks over and eats it, then s
   const answer = await $.command.run({ command: 'pokemon', args: 'feed' })
   expect(answer.text).toMatch(/^You toss Abra (an oran|a pecha|a razz|a sitrus) berry \S+ \(feeds: 1\)$/u)
   const busy = await $.command.run({ command: 'pokemon', args: 'feed' })
-  expect(busy.text).toBe('Abra is still busy with the last one.')
+  expect(busy.text).toBe('Abra is busy eating. Try again in a moment.')
 
   await clock.advance(1000)
   expect(hasBerry(blits[blits.length - 1])).toBe(true)
@@ -549,15 +549,41 @@ test('feeding fills food, petting fills happiness, and both are saved once the m
   const saved: Record<string, any> = { stats: { abra: { food: { value: 10, at: 0 }, happiness: { value: 10, at: 0 } } } }
   const { clock } = await startedWith($, on, saved, 0)
   await $.command.run({ command: 'pokemon', args: 'feed' })
-  await $.command.run({ command: 'pokemon', args: 'pet' })
-  // Nothing fills while the berry falls and the hearts float
+  // Nothing fills while the berry falls
   const before = await $.command.run({ command: 'pokemon', args: '' })
   expect(before.text).toContain('food 10%, happiness 10%')
   // Long enough to land, walk the whole strip, and eat
   await clock.advance(150 * 40 + 2000)
+  const fed = await $.command.run({ command: 'pokemon', args: '' })
+  expect(fed.text).toContain('food 30%, happiness 15%')
+  expect(Math.round(saved.stats.abra.food.value)).toBe(30)
+  await $.command.run({ command: 'pokemon', args: 'pet' })
+  // Nothing fills while the hearts float
+  const petting = await $.command.run({ command: 'pokemon', args: '' })
+  expect(petting.text).toContain('food 30%, happiness 15%')
+  await clock.advance(4000)
   const after = await $.command.run({ command: 'pokemon', args: '' })
   expect(after.text).toContain('food 30%, happiness 40%')
-  expect(Math.round(saved.stats.abra.food.value)).toBe(30)
+  expect(Math.round(saved.stats.abra.happiness.value)).toBe(40)
+})
+
+test('while it eats or enjoys a pet, commands that change it wait, and the ones that only show something run', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'abra', stats: { abra: { xp: 900 } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  await run('feed')
+  for (const args of ['pet', 'feed', 'release abra', 'pikachu', 'sleep', 'nickname Spoon', 'attack', 'shiny']) {
+    expect(await run(args)).toBe('Abra is busy eating. Try again in a moment.')
+  }
+  expect(await run('stats')).toMatch(/^Abra, Lv\. 9,/)
+  expect(await run('box')).toMatch(/^1 mon in your box:/)
+  expect(await run('moves')).toMatch(/^Abra knows /)
+  await clock.advance(150 * 40 + 2000)
+  await run('pet')
+  expect(await run('release abra')).toBe('Abra is enjoying the pets. Try again in a moment.')
+  await clock.advance(4000)
+  expect(await run('release abra')).toMatch(/^You release Abra\./)
+  expect(saved.stats.abra).toBeUndefined()
 })
 
 test('a mon as happy as can be still enjoys a pet, but it fills no meter and doesn\'t count as one', async ($, on) => {
@@ -1442,6 +1468,41 @@ function bashTools($, on) {
     return { result: { stdout: 'ok', stderr: '', interrupted: false } }
   })
 }
+
+test('the sweat drop goes on the other side of the head from a bubble in the left margin', { timeoutMs: 30000 }, async ($, on) => {
+  const BODY = 0x68d078
+  bashTools($, on)
+  const { clock, blits } = await startedWith($, on, { mon: 'bulbasaur', needs: false }, 0)
+  await $.ui.mount({ ...SPINNER, surface: 'terminal' })
+  await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
+  // Pace left until the mon turns at the strip's left edge, where the bubble only fits in
+  // the margin
+  let lowest = Infinity
+  for (let k = 0; k < 200; k++) {
+    await clock.advance(150)
+    const now = meanColumn(blits[blits.length - 1], BODY) ?? Infinity
+    if (now > lowest) break
+    lowest = now
+  }
+  await $.tool.call({ tool: 'Bash', command: 'false' })
+  await clock.advance(300)
+  const cells = blits[blits.length - 1]
+  const body = meanColumn(cells, BODY) as number
+  expect(meanColumn(cells, BUBBLE_OUTLINE)).toBeLessThan(body)
+  expect(meanColumn(cells, SWEAT)).toBeGreaterThan(body)
+})
+
+test('a mon released in another session stays released when this one switches to it', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'abra', stats: { abra: { xp: 900 }, pikachu: { xp: 1728, nickname: 'Zappy' } } }
+  await startedWith($, on, saved, 0)
+  // Another session releases Pikachu after this one loaded it
+  saved.stats = { abra: { xp: 900 } }
+  await $.command.run({ command: 'pokemon', args: 'pikachu' })
+  expect(saved.stats.pikachu).toBeUndefined()
+  expect((await $.command.run({ command: 'pokemon', args: 'stats' })).text).toMatch(/^Pikachu, Lv\. 5,/)
+  await $.command.run({ command: 'pokemon', args: 'abra' })
+  expect((await $.command.run({ command: 'pokemon', args: 'box' })).text).not.toContain('Pikachu')
+})
 
 test('a failed tool call shakes the mon in place with a sweat drop for about a second', async ($, on) => {
   bashTools($, on)

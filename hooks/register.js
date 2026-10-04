@@ -371,11 +371,15 @@ function stepIdleAlert() {
 // A framed thought bubble beside the head, with a single pixel of tail between it and
 // the head. It leads on the side a walking mon heads for, and sits on the left of a
 // standing one, unless that side has no room for it.
+function bubbleOnLeft(head, side) {
+  const fitsLeft = head[0] - BUBBLE_SPAN >= -margin
+  const fitsRight = head[1] + BUBBLE_SPAN + 1 <= stripColumns()
+  return side === 'left' ? fitsLeft : fitsLeft && !fitsRight
+}
+
 function bubbleStamps(icon, head, side) {
   const span = BUBBLE_SPAN
-  const fitsLeft = head[0] - span >= -margin
-  const fitsRight = head[1] + span + 1 <= stripColumns()
-  const onLeft = side === 'left' ? fitsLeft : fitsLeft && !fitsRight
+  const onLeft = bubbleOnLeft(head, side)
   const left = onLeft ? head[0] - span : head[1] + 4
   const tail = onLeft ? head[0] - 2 : head[1] + 2
   // The first stamp with a pixel wins, so the icon goes before the bubble
@@ -428,11 +432,11 @@ function flinchJolt(baseX, width) {
   return Math.max(-baseX, Math.min(columns - width - baseX, side))
 }
 
-// The sweat drop sliding down the corner of the head away from the bubble
-function sweatStamps(head, y) {
+// The sweat drop sliding down the corner of the head away from the bubble, which leads
+// on side when there's room
+function sweatStamps(head, y, side) {
   const width = SWEAT[0].length
-  const bubbleOnLeft = head[0] - (BUBBLE_WIDTH + 3) >= 0
-  const sx = bubbleOnLeft ? Math.min(columns - width, head[1] - 1) : Math.max(0, head[0] - 2)
+  const sx = bubbleOnLeft(head, side) ? Math.min(columns - width, head[1] - 1) : Math.max(0, head[0] - 2)
   const drip = Math.floor((tick - flinchStart) / DRIP_TICKS)
   return [stamp(sx, y + drip, SWEAT, { d: ink.sweat, h: ink.sweatShine })]
 }
@@ -580,6 +584,10 @@ const isFree = () => !working && !attack && !food && !isAsleep() && !isAlerted()
 
 // Petting, feeding, sleeping, attacking, releasing, and switching mons wait while it evolves
 const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack', 'release']
+// While it eats a berry or enjoys a pet, only the commands that just show something run,
+// so nothing changes the record the berry or pet is about to fill
+const SHOWS_ONLY = ['', 'list', 'stats', 'box', 'moves']
+const waitsForCare = (asked) => (food !== null || isPetted()) && !SHOWS_ONLY.includes(asked.split(' ')[0]) && asked !== 'attack list'
 const waitsForEvolution = (asked) => evolving !== null && (MONS.includes(asked) || WAITS_FOR_EVOLUTION.includes(asked.split(' ')[0]))
 
 // Play the evolve effect with the evolved mon swapped in, in a band grown to fit both
@@ -859,9 +867,10 @@ function cellsNow() {
   // The frame's box as drawn, mirrored along with the sprite
   const [boxLeft, boxRight] = flip ? [sprite.width - 1 - box.right, sprite.width - 1 - box.left] : [box.left, box.right]
   const sleeper = { left: left + boxLeft, right: left + boxRight, top: top + box.top, bottom: top + box.bottom }
-  const over = [...heartStamps(), ...(isWincing() ? sweatStamps(head, top + box.top) : []), ...(asleep ? sleepStamps(sleeper) : [])]
+  const bubbleSide = walking ? facing : 'left'
+  const over = [...heartStamps(), ...(isWincing() ? sweatStamps(head, top + box.top, bubbleSide) : []), ...(asleep ? sleepStamps(sleeper) : [])]
   const balls = partyStamps(party, tick, { columns, ground: rows * 2 - 1, label: ink.party })
-  const under = [...(icon ? bubbleStamps(icon, head, walking ? facing : 'left') : []), ...balls]
+  const under = [...(icon ? bubbleStamps(icon, head, bubbleSide) : []), ...balls]
   const pixels = rows * 2
   const width = stripColumns()
   const colorAt = (cx, py) => {
@@ -1073,11 +1082,16 @@ async function saveStats($, names) {
 
 // Take these mons' records as last saved by any session, right before changing them, so
 // a change lands on another session's newest XP and meters rather than on this one's
-// copy from the last sync. The shown mon is never parked here.
+// copy from the last sync. A record gone from the store was released in another session,
+// so it goes here too rather than being saved back. The shown mon is never parked here.
 async function freshen($, names) {
   const saved = await $.store.get('stats')
+  if (!saved || typeof saved !== 'object') return
   for (const name of names) {
-    if (!saved?.[name]) continue
+    if (!saved[name]) {
+      delete stats[name]
+      continue
+    }
     const { parked, ...shown } = saved[name]
     stats[name] = name === mon ? shown : saved[name]
   }
@@ -1486,6 +1500,7 @@ export function register(on) {
     nowMs = await $.clock.now()
     const asked = e.args.trim().toLowerCase()
     if (waitsForEvolution(asked)) return { text: nameOf(mon) + ' is evolving! /pokemon stop cancels it.' }
+    if (waitsForCare(asked)) return { text: nameOf(mon) + (food ? ' is busy eating.' : ' is enjoying the pets.') + ' Try again in a moment.' }
     if (MONS.includes(asked)) {
       const wasHome = isHome()
       evolveDue = null
@@ -1516,14 +1531,11 @@ export function register(on) {
       pet()
       const line = nameOf(mon) + ' ' + PET_LINES[Math.floor(Math.random() * PET_LINES.length)] + ' ♥'
       if (happiest) return { text: line + ' ' + nameOf(mon) + ' is already as happy as can be.' }
-      // Petting again before the last pet's hearts are gone pays that one now
-      if (pettingFills) owed.push({ name: pettingFills, happiness: PET_HAPPINESS })
       pettingFills = mon
       const pets = Number((await $.store.get('pets')) ?? 0) + 1
       await $.store.set('pets', pets)
       return { text: line + ' (pets: ' + pets + ')' }
     } else if (asked === 'feed') {
-      if (food) return { text: nameOf(mon) + ' is still busy with the last one.' }
       // A full mon, every food icon filled, still eats the berry, but it fills no meter
       // and doesn't count as a feed
       const full = isFull()
