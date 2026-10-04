@@ -1,0 +1,24 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": { "includes": ["hooks/**", "scripts/**", "tests/**", "!hooks/frames.js"] },
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "correctness": {
+        "noUndeclaredVariables": "error",
+        "noUnusedFunctionParameters": "off"
+      },
+      "complexity": { "useSimpleNumberKeys": "off" },
+      "style": { "useTemplate": "off" },
+      "suspicious": {
+        "noAssignInExpressions": "off",
+        "noExplicitAny": "off",
+        "useIterableCallbackReturn": "off"
+      }
+    }
+  }
+}
