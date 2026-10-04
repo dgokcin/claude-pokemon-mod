@@ -67,7 +67,7 @@ Then pick your partner with `/pokemon <mon>`.
 | Command | Effect |
 | --- | --- |
 | `/pokemon` | Show the active mon, its variant, level, meters, and the options |
-| `/pokemon <mon>` | Pick a mon, saved across sessions |
+| `/pokemon <mon>` | Pick the mon for this session. A new session starts with the one picked last |
 | `/pokemon list` | List every mon name |
 | `/pokemon shiny`, `/pokemon default` | Pick a variant, saved across sessions |
 | `/pokemon wander` | Toggle idle wandering (on by default) |
@@ -77,11 +77,12 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon attack <move>` | Use a named move, ignoring case, spaces, and dashes |
 | `/pokemon moves`, `/pokemon attack list` | List the active mon's moves |
 | `/pokemon moves <mon>` | List another mon's moves |
-| `/pokemon evolve` | Evolve with a stone or a trade. Also restarts an evolution you cancelled |
+| `/pokemon evolve` | Evolve with a stone or a trade. Also evolves a mon at its level with autoevolve off, and restarts an evolution you cancelled |
 | `/pokemon evolve <mon>` | Pick what Eevee becomes, like `/pokemon evolve jolteon` |
 | `/pokemon stop` | Cancel an evolution |
-| `/pokemon sleep` | Tuck the mon in, so its meters drain slower until Claude starts working. Run it again to wake it |
+| `/pokemon sleep` | Tuck the mon in, so its meters drain slower until Claude starts working in a session showing it. Run it again to wake it |
 | `/pokemon needs` | Toggle food and happiness (on by default) |
+| `/pokemon autoevolve` | Toggle level evolutions starting on their own once idle (on by default). Off, the mon waits for `/pokemon evolve` |
 | `/pokemon emoji` | Toggle emoji meters, 🍓 and 💗 instead of ● and ♥ (off by default, saved across sessions) |
 | `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
 | `/pokemon box` | List every mon you've raised, highest level first |
@@ -137,11 +138,13 @@ fonts lack `♡` and borrow it from another font at another size. If your termin
 emoji well, `/pokemon emoji` swaps them for `🍓🍓🍓○ ○` and `💗💗💗♡ ♡`, two columns each.
 Run it again to switch back.
 
-The meters drain at a quarter speed while Claude Code is closed. Only the mon on show
-drains, so the others in your box keep their meters until you pick them again. Asleep with
-`/pokemon sleep`, food drains at half speed and happiness at a quarter. A new mon starts at
-80%. The meters scale the XP a turn earns, from half when both are empty to one and a half when both are
-full. `/pokemon needs` turns them off, and XP then ignores them.
+The meters drain at a quarter speed while Claude Code is closed. Only the mons on show
+drain, so the others in your box keep their meters until you pick them again. Each open
+session shows its own mon, but level, meters, nickname, and sleep belong to the mon, so
+sessions showing the same one share them. Asleep with `/pokemon sleep`, food drains at
+half speed and happiness at a quarter. A new mon starts at 80%. The meters scale the XP a
+turn earns, from half when both are empty to one and a half when both are full.
+`/pokemon needs` turns them off, and XP then ignores them.
 
 </details>
 
@@ -155,7 +158,9 @@ starts at 16. With 30 s turns and full meters, 5 to 16 takes about 75 turns.
 
 When the mon reaches its evolution level from Red and Blue, it evolves once idle. It glows,
 flickers between its two shapes, and flashes into its new form. `/pokemon stop` cancels,
-and the next level-up tries again. Level, XP, and meters carry over.
+and the next level-up tries again. Level, XP, and meters carry over. With
+`/pokemon autoevolve` off, reaching the level only makes the mon ready, and it evolves when
+you run `/pokemon evolve`.
 
 The 19 mons that evolve with a stone or a trade, like Pikachu, Eevee, and Kadabra, use
 `/pokemon evolve`. Eevee needs a pick, like `/pokemon evolve jolteon`.

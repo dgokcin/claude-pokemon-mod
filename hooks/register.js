@@ -22,6 +22,8 @@ import { zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 // and shows a "!". Each running subagent is a Poké Ball along the left of the strip.
 // A main-loop tool call that fails makes it flinch, with a sweat drop by its head.
 // Answered turns earn XP, and the mon evolves at the levels from the games.
+// Each open session shows its own mon, starting with the one last picked anywhere. XP,
+// meters, nickname, and sleep belong to the mon, so sessions showing the same mon share them.
 // The mon, hearts, berries, bubbles, balls, and Zs are pixels in one Raster, two per cell.
 
 const TICK_MS = 50
@@ -121,6 +123,7 @@ let nowMs = 0
 let stats = {}
 let needsOn = true
 let emojiOn = false
+let autoEvolve = true
 let evolving = null
 let evolveDue = null
 let joyHopAt = null
@@ -611,12 +614,15 @@ function stepEvolution($) {
   else if (evolveDue && isFree()) startEvolution($, evolveDue)
 }
 
-// The evolved mon takes over the record as last saved, so XP earned elsewhere comes along
+// The evolved mon takes over the record as last saved, so XP earned elsewhere comes along.
+// 'evolved' tells another session showing the old mon that it evolved rather than being released.
 async function moveRecord($, from, into) {
   await freshen($, [from])
   stats[into] = { ...stats[from], xp: xpOf(from) }
   delete stats[from]
   await saveStats($, [from, into])
+  const evolved = (await $.store.get('evolved')) ?? {}
+  await $.store.set('evolved', { ...evolved, [from]: into })
 }
 
 // The mon becomes the evolved one. Its record moves along, so level, XP, and meters carry over.
@@ -1070,7 +1076,8 @@ async function payOwed($, gains) {
 
 // Only the mons on show drain. Switching away parks a mon's meters where they are, and
 // they pick up from there when it's shown again, so a mon left alone for weeks isn't
-// starving when it comes back. XP is the shown mon's alone already.
+// starving when it comes back. XP is the shown mon's alone already. A mon parked while
+// another session still shows it goes back to draining at that session's next sync.
 function park(name) {
   if (!stats[name] || stats[name].parked) return
   const record = { ...stats[name], parked: true }
@@ -1128,86 +1135,77 @@ async function saveRecords($, names) {
   try {
     const saved = await $.store.get('stats')
     const merged = saved && typeof saved === 'object' ? { ...saved } : {}
+    const started = names.filter((name) => stats[name] && !merged[name])
     for (const name of names) {
       if (stats[name]) merged[name] = stats[name]
       else delete merged[name]
     }
     stats = merged
     await $.store.set('stats', merged)
+    // A mon raised again from scratch no longer points at what it once evolved into
+    if (started.length > 0) {
+      const evolved = await $.store.get('evolved')
+      if (evolved && started.some((name) => name in evolved)) {
+        const rest = { ...evolved }
+        for (const name of started) delete rest[name]
+        await $.store.set('evolved', rest)
+      }
+    }
   } finally {
     statSaving -= 1
   }
 }
 
-// One mon is shown in every open session: 'mon', the last one picked anywhere. A pick
-// in one session reaches the others at their next sync.
+// 'mon' is the last one picked in any session, and a new session starts with it. A mon
+// picked here is shown as itself, even if it once evolved in another session.
 async function saveMon($) {
   await $.store.set('mon', mon)
+  const evolved = await $.store.get('evolved')
+  if (evolved && mon in evolved) {
+    const { [mon]: _, ...rest } = evolved
+    await $.store.set('evolved', rest)
+  }
 }
 
-// Earlier versions kept a mon per session under these keys
-async function forgetSessionMons($) {
-  for (const key of await $.store.keys()) if (key.startsWith('mon:')) await $.store.delete(key)
+// Earlier versions kept a mon per session under 'mon:' keys and a busy mark under 'busy:' keys
+async function forgetOldKeys($) {
+  for (const key of await $.store.keys()) {
+    if (key.startsWith('mon:') || key.startsWith('busy:')) await $.store.delete(key)
+  }
 }
 
-// Every open session shares the store, so each one keeps a busy mark there while a turn
-// runs, refreshed every couple of seconds. A mark not refreshed for a while is from a
-// session that closed mid-turn. Each session also follows the saved sleep state, so
-// putting the mon to bed or waking it in one session does it in all of them.
-const SESSION_ID = Math.random().toString(36).slice(2, 10)
-const BUSY_PREFIX = 'busy:'
-const BUSY_KEY = BUSY_PREFIX + SESSION_ID
-const BUSY_STALE_MS = 15000
 const SYNC_TICKS = 20
 
-async function setBusy($, busy) {
-  if (busy) await $.store.set(BUSY_KEY, await $.clock.now())
-  else await $.store.delete(BUSY_KEY)
-}
-
-// Whether Claude is working in another open session. Clears the marks of sessions that
-// closed mid-turn, so they don't pile up in the store.
-async function othersBusy($) {
-  const now = await $.clock.now()
-  let busy = false
-  for (const key of await $.store.keys()) {
-    if (!key.startsWith(BUSY_PREFIX) || key === BUSY_KEY) continue
-    if (now - Number(await $.store.get(key)) < BUSY_STALE_MS) busy = true
-    else await $.store.delete(key)
-  }
-  return busy
-}
-
-// Show the mon another session switched to, once nothing here is mid-move or evolving.
-// The switching session parked the old one and saved both records.
-function adoptMon(into, saved) {
-  if (into === mon || !MONS.includes(into) || evolving || attack) return
+// Show the mon this one evolved into in another session, once nothing here is mid-move
+function followEvolution($, into, record) {
+  if (evolving || attack) return
+  const name = nameOf(mon)
   const wasHome = isHome()
-  for (const name of [mon, into]) {
-    if (saved?.[name]) stats[name] = saved[name]
-  }
+  delete stats[mon]
+  stats[into] = record
   evolveDue = null
   mon = into
   if (wasHome) x = homeX()
   clampX()
   sentCells = null
+  $.ui.toast('Congratulations! Your ' + name + ' evolved into ' + displayName(into) + '!')
+  $.ui.invalidate('ui.render')
 }
 
+// Take the shown mon's record as another session showing it saved it: fed, petted, earned
+// XP, or put to bed. Put to bed elsewhere while Claude works here, it wakes right back up
+// in stepWake.
 async function syncSessions($) {
-  if (turnRunning) await setBusy($, true)
-  const shared = await $.store.get('mon')
-  if (MONS.includes(shared) && shared !== mon) {
-    adoptMon(shared, await $.store.get('stats'))
-    $.ui.invalidate('ui.render')
-  }
-  // Take the shown mon's record as another session saved it: fed, petted, earned XP, or
-  // put to bed. Put to bed elsewhere while Claude works here, it wakes right back up in
-  // stepWake. The shown mon is never parked here, whatever another session saved.
   const writes = statWrites
   const saved = await $.store.get('stats')
   if (statSaving > 0 || writes !== statWrites) return
-  // Released in another session, the shown mon starts over here too
+  // Evolved in another session, the shown mon evolves here too. Released, it starts over.
   if (!saved?.[mon]) {
+    const into = (await $.store.get('evolved'))?.[mon]
+    if (MONS.includes(into) && saved?.[into]) {
+      followEvolution($, into, saved[into])
+      return
+    }
     if (stats[mon] && saved && typeof saved === 'object') {
       delete stats[mon]
       evolveDue = null
@@ -1215,9 +1213,17 @@ async function syncSessions($) {
     }
     return
   }
+  // A session that switched away from the shown mon parked it. It's still on show here, so
+  // its record goes back unparked and drains on from where the park left it.
   const { parked, ...theirs } = saved[mon]
-  if (JSON.stringify(theirs) === JSON.stringify(stats[mon])) return
-  stats[mon] = theirs
+  if (parked) {
+    await freshen($, [mon])
+    await saveRecords($, [mon])
+  } else if (JSON.stringify(theirs) === JSON.stringify(stats[mon])) {
+    return
+  } else {
+    stats[mon] = theirs
+  }
   $.ui.invalidate('ui.render')
 }
 
@@ -1266,8 +1272,16 @@ async function gainXp($, durationMs) {
   if (level === was) return
   $.ui.toast(nameOf(mon) + ' grew to Lv. ' + level + '!')
   $.ui.invalidate('ui.render')
+  const into = readyToEvolve()
+  if (!into) return
+  if (autoEvolve) evolveDue = into
+  else $.ui.toast(nameOf(mon) + ' is ready to evolve into ' + displayName(into) + '! /pokemon evolve lets it.')
+}
+
+// The mon its level lets it become, while it isn't evolving already
+function readyToEvolve() {
   const evolution = levelEvolutionOf(mon)
-  if (evolution && level >= evolution.level && !evolving) evolveDue = evolution.into
+  return evolution && levelOf(mon) >= evolution.level && !evolving ? evolution.into : null
 }
 
 // Like "Pikachu, Lv. 12, 1820 XP (377 to Lv. 13). Can become Raichu with a Thunder Stone.
@@ -1276,7 +1290,10 @@ async function statsText($) {
   const level = levelOf(mon)
   const next = level < MAX_LEVEL ? ' (' + (xpAt(level + 1) - xpOf(mon)) + ' to Lv. ' + (level + 1) + ')' : ''
   const evolutions = evolutionsOf(mon)
-  const becomes = evolutions.length > 0 ? ' Can become ' + orList(evolutions.map(evolutionText)) + '.' : ''
+  const ready = readyToEvolve()
+  const becomes = ready
+    ? ' Ready to evolve into ' + displayName(ready) + '. /pokemon evolve lets it.'
+    : evolutions.length > 0 ? ' Can become ' + orList(evolutions.map(evolutionText)) + '.' : ''
   const meters = needsOn
     ? ' Food ' + Math.round(statNow(mon, 'food')) + '%, happiness ' + Math.round(statNow(mon, 'happiness')) + '%.'
     : ' Needs are off.'
@@ -1351,7 +1368,7 @@ function hopForJoy() {
   }
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'emoji', 'pet', 'feed', 'sleep', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'nickname', 'release', 'list']
+const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'emoji', 'autoevolve', 'pet', 'feed', 'sleep', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'nickname', 'release', 'list']
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
@@ -1478,12 +1495,13 @@ export function register(on) {
     })
     const savedMon = await $.store.get('mon')
     if (MONS.includes(savedMon)) mon = savedMon
-    forgetSessionMons($).catch((err) => logOnce($, err))
+    forgetOldKeys($).catch((err) => logOnce($, err))
     const savedVariant = await $.store.get('variant')
     if (VARIANTS.includes(savedVariant)) variant = savedVariant
     wander = (await $.store.get('wander')) !== false
     needsOn = (await $.store.get('needs')) !== false
     emojiOn = (await $.store.get('emoji')) === true
+    autoEvolve = (await $.store.get('autoEvolve')) !== false
     const savedStats = await $.store.get('stats')
     if (savedStats && typeof savedStats === 'object') stats = savedStats
     nowMs = await $.clock.now()
@@ -1583,7 +1601,7 @@ export function register(on) {
         await setAsleep($, false)
         return { text: name + ' wakes up.' }
       }
-      if (turnRunning || (await othersBusy($))) return { text: name + " can't sleep while Claude is working." }
+      if (turnRunning) return { text: name + " can't sleep while Claude is working." }
       await setAsleep($, true)
       return { text: name + ' curls up and falls asleep. Its meters drain slower until Claude starts working.' }
     } else if (asked === 'attack' || asked.startsWith('attack ')) {
@@ -1604,6 +1622,17 @@ export function register(on) {
       $.ui.invalidate('ui.render')
       const icons = iconsFor('food').trimEnd() + ' ' + iconsFor('happiness').trimEnd()
       return { text: (emojiOn ? 'The meters show emoji: ' : 'The meters show text icons: ') + icons }
+    } else if (asked === 'autoevolve') {
+      autoEvolve = !autoEvolve
+      await $.store.set('autoEvolve', autoEvolve)
+      const name = nameOf(mon)
+      if (!autoEvolve) {
+        evolveDue = null
+        return { text: name + ' waits for /pokemon evolve when it reaches its evolution level.' }
+      }
+      // Already at its level, it evolves once idle
+      evolveDue = readyToEvolve()
+      return { text: name + ' evolves on its own once idle at its evolution level.' }
     } else if (asked === 'evolve' || asked.startsWith('evolve ')) {
       return evolveCommand($, asked.slice('evolve'.length).trim())
     } else if (asked === 'stop') {
@@ -1663,7 +1692,6 @@ export function register(on) {
 
   on('turn.start', async ($, e, next) => {
     turnRunning = true
-    if (!e.agentId) await setBusy($, true).catch((err) => logOnce($, err))
     return next(e)
   })
 
@@ -1677,7 +1705,6 @@ export function register(on) {
     if (!e.agentId) {
       turnRunning = false
       clearAlert()
-      await setBusy($, false).catch((err) => logOnce($, err))
     }
     if (!e.agentId && !e.isAborted) {
       hopStart = tick

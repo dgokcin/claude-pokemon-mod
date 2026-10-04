@@ -836,28 +836,13 @@ test('/pokemon sleep again wakes the mon up', async ($, on) => {
   expect(saved.stats.abra.asleep).toBe(false)
 })
 
-test('/pokemon sleep is refused while Claude works in another session, unless its mark is stale', async ($, on) => {
+test('/pokemon sleep works in an idle session while Claude works in another', async ($, on) => {
+  // A fresh busy mark, as an earlier version left while its session was mid-turn
   const saved: Record<string, any> = { 'busy:other': 0 }
-  const { clock } = await startedWith($, on, saved, 0)
-  const refused = await $.command.run({ command: 'pokemon', args: 'sleep' })
-  expect(refused.text).toBe("Abra can't sleep while Claude is working.")
-  expect(saved.stats?.abra?.asleep).toBeUndefined()
-  // A session that closed mid-turn stops refreshing its mark
-  await clock.advance(20000)
+  await startedWith($, on, saved, 0)
   const slept = await $.command.run({ command: 'pokemon', args: 'sleep' })
   expect(slept.text).toMatch(/falls asleep/)
   expect(saved.stats.abra.asleep).toBe(true)
-})
-
-test('a session marks itself busy for the length of a turn', async ($, on) => {
-  const saved: Record<string, any> = {}
-  on('turn.start', ($, e) => ({ turnId: e.turnId }))
-  on('turn.complete', () => ({ text: '' }))
-  await startedWith($, on, saved, 0)
-  await $.turn.start({ text: 'hi', turnId: 't' })
-  expect(Object.keys(saved).some((k) => k.startsWith('busy:'))).toBe(true)
-  await $.turn.complete({ turnId: 't', answer: 'ok', durationMs: 1000, isAborted: false, usage: null })
-  expect(Object.keys(saved).some((k) => k.startsWith('busy:'))).toBe(false)
 })
 
 test('a save here lands on the XP and meters another session saved since the last sync', async ($, on) => {
@@ -919,25 +904,66 @@ test('each feed adds exactly one food icon', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: '●●●○○' })).toBeDefined()
 })
 
-test('a mon picked in another session shows here within a couple of seconds', async ($, on) => {
-  const saved: Record<string, any> = { mon: 'abra' }
+test('a mon picked in another session doesn\'t switch this one', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'abra', stats: { abra: { xp: 900 } } }
   const { clock } = await startedWith($, on, saved, 0)
   // Another session picks Seel, as its /pokemon seel would
   saved.mon = 'seel'
+  saved.stats = { ...saved.stats, seel: { xp: 1728 } }
   await clock.advance(3000)
   const status = await $.command.run({ command: 'pokemon', args: '' })
-  expect(status.text).toMatch(/^Showing default Seel /)
+  expect(status.text).toMatch(/^Showing default Abra Lv\. 9/)
 })
 
-test('a reload shows the mon last picked in any session, and old per-session picks are cleared', async ($, on) => {
-  const saved: Record<string, any> = { mon: 'abra', 'mon:old-session': { name: 'ditto', at: 0 } }
+test('a mon evolved in another session evolves here too, and picking the old one shows it again', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'charmander', stats: { charmander: { xp: 3000, nickname: 'Embers' } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  // Another session evolves it, as its moveRecord would
+  saved.stats = { charmeleon: { xp: 4096, nickname: 'Embers' } }
+  saved.evolved = { charmander: 'charmeleon' }
+  await clock.advance(1100)
+  expect((await $.command.run({ command: 'pokemon', args: 'stats' })).text).toMatch(/^Embers \(Charmeleon\), Lv\./)
+  expect(saved.stats.charmander).toBeUndefined()
+
+  await $.command.run({ command: 'pokemon', args: 'charmander' })
+  expect(saved.evolved).toEqual({})
+  await clock.advance(1100)
+  expect((await $.command.run({ command: 'pokemon', args: 'stats' })).text).toMatch(/^Charmander, Lv\. 5,/)
+})
+
+test('a new session starts with the mon last picked in any session, and old per-session keys are cleared', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'abra', 'mon:old-session': { name: 'ditto', at: 0 }, 'busy:old-session': 0 }
   await startedWith($, on, saved, 0)
   await $.command.run({ command: 'pokemon', args: 'ditto' })
+  expect(saved.mon).toBe('ditto')
   saved.mon = 'bulbasaur'
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   const status = await $.command.run({ command: 'pokemon', args: '' })
   expect(status.text).toMatch(/^Showing default Bulbasaur /)
-  expect(Object.keys(saved).some((key) => key.startsWith('mon:'))).toBe(false)
+  expect(Object.keys(saved).some((key) => key.startsWith('mon:') || key.startsWith('busy:'))).toBe(false)
+})
+
+test('put to bed in another session showing the same mon, it sleeps here too', async ($, on) => {
+  const saved: Record<string, any> = { mon: 'abra', stats: { abra: { food: { value: 80, at: 0 }, happiness: { value: 80, at: 0 } } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  // Another session tucks it in, as its /pokemon sleep would
+  saved.stats = { abra: { asleep: true, food: { value: 80, at: 0 }, happiness: { value: 80, at: 0 } } }
+  await clock.advance(1100)
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).toContain('Abra Lv. 5, asleep')
+})
+
+test('a mon parked by a session that switched away keeps draining while this one shows it', async ($, on) => {
+  const full = { value: 100, at: 0 }
+  const saved: Record<string, any> = { mon: 'abra', stats: { abra: { food: full, happiness: full } } }
+  const { clock } = await startedWith($, on, saved, 4 * HOUR)
+  // Another session showing Abra switches away, parking it at its meters as of now
+  saved.stats = { abra: { food: { value: 50, at: 4 * HOUR }, happiness: { value: 200 / 3, at: 4 * HOUR }, parked: true } }
+  await clock.advance(1100)
+  expect(saved.stats.abra.parked).toBeUndefined()
+  expect(saved.stats.abra.food).toEqual({ value: 50, at: 4 * HOUR })
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).toContain('food 50%, happiness 67%')
 })
 
 test('saving this mon\'s meters keeps the records other sessions saved', async ($, on) => {
@@ -1050,6 +1076,26 @@ test('a level-up evolves Charmander into Charmeleon, and its record moves along'
   expect(saved.stats.charmeleon.xp).toBeGreaterThanOrEqual(16 ** 3)
   const status = await $.command.run({ command: 'pokemon', args: '' })
   expect(status.text).toMatch(/^Showing default Charmeleon Lv\. 16 \(food 80%, happiness 80%\)/)
+})
+
+test('with autoevolve off, a level-up waits for /pokemon evolve, and turning it back on evolves once idle', { timeoutMs: 30000 }, async ($, on) => {
+  const toasts = toastsOf(on)
+  on('turn.complete', () => ({ text: '' }))
+  const saved: Record<string, any> = { mon: 'charmander', wander: false, stats: { charmander: { xp: 16 ** 3 - 1 } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await run('autoevolve')).toBe('Charmander waits for /pokemon evolve when it reaches its evolution level.')
+  expect(saved.autoEvolve).toBe(false)
+
+  await $.turn.complete(ANSWERED)
+  expect(toasts).toEqual(['Charmander grew to Lv. 16!', 'Charmander is ready to evolve into Charmeleon! /pokemon evolve lets it.'])
+  await clock.advance(1000)
+  expect(toasts).toHaveLength(2)
+  expect(await run('stats')).toMatch(/^Charmander, Lv\. 16, .* Ready to evolve into Charmeleon\. \/pokemon evolve lets it\./)
+
+  expect(await run('autoevolve')).toBe('Charmander evolves on its own once idle at its evolution level.')
+  await clock.advance(50)
+  expect(toasts[2]).toBe('What? Charmander is evolving!')
 })
 
 test('/pokemon stop during the evolution keeps Charmander', { timeoutMs: 30000 }, async ($, on) => {
@@ -1477,7 +1523,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('session.start', () => ({ cwd: '/work' }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|pet|feed|sleep|attack|moves|evolve|stop|stats|box|nickname|release|list]')
+  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|autoevolve|pet|feed|sleep|attack|moves|evolve|stop|stats|box|nickname|release|list]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
