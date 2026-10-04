@@ -1,7 +1,11 @@
 import { attackFrame, attackPose, prepareAttack } from './attacks.js'
+import { evolutionsOf, levelEvolutionOf, startLevel } from './evolutions.js'
 import { SPRITES } from './frames.js'
+import { MAX_LEVEL, careOf, levelAt, turnXp, xpAt } from './levels.js'
 import { movesOf } from './moves.js'
 import { displayName } from './names.js'
+import { joinParty, leaveParty, partyStamps, prunedParty } from './party.js'
+import { zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 
 // One pixel Pokémon lives in a strip at the right of the band above the prompt.
 // While Claude works it paces, with a thought bubble while Claude thinks. It
@@ -11,7 +15,10 @@ import { displayName } from './names.js'
 // berry for it to walk over and eat. Food and happiness drain over real time,
 // shown as pink ●●●○○ and ❤❤❤♡♡ at the right edge, so it needs both now and then.
 // /pokemon attack plays one of its moves, with the animations in attacks.js.
-// The mon, hearts, berries, bubbles, and Zs are pixels in one Raster, two per cell.
+// While a tool runs, the bubble shows it, and when Claude waits on you the mon stops
+// and shows a "!". Each running subagent is a Poké Ball along the left of the strip.
+// Answered turns earn XP, and the mon evolves at the levels from the games.
+// The mon, hearts, berries, bubbles, balls, and Zs are pixels in one Raster, two per cell.
 
 const TICK_MS = 50
 const MOVE_TICKS = 3
@@ -43,6 +50,17 @@ const BERRIES = [
   { name: 'razz berry', emoji: '🍓', colors: { k: LEAF_COLOR, b: 0x8e1240, B: 0xd81b60, h: 0xff7aa8 } },
   { name: 'sitrus berry', emoji: '🍋', colors: { k: LEAF_COLOR, b: 0xc9a400, B: 0xfdd835, h: 0xfff59d } },
 ]
+// Colors the band draws straight on the terminal background, one set per theme
+const INKS = {
+  dark: {
+    bubble: 0xf0f0f0, dots: 0x9a9ab0, z: 0xe8e8ff, star: 0xffd54f, silhouette: 0xf8f8ff,
+    pencil: 0xffc83d, lens: 0x6cc4ff, shell: 0x5fe08a, ball: 0xeeeef6, wrench: 0xb8b8c8, party: 0xb4b4c8,
+  },
+  light: {
+    bubble: 0x4a4a58, dots: 0x70708a, z: 0x5a5aa8, star: 0xe0a000, silhouette: 0x2e2e3a,
+    pencil: 0xe08a00, lens: 0x2a7ad0, shell: 0x1f9a4a, ball: 0xa8a8b4, wrench: 0x6a6a80, party: 0x5c5c74,
+  },
+}
 const UPPER_HALF = 0x2580
 const LOWER_HALF = 0x2584
 const SPACE = 0x20
@@ -54,6 +72,12 @@ let variant = 'default'
 let wander = true
 let working = false
 let thinking = false
+const runningTools = new Map()
+let toolCalls = 0
+const alertTools = new Set()
+let alertUntil = 0
+let idleAlertAt = null
+let party = []
 let bandId = null
 let columns = STRIP_COLUMNS
 let tick = 0
@@ -70,6 +94,13 @@ let yumUntil = 0
 let attack = null
 let nowMs = 0
 let stats = {}
+let needsOn = true
+let evolving = null
+let evolveDue = null
+let joyHopAt = null
+let ink = INKS.dark
+let sentCells = null
+let maxRows = Infinity
 
 // Palette letter to 0xRRGGBB, per mon and variant
 const COLORS = Object.fromEntries(
@@ -88,6 +119,10 @@ const COLORS = Object.fromEntries(
 
 const spriteRows = (name) => Math.ceil(SPRITES[name].height / 2)
 const rowsOf = (name) => HEAD_ROWS + spriteRows(name)
+// While a mon evolves, the band is tall enough for both shapes
+const bandRows = () => (evolving ? Math.max(rowsOf(evolving.from), rowsOf(evolving.into)) : rowsOf(mon))
+// The band's size on screen, shrunk to fit a short pane, or null when only the badge fits
+const bandZoom = () => zoomFor({ columns, rows: bandRows(), maxRows })
 
 // The right edge of the strip, where the sprite idles
 const homeX = () => columns - SPRITES[mon].width
@@ -112,7 +147,7 @@ function idleTarget() {
 }
 
 function isWalking() {
-  if (attack) return false
+  if (attack || isAlerted()) return false
   return food ? idleTarget() !== x : working || idleTarget() !== x
 }
 
@@ -135,16 +170,37 @@ function frameAt(anim, elapsed) {
 const BUBBLE = ['.WWWWWWW.', 'W.......W', 'W.......W', 'W.......W', 'W.......W', 'W.......W', 'W.......W', '.WWWWWWW.']
 const BUBBLE_WIDTH = BUBBLE[0].length
 const BUBBLE_TAIL_ROW = 2
-const WHITE = 0xf0f0f0
 const BUBBLE_ICONS = {
   food: { rows: ['.rgr.', 'rrrrr', '.rrr.', '..r..'], colors: { r: 0xd84040, g: 0x6ab04c } },
   happiness: { rows: ['pp.pp', 'ppppp', '.ppp.', '..p..'], colors: { p: 0xff6fa8 } },
-  yum: { rows: ['..s..', 'sssss', '.sss.', '.s.s.'], colors: { s: 0xffd54f } },
 }
-const DOT_COLOR = 0x9a9ab0
+const STAR = ['..s..', 'sssss', '.sss.', '.s.s.']
 const SMALL_Z = ['zzz', '.z.', 'zzz']
 const BIG_Z = ['zzzz', '..z.', '.z..', 'zzzz']
-const Z_COLOR = 0xe8e8ff
+// The "!" of a trainer who spots you, shown while Claude waits on you
+const ALERT_ICON = { rows: ['..a..', '..a..', '.....', '..a..'], colors: { a: 0xff3d3d } }
+// What the bubble shows while a tool runs: a pencil (p body, e eraser, t wood, g lead),
+// a magnifier (l rim, h handle), a shell prompt (s), a Poké Ball (r top, k band,
+// w button, b bottom), or a wrench (m) for every other tool, MCP tools included
+const TOOL_ICONS = {
+  pencil: ['...pe', '..pp.', '.pp..', 'gt...'],
+  lens: ['.ll..', 'l..l.', '.llh.', '....h'],
+  shell: ['s....', '.s...', 's....', '..sss'],
+  ball: ['.rrr.', 'rrrrr', 'kkwkk', '.bbb.'],
+  wrench: ['..m.m', '..mmm', '.m...', 'm....'],
+}
+const TOOL_KINDS = {
+  pencil: ['Edit', 'Write', 'NotebookEdit', 'MultiEdit'],
+  lens: ['Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch', 'LSP'],
+  shell: ['Bash', 'PowerShell', 'Monitor', 'BashOutput', 'KillShell'],
+  ball: ['Agent', 'Task', 'SendMessage', 'Workflow'],
+}
+// Tools that ask you something, and notifications that wait on you
+const QUESTION_TOOLS = ['AskUserQuestion', 'ExitPlanMode']
+const ALERT_NOTIFICATIONS = ['permission_prompt', 'worker_permission_prompt', 'agent_needs_input', 'elicitation_dialog']
+// A minute after a turn with no word from you, the "!" shows for two
+const IDLE_WAIT_MS = 60 * 1000
+const IDLE_ALERT_MS = 2 * 60 * 1000
 
 const stamp = (x, y, rows, colors) => ({ x, y, rows, colors })
 
@@ -160,16 +216,59 @@ function stampPixel(s, cx, py) {
 function dotsIcon() {
   const dots = 1 + (Math.floor((tick * TICK_MS) / 400) % 3)
   const row = ['d', '.', 'd', '.', 'd'].map((ch, i) => (i / 2 < dots ? ch : '.')).join('')
-  return { rows: ['.....', '.....', row, '.....'], colors: { d: DOT_COLOR } }
+  return { rows: ['.....', '.....', row, '.....'], colors: { d: ink.dots } }
+}
+
+// The icon of the main loop's most recently started tool that is still running
+function toolIcon() {
+  const name = [...runningTools.values()].pop()
+  const kind = Object.keys(TOOL_KINDS).find((k) => TOOL_KINDS[k].includes(name)) ?? 'wrench'
+  const colors = {
+    p: ink.pencil, e: 0xf27a98, t: 0xd09860, g: 0x767688,
+    l: ink.lens, h: 0xb07040,
+    s: ink.shell,
+    r: 0xee4444, k: 0x60606c, w: 0xfafafc, b: ink.ball,
+    m: ink.wrench,
+  }
+  return { rows: TOOL_ICONS[kind], colors }
 }
 
 // What the bubble beside the head shows, if anything
 function bubbleIcon() {
   if (attack) return null
-  if (tick < yumUntil) return BUBBLE_ICONS.yum
+  if (isAlerted()) return ALERT_ICON
+  if (tick < yumUntil) return { rows: STAR, colors: { s: ink.star } }
+  if (working && runningTools.size > 0) return toolIcon()
   if (working && thinking) return dotsIcon()
-  const need = needNow()
+  const need = needsOn && needNow()
   return need ? BUBBLE_ICONS[need] : null
+}
+
+// The mon calls you over while a dialog waits on a call to one of alertTools,
+// or until a notification's alert runs out at alertUntil
+const isAlerted = () => alertTools.size > 0 || tick < alertUntil
+
+// Wake up, stand still facing you, and show the "!" until a call to the tool
+// resolves or the ticks run out, or until you answer first
+function raiseAlert({ tool, ticks }) {
+  markActive()
+  if (tool !== undefined) alertTools.add(tool)
+  if (ticks !== undefined) alertUntil = Math.max(alertUntil, tick + ticks)
+}
+
+// Typing, sending, any /pokemon command, or the end of Claude's turn answers the "!",
+// and the idle "!" waiting to show
+function clearAlert() {
+  alertTools.clear()
+  alertUntil = 0
+  idleAlertAt = null
+}
+
+// Raise the idle "!" once its minute is up, unless a turn is running by then
+function stepIdleAlert() {
+  if (idleAlertAt === null || tick < idleAlertAt) return
+  idleAlertAt = null
+  if (!working) raiseAlert({ ticks: IDLE_ALERT_MS / TICK_MS })
 }
 
 // A framed thought bubble beside the head, on the left when there's room,
@@ -180,8 +279,8 @@ function bubbleStamps(icon, head) {
   const left = onLeft ? head[0] - span : head[1] + 4
   const tail = onLeft ? head[0] - 2 : head[1] + 2
   return [
-    stamp(left, 0, BUBBLE, { W: WHITE }),
-    stamp(tail, BUBBLE_TAIL_ROW, ['w'], { w: WHITE }),
+    stamp(left, 0, BUBBLE, { W: ink.bubble }),
+    stamp(tail, BUBBLE_TAIL_ROW, ['w'], { w: ink.bubble }),
     stamp(left + 2, 2, icon.rows, icon.colors),
   ]
 }
@@ -190,8 +289,8 @@ function bubbleStamps(icon, head) {
 function sleepStamps(head) {
   const phase = Math.floor((tick * TICK_MS) / 700) % 3
   const onLeft = head[0] - 9 >= 0
-  const small = stamp(onLeft ? head[0] - 4 : head[1] + 2, 4, SMALL_Z, { z: Z_COLOR })
-  const big = stamp(onLeft ? head[0] - 8 : head[1] + 5, 0, BIG_Z, { z: Z_COLOR })
+  const small = stamp(onLeft ? head[0] - 4 : head[1] + 2, 4, SMALL_Z, { z: ink.z })
+  const big = stamp(onLeft ? head[0] - 8 : head[1] + 5, 0, BIG_Z, { z: ink.z })
   return phase === 0 ? [small] : [small, big]
 }
 
@@ -201,7 +300,7 @@ function pet() {
   petUntil = tick + PET_TICKS
   hopStart = tick
   const width = SPRITES[mon].width
-  const lowest = rowsOf(mon) * 2 - 6
+  const lowest = bandRows() * 2 - 6
   for (let k = 0; k < HEART_COUNT; k++) {
     hearts.push({
       x: x - 2 + Math.floor(Math.random() * (width + 2)),
@@ -228,7 +327,7 @@ function feed() {
 
 // The berry's top pixel row: falling a pixel every few ticks until it rests on the ground
 function foodTop() {
-  const ground = rowsOf(mon) * 2 - BERRY_SIZE
+  const ground = bandRows() * 2 - BERRY_SIZE
   return Math.min(ground, -BERRY_SIZE + Math.floor((tick - food.born) / FALL_TICKS))
 }
 
@@ -250,7 +349,7 @@ function foodPixel(cx, py) {
 // Walk to the berry once it lands, eat it, then hop with a "yum!"
 function stepFood() {
   markActive()
-  const landed = foodTop() === rowsOf(mon) * 2 - BERRY_SIZE
+  const landed = foodTop() === bandRows() * 2 - BERRY_SIZE
   if (food.eatStart !== null) {
     if (tick - food.eatStart < EAT_TICKS) return
     food = null
@@ -281,33 +380,134 @@ function heartStamps() {
   return out
 }
 
-// Start one of the mon's moves, aimed the way it walks, or toward the roomier side
-// when it stands still. The move takes over the body, so a hop in progress stops.
+// The strip edge behind a mon aiming at side, where it backs up to before the move
+const edgeBehind = (side) => (side === 'left' ? homeX() : 0)
+
+const isBackingUp = () => attack !== null && attack.backing === true
+
+// Start one of the mon's moves, aimed at the roomier side. A move aimed ahead first
+// backs the mon up to the edge behind it, so it plays with the whole strip ahead, the
+// way it was tuned. A move on itself plays where the mon stands. The move takes over
+// the body, so a hop in progress stops.
 function startAttack(move) {
   markActive()
+  clampX()
   wanderTarget = null
   hopStart = -HOP_TICKS
-  const room = columns - SPRITES[mon].width - x
-  const side = isWalking() ? facing : x >= room ? 'left' : 'right'
+  const side = x >= homeX() - x ? 'left' : 'right'
   const seed = Math.floor(Math.random() * 0x7fffffff)
   const others = MONS.filter((name) => name !== mon)
   const fitting = others.filter((name) => spriteRows(name) <= spriteRows(mon))
   const pool = fitting.length > 0 ? fitting : others
-  attack = {
-    ...prepareAttack(move, { side, seed, x, home: homeX() }),
-    start: tick,
-    swap: pool[Math.floor(Math.random() * pool.length)],
-  }
+  const aimed = attackPose(prepareAttack(move, { side, seed, x, home: homeX() }), 0).view === 'side'
+  attack = { move, side, seed, start: tick, backing: true, swap: pool[Math.floor(Math.random() * pool.length)] }
+  if (!aimed || x === edgeBehind(side)) playMove()
 }
 
-// Hold still while the attack plays, then land wherever it left the mon
+// Settle the move from where the mon stands now, and start it
+function playMove() {
+  const { move, side, seed } = attack
+  Object.assign(attack, prepareAttack(move, { side, seed, x, home: homeX() }), { start: tick, backing: false })
+}
+
+// Back up a pixel a tick and start the move at the edge, hold still while it plays,
+// then land wherever it left the mon
 function stepAttack() {
   markActive()
+  if (isBackingUp()) {
+    x += Math.sign(edgeBehind(attack.side) - x)
+    if (x === edgeBehind(attack.side)) playMove()
+    return
+  }
   if (tick - attack.start < attack.ticks) return
   if (attack.toX !== null) x = attack.toX
   facing = attack.side
   attack = null
   clampX()
+}
+
+// A due evolution waits until the mon is idle, awake, not calling you over, and done
+// with any move or berry
+const isFree = () => !working && !attack && !food && !isAsleep() && !isAlerted()
+
+// Petting, feeding, attacking, and switching mons wait while it evolves
+const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'attack']
+const waitsForEvolution = (asked) => evolving !== null && (MONS.includes(asked) || WAITS_FOR_EVOLUTION.includes(asked.split(' ')[0]))
+
+// Play the evolve effect with the evolved mon swapped in, in a band grown to fit both
+function startEvolution($, into) {
+  $.ui.toast('What? ' + displayName(mon) + ' is evolving!')
+  startAttack({ effect: 'evolve', color: ink.silhouette })
+  attack.swap = into
+  evolving = { from: mon, into }
+  evolveDue = null
+  $.ui.invalidate('ui.render')
+}
+
+// Start a due evolution once the mon is free, and finish one whose effect is over
+function stepEvolution($) {
+  if (evolving && !attack) finishEvolution($)
+  else if (evolveDue && isFree()) startEvolution($, evolveDue)
+}
+
+// The mon becomes the evolved one. Its record moves along, so level, XP, and meters carry over.
+function finishEvolution($) {
+  const { from, into } = evolving
+  const wasHome = isHome()
+  evolving = null
+  mon = into
+  if (wasHome) x = homeX()
+  clampX()
+  stats[into] = { ...stats[from], xp: xpOf(from) }
+  delete stats[from]
+  $.store.set('mon', mon).catch((err) => logOnce($, err))
+  $.store.set('stats', stats).catch((err) => logOnce($, err))
+  $.ui.toast('Congratulations! Your ' + displayName(from) + ' evolved into ' + displayName(into) + '!')
+  $.ui.invalidate('ui.render')
+}
+
+// Call off an evolution under way or due. The mon stays as it is.
+function stopEvolution($) {
+  const name = displayName(mon)
+  if (!evolving && !evolveDue) return { text: name + ' isn\'t evolving.' }
+  if (evolving) attack = null
+  evolving = null
+  evolveDue = null
+  $.ui.invalidate('ui.render')
+  return { text: 'Huh? ' + name + ' stopped evolving!' }
+}
+
+// Joins items as "A", "A or B", or "A, B, or C"
+const orList = (items) => (items.length < 3 ? items.join(' or ') : items.slice(0, -1).join(', ') + ', or ' + items.at(-1))
+
+// How one entry evolves the mon, like "Jolteon with a Thunder Stone"
+function evolutionText(entry) {
+  const into = displayName(entry.into)
+  if (entry.item) return into + ' with a ' + entry.item
+  return entry.trade ? into + ' by trade' : into + ' at Lv. ' + entry.level
+}
+
+// A stone, a trade, or a level the mon has reached starts its evolution now. Several
+// ways and none named get a list.
+function evolveCommand($, wanted) {
+  const name = displayName(mon)
+  const entries = evolutionsOf(mon)
+  if (entries.length === 0) return { text: name + ' doesn\'t evolve.' }
+  if (attack || food) return { text: name + ' is busy right now.' }
+  const picked = wanted ? entries.filter((entry) => moveKey(entry.into) === moveKey(wanted)) : entries
+  if (picked.length !== 1) {
+    const example = entries[Math.floor(Math.random() * entries.length)].into
+    return { text: name + ' can become ' + orList(entries.map(evolutionText)) + '. Try /pokemon evolve ' + example + '.' }
+  }
+  const [entry] = picked
+  const level = levelOf(mon)
+  if (entry.level && level < entry.level) {
+    return { text: name + ' evolves into ' + displayName(entry.into) + ' at Lv. ' + entry.level + '. It\'s Lv. ' + level + '.' }
+  }
+  startEvolution($, entry.into)
+  if (entry.item) return { text: 'You use a ' + entry.item + ' on ' + name + '.' }
+  if (entry.trade) return { text: 'You trade ' + name + ' to a friend, and they trade it right back.' }
+  return { text: 'You let ' + name + ' evolve.' }
 }
 
 // The first and last opaque pixel columns and rows of a frame, cached per frame
@@ -353,6 +553,8 @@ function needNow() {
 }
 
 const NO_POSE = { view: 'front', stride: false, swap: false, asleep: false }
+// Backing up for a move: side on and striding, facing the target
+const BACKING_POSE = { ...NO_POSE, view: 'side', stride: true }
 const NO_EFFECT = {
   dots: [], under: [], chars: [], ghosts: [], hidden: false,
   dx: 0, dy: 0, sx: 1, sy: 1, flipX: false, flipY: false, skew: null, shade: null, shake: [0, 0],
@@ -447,8 +649,9 @@ function ghostPixel(ghosts, pixel, box, width, flip, baseX, baseTop) {
 
 // Pack the current frame into Raster cells, two pixels per cell with half blocks
 function cellsNow() {
+  const playing = attack !== null && !isBackingUp()
   const age = attack ? tick - attack.start : 0
-  const pose = attack ? attackPose(attack, age) : NO_POSE
+  const pose = playing ? attackPose(attack, age) : attack ? BACKING_POSE : NO_POSE
   const shown = pose.swap ? attack.swap : mon
   const sprite = SPRITES[shown]
   const sheet = sprite.variants[variant]
@@ -463,10 +666,11 @@ function cellsNow() {
   const colors = COLORS[shown][variant]
   // Facing out, the sprite stays unmirrored like the idle mon, so it doesn't jump when the move ends
   const flip = attack ? sideOn && attack.side === 'left' : walking && facing === 'left'
-  const rows = rowsOf(mon)
-  // A swapped-in mon stands on the same ground and stays inside the strip
+  const rows = bandRows()
+  // A swapped-in mon stands on the same ground and stays inside the strip. An evolving
+  // mon at home keeps to the right edge in either shape.
   const baseTop = (rows - spriteRows(shown)) * 2
-  const baseX = Math.max(0, Math.min(x, columns - sprite.width))
+  const baseX = Math.max(0, Math.min(evolving && isHome() ? columns : x, columns - sprite.width))
   const pixelOf = (mirror) => (px, py) => {
     if (px < 0 || px >= sprite.width || py < 0) return null
     const row = frame[py]
@@ -474,7 +678,7 @@ function cellsNow() {
     return colors[row[mirror ? sprite.width - 1 - px : px]] ?? null
   }
   const pixel = pixelOf(flip)
-  const effect = attack ? attackFrame(attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel)) : NO_EFFECT
+  const effect = playing ? attackFrame(attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel)) : NO_EFFECT
   const overlay = overlayOf(effect.dots, rows)
   const underlay = overlayOf(effect.under, rows)
   const hopUp = !attack && isHopping() && Math.floor((tick - hopStart) / 3) % 2 === 0
@@ -486,12 +690,9 @@ function cellsNow() {
   const ghost = ghostPixel(effect.ghosts, pixel, box, sprite.width, flip, baseX, baseTop)
   const head = headColumns(pixel, sprite.width, left)
   const icon = bubbleIcon()
-  const floating = new Map()
   const over = heartStamps()
-  for (let k = 0; k < effect.chars.length; k += 4) {
-    floating.set(effect.chars[k] + ',' + effect.chars[k + 1], [effect.chars[k + 2], effect.chars[k + 3]])
-  }
-  const under = [...(icon ? bubbleStamps(icon, head) : []), ...(asleep ? sleepStamps(head) : [])]
+  const balls = partyStamps(party, tick, { columns, ground: rows * 2 - 1, label: ink.party })
+  const under = [...(icon ? bubbleStamps(icon, head) : []), ...(asleep ? sleepStamps(head) : []), ...balls]
   const pixels = rows * 2
   const colorAt = (cx, py) => {
     if (py < 0 || py >= pixels) return null
@@ -517,19 +718,23 @@ function cellsNow() {
     return null
   }
 
+  // Shake the full-size scene, then shrink it to the band's size on screen
   const [shakeX, shakeY] = effect.shake
-  const words = new Uint32Array(columns * rows * 3)
-  for (let cy = 0; cy < rows; cy++) {
-    for (let cx = 0; cx < columns; cx++) {
-      const i = (cy * columns + cx) * 3
-      const sx = cx - shakeX
-      if (sx < 0 || sx >= columns) {
-        words.set([SPACE, DEFAULT_COLOR, DEFAULT_COLOR], i)
-        continue
-      }
-      const upper = colorAt(sx, cy * 2 - shakeY)
-      const lower = colorAt(sx, cy * 2 + 1 - shakeY)
-      const glyph = floating.get(sx + ',' + cy)
+  const zoom = bandZoom() ?? { scale: 1, columns, rows }
+  const shaken = (cx, py) => (cx - shakeX < 0 || cx - shakeX >= columns ? null : colorAt(cx - shakeX, py - shakeY))
+  const at = zoomedPixel(shaken, { columns, pixels, scale: zoom.scale })
+  const glyphs = new Map()
+  for (let k = 0; k < effect.chars.length; k += 4) {
+    const gx = zoomedAt(effect.chars[k] + shakeX, zoom.scale)
+    glyphs.set(gx + ',' + zoomedAt(effect.chars[k + 1], zoom.scale), [effect.chars[k + 2], effect.chars[k + 3]])
+  }
+  const words = new Uint32Array(zoom.columns * zoom.rows * 3)
+  for (let cy = 0; cy < zoom.rows; cy++) {
+    for (let cx = 0; cx < zoom.columns; cx++) {
+      const i = (cy * zoom.columns + cx) * 3
+      const upper = at(cx, cy * 2)
+      const lower = at(cx, cy * 2 + 1)
+      const glyph = glyphs.get(cx + ',' + cy)
       if (glyph) words.set([glyph[0], glyph[1], upper ?? lower ?? DEFAULT_COLOR], i)
       else if (upper !== null) words.set([UPPER_HALF, upper, lower ?? DEFAULT_COLOR], i)
       else if (lower !== null) words.set([LOWER_HALF, lower, DEFAULT_COLOR], i)
@@ -556,11 +761,16 @@ function step() {
   tick += 1
   nowMs += TICK_MS
   hearts = hearts.filter((heart) => tick - heart.born <= (heart.y + heart.rows.length) * HEART_RISE_TICKS)
+  party = prunedParty(party, tick)
+  stepIdleAlert()
   if (attack) return stepAttack()
+  // Calling you over, it stays awake and stands still, even with a berry to eat
+  if (isAlerted()) return markActive()
   if (food) return stepFood()
   if (working) markActive()
   planWander()
-  if (tick % MOVE_TICKS !== 0) return
+  hopForJoy()
+  if (tick % moveTicks() !== 0) return
 
   if (working) {
     if (facing === 'left' && x <= 0) facing = 'right'
@@ -593,6 +803,9 @@ const PET_HAPPINESS = 25
 const NEEDY_BELOW = 30
 const STAT_ICONS = 5
 const STAT_REDRAW_TICKS = 1200
+const HUNGRY_MOVE_TICKS = 5
+const HAPPY_FROM = 80
+const JOY_HOP_TICKS = [400, 800]
 
 const clampStat = (v) => Math.max(0, Math.min(100, v))
 
@@ -613,15 +826,76 @@ function iconsFor(key) {
   return STATS[key].icon.repeat(filled) + STATS[key].emptyIcon.repeat(STAT_ICONS - filled)
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'pet', 'feed', 'attack', 'list']
+// XP lives in each mon's record. A mon that hasn't earned any starts at its first level.
+const xpOf = (name) => stats[name]?.xp ?? xpAt(startLevel(name))
+const levelOf = (name) => levelAt(xpOf(name))
+
+// The level line above the meters, five columns wide like them
+const levelLine = () => (levelOf(mon) < MAX_LEVEL ? 'Lv ' : 'Lv') + levelOf(mon)
+
+// An answered turn earns XP, scaled by care. A level-up toasts the new level once, and
+// an evolution it reaches is due.
+async function gainXp($, durationMs) {
+  nowMs = await $.clock.now()
+  const was = levelOf(mon)
+  const care = needsOn ? careOf(statNow(mon, 'food'), statNow(mon, 'happiness')) : 1
+  stats[mon] = { ...stats[mon], xp: xpOf(mon) + turnXp({ level: was, durationMs, care }) }
+  await $.store.set('stats', stats)
+  const level = levelOf(mon)
+  if (level === was) return
+  $.ui.toast(displayName(mon) + ' grew to Lv. ' + level + '!')
+  $.ui.invalidate('ui.render')
+  const evolution = levelEvolutionOf(mon)
+  if (evolution && level >= evolution.level && !evolving) evolveDue = evolution.into
+}
+
+// Like "Pikachu, Lv. 12, 1820 XP (377 to Lv. 13). Can become Raichu with a Thunder Stone.
+// Food 50%, happiness 67%. 12 pets, 5 feeds."
+async function statsText($) {
+  const level = levelOf(mon)
+  const next = level < MAX_LEVEL ? ' (' + (xpAt(level + 1) - xpOf(mon)) + ' to Lv. ' + (level + 1) + ')' : ''
+  const evolutions = evolutionsOf(mon)
+  const becomes = evolutions.length > 0 ? ' Can become ' + orList(evolutions.map(evolutionText)) + '.' : ''
+  const meters = needsOn
+    ? ' Food ' + Math.round(statNow(mon, 'food')) + '%, happiness ' + Math.round(statNow(mon, 'happiness')) + '%.'
+    : ' Needs are off.'
+  const pets = Number((await $.store.get('pets')) ?? 0)
+  const feeds = Number((await $.store.get('feeds')) ?? 0)
+  return displayName(mon) + ', Lv. ' + level + ', ' + xpOf(mon) + ' XP' + next + '.' + becomes + meters + ' ' + pets + ' pets, ' + feeds + ' feeds.'
+}
+
+// A hungry mon drags its feet, except on its way to a berry
+const moveTicks = () => (needsOn && statNow(mon, 'food') < NEEDY_BELOW ? HUNGRY_MOVE_TICKS : MOVE_TICKS)
+
+// A happy mon hops for joy every 20 to 40 seconds while idle and awake
+function hopForJoy() {
+  if (!needsOn || working || isAsleep() || statNow(mon, 'happiness') < HAPPY_FROM) {
+    joyHopAt = null
+  } else if (joyHopAt === null) {
+    joyHopAt = tick + JOY_HOP_TICKS[0] + Math.floor(Math.random() * (JOY_HOP_TICKS[1] - JOY_HOP_TICKS[0]))
+  } else if (tick >= joyHopAt) {
+    hopStart = tick
+    joyHopAt = null
+  }
+}
+
+const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'pet', 'feed', 'attack', 'moves', 'evolve', 'stop', 'stats', 'list']
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
 const moveKey = (name) => name.toLowerCase().replace(/[\s\-_'.]/g, '')
 
-// Play a random move, or the one named, and announce it
+// A mon's moves, like "Pikachu knows Thunderbolt, Quick Attack, Thunder, Agility."
+function movesText(name) {
+  const known = movesOf(name)
+  const moves = known.length > 0 ? known : FALLBACK_MOVES
+  return { text: displayName(name) + ' knows ' + moves.map((m) => m.name).join(', ') + '.' }
+}
+
+// Play a random move, or the one named, and announce it. "list" lists the moves instead.
 function attackCommand(wanted) {
   const name = displayName(mon)
+  if (wanted === 'list') return movesText(mon)
   if (attack) return { text: name + ' is still attacking.' }
   if (food) return { text: name + ' is busy eating.' }
   const known = movesOf(mon)
@@ -632,11 +906,48 @@ function attackCommand(wanted) {
   return { text: name + ' used ' + move.name + '!' + (move.text ? '\n' + move.text : '') }
 }
 
+// Send the frame only when it differs from the last one sent or drawn
+function blitFrame($) {
+  const zoom = bandZoom()
+  if (!zoom) return
+  const cells = cellsNow()
+  if (cells === sentCells) return
+  sentCells = cells
+  $.ui.blit({ requestId: bandId, key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells })
+}
+
+// Ticks stop while the machine sleeps, so the meters resync with the real clock
+async function resyncMeters($) {
+  nowMs = await $.clock.now()
+  $.ui.invalidate('ui.render')
+}
+
+// A broken frame goes to the debug log, each distinct message once
+const logged = new Set()
+function logOnce($, err) {
+  const message = String(err?.message ?? err)
+  if (logged.has(message)) return
+  logged.add(message)
+  $.ui.log('pokemon: ' + message, { to: 'debug' })
+}
+
+// Any light theme takes the light ink. Every other theme, or none, takes the dark.
+const inkFor = (theme) => (typeof theme === 'string' && theme.startsWith('light') ? INKS.light : INKS.dark)
+
+async function themeInk($) {
+  try {
+    const rows = await $.config.list()
+    return inkFor(rows.find((row) => row.key === 'theme')?.value)
+  } catch {
+    return INKS.dark
+  }
+}
+
 export function register(on) {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'pokemon',
-      description: 'Pick the Pokémon above the prompt, switch it to shiny, let it wander, pet it, feed it, or make it attack',
+      description: 'Pick the Pokémon above the prompt, pet it, feed it, make it attack, list its moves, or evolve it',
       argumentHint: '[' + OPTIONS.join('|') + ']',
       immediate: true,
     })
@@ -645,25 +956,43 @@ export function register(on) {
     const savedVariant = await $.store.get('variant')
     if (VARIANTS.includes(savedVariant)) variant = savedVariant
     wander = (await $.store.get('wander')) !== false
+    needsOn = (await $.store.get('needs')) !== false
     const savedStats = await $.store.get('stats')
     if (savedStats && typeof savedStats === 'object') stats = savedStats
     nowMs = await $.clock.now()
+    ink = await themeInk($)
     $.clock.every(TICK_MS, () => {
-      step()
-      if (tick % STAT_REDRAW_TICKS === 0) $.ui.invalidate('ui.render')
-      if (bandId !== null) {
-        $.ui.blit({ requestId: bandId, key: 'pokemon', columns, rows: rowsOf(mon), cells: cellsNow() })
+      try {
+        step()
+        stepEvolution($)
+        if (tick % STAT_REDRAW_TICKS === 0) resyncMeters($).catch((err) => logOnce($, err))
+        if (bandId !== null) blitFrame($)
+      } catch (err) {
+        logOnce($, err)
       }
     })
     return next(e)
   })
 
+  // Follow the theme, so the bubble and the Zs stay visible on its background
+  on('config.set', { key: 'theme' }, async ($, e, next) => {
+    const result = await next(e)
+    if (result?.value !== undefined) {
+      ink = inkFor(result.value)
+      $.ui.invalidate('ui.render')
+    }
+    return result
+  })
+
   on('command.run', { command: 'pokemon' }, async ($, e) => {
     markActive()
+    clearAlert()
     nowMs = await $.clock.now()
     const asked = e.args.trim().toLowerCase()
+    if (waitsForEvolution(asked)) return { text: displayName(mon) + ' is evolving! /pokemon stop cancels it.' }
     if (MONS.includes(asked)) {
       const wasHome = isHome()
+      evolveDue = null
       mon = asked
       if (wasHome) x = homeX()
       clampX()
@@ -675,7 +1004,7 @@ export function register(on) {
       wander = !wander
       wanderTarget = null
       await $.store.set('wander', wander)
-      return { text: wander ? mon + ' is free to wander.' : mon + ' is heading home.' }
+      return { text: displayName(mon) + (wander ? ' is free to wander.' : ' is heading home.') }
     } else if (asked === 'pet') {
       pet()
       bumpStat('happiness', PET_HAPPINESS)
@@ -684,9 +1013,9 @@ export function register(on) {
       const pets = Number((await $.store.get('pets')) ?? 0) + 1
       await $.store.set('pets', pets)
       const line = PET_LINES[Math.floor(Math.random() * PET_LINES.length)]
-      return { text: mon + ' ' + line + ' ❤ (pets: ' + pets + ')' }
+      return { text: displayName(mon) + ' ' + line + ' ❤ (pets: ' + pets + ')' }
     } else if (asked === 'feed') {
-      if (food) return { text: mon + ' is still busy with the last one.' }
+      if (food) return { text: displayName(mon) + ' is still busy with the last one.' }
       const berry = feed()
       bumpStat('food', FEED_FOOD)
       bumpStat('happiness', FEED_HAPPINESS)
@@ -695,9 +1024,25 @@ export function register(on) {
       const feeds = Number((await $.store.get('feeds')) ?? 0) + 1
       await $.store.set('feeds', feeds)
       const article = /^[aeiou]/.test(berry.name) ? 'an ' : 'a '
-      return { text: 'You toss ' + mon + ' ' + article + berry.name + ' ' + berry.emoji + ' (feeds: ' + feeds + ')' }
+      return { text: 'You toss ' + displayName(mon) + ' ' + article + berry.name + ' ' + berry.emoji + ' (feeds: ' + feeds + ')' }
     } else if (asked === 'attack' || asked.startsWith('attack ')) {
       return attackCommand(asked.slice('attack'.length).trim())
+    } else if (asked === 'moves' || asked.startsWith('moves ')) {
+      const whose = asked.slice('moves'.length).trim() || mon
+      if (!MONS.includes(whose)) return { text: 'Unknown mon "' + whose + '". See /pokemon list for every mon.' }
+      return movesText(whose)
+    } else if (asked === 'needs') {
+      needsOn = !needsOn
+      await $.store.set('needs', needsOn)
+      $.ui.invalidate('ui.render')
+      const name = displayName(mon)
+      return { text: needsOn ? 'Needs are on. Keep ' + name + ' fed and happy.' : 'Needs are off. ' + name + ' won\'t get hungry or lonely.' }
+    } else if (asked === 'evolve' || asked.startsWith('evolve ')) {
+      return evolveCommand($, asked.slice('evolve'.length).trim())
+    } else if (asked === 'stop') {
+      return stopEvolution($)
+    } else if (asked === 'stats') {
+      return { text: await statsText($) }
     } else if (asked === 'list') {
       return { text: MONS.length + ' mons: ' + MONS.join(', ') }
     } else if (asked) {
@@ -705,20 +1050,23 @@ export function register(on) {
     } else {
       const mode = wander ? ', wandering' : ''
       const levels = 'food ' + Math.round(statNow(mon, 'food')) + '%, happiness ' + Math.round(statNow(mon, 'happiness')) + '%'
-      return { text: 'Showing ' + variant + ' ' + mon + mode + ' (' + levels + '). Options: ' + OPTIONS.join(', ') + '.' }
+      const shown = displayName(mon) + ' Lv. ' + levelOf(mon)
+      return { text: 'Showing ' + variant + ' ' + shown + mode + ' (' + (needsOn ? levels : 'needs off') + '). Options: ' + OPTIONS.join(', ') + '.' }
     }
     $.ui.invalidate('ui.render')
-    return { text: 'Now showing ' + variant + ' ' + mon + '.' }
+    return { text: 'Now showing ' + variant + ' ' + displayName(mon) + '.' }
   })
 
-  // Typing or sending a prompt wakes the mon up
+  // Typing or sending a prompt wakes the mon up and answers its "!"
   on('prompt.edit', async ($, e, next) => {
     markActive()
+    clearAlert()
     return next(e)
   })
 
   on('prompt.submit', async ($, e, next) => {
     markActive()
+    clearAlert()
     return next(e)
   })
 
@@ -728,11 +1076,19 @@ export function register(on) {
     return next(e)
   })
 
-  // Hop when the main agent's turn ends, unless it was interrupted
+  // The main agent's turn ending answers any "!" and starts the idle minute. The mon
+  // hops unless the turn was interrupted, and earns XP when it answered. A subagent's
+  // turn ending pops its Poké Ball.
   on('turn.complete', async ($, e, next) => {
     thinking = false
     markActive()
-    if (!e.agentId && !e.isAborted) hopStart = tick
+    if (e.agentId) party = leaveParty(party, e.agentId, tick)
+    if (!e.agentId) clearAlert()
+    if (!e.agentId && !e.isAborted) {
+      hopStart = tick
+      idleAlertAt = tick + IDLE_WAIT_MS / TICK_MS
+    }
+    if (!e.agentId && e.reason === 'answer') await gainXp($, e.durationMs ?? 0).catch((err) => logOnce($, err))
     return next(e)
   })
 
@@ -746,19 +1102,32 @@ export function register(on) {
     working = e.props.isWorking
     if (!working) thinking = false
     bandId = e.requestId
+    maxRows = e.props.maxRows
     columns = Math.max(SPRITES[mon].width, Math.min(STRIP_COLUMNS, e.props.bodyColumns))
     if (wasHome) x = homeX()
     clampX()
 
-    const sprite = Raster({ key: 'pokemon', columns, rows: rowsOf(mon), cells: cellsNow() })
-    const meter = (key) => Text({ color: STATS[key].color, children: [iconsFor(key)] })
-    const meters = Box({
-      flexDirection: 'column',
-      justifyContent: 'flex-end',
-      paddingLeft: 1,
-      children: [meter('food'), meter('happiness')],
-    })
-    const corner = e.props.bodyColumns >= columns + STAT_ICONS + 1 ? [sprite, meters] : [sprite]
+    const meter = (key, lead = '') => Text({ color: STATS[key].color, children: [lead + iconsFor(key)] })
+    const level = Text({ dimColor: true, children: [levelLine()] })
+    const zoom = bandZoom()
+    let corner
+    if (zoom) {
+      sentCells = cellsNow()
+      const sprite = Raster({ key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells: sentCells })
+      const meters = Box({
+        flexDirection: 'column',
+        justifyContent: 'flex-end',
+        paddingLeft: 1,
+        children: needsOn ? [level, meter('food'), meter('happiness')] : [level],
+      })
+      corner = e.props.bodyColumns >= zoom.columns + STAT_ICONS + 1 ? [sprite, meters] : [sprite]
+    } else {
+      // Too short even for a shrunk mon: its name, level, and meters on one line, and no blits
+      bandId = null
+      const name = Text({ children: [displayName(mon) + ' ' + levelLine()] })
+      const meters = needsOn ? [meter('food', ' '), meter('happiness', ' ')] : []
+      corner = [Box({ flexDirection: 'row', children: [name, ...meters] })]
+    }
 
     const theirs = await next(e)
     return Box({
@@ -766,5 +1135,51 @@ export function register(on) {
       justifyContent: theirs ? 'space-between' : 'flex-end',
       children: theirs ? [Box({ flexGrow: 1, children: [theirs] }), ...corner] : corner,
     })
+  })
+
+  // Show the main loop's running tools in the bubble, and call you over while one
+  // asks you something. A call resolving also settles a dialog waiting on its tool.
+  on('tool.call', async ($, e, next) => {
+    const name = String(e.tool)
+    let id = null
+    if (!e.agentId) {
+      toolCalls += 1
+      id = e.tool_use_id ?? toolCalls
+      runningTools.set(id, name)
+      if (QUESTION_TOOLS.includes(name)) raiseAlert({ tool: name })
+    }
+    try {
+      return await next(e)
+    } finally {
+      if (id !== null) runningTools.delete(id)
+      alertTools.delete(name)
+    }
+  })
+
+  // Call you over while a permission dialog waits, until the call it holds resolves.
+  // A hook that decides the request opens no dialog.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    const result = await next(e)
+    if (!result?.decision) raiseAlert({ tool: e.tool_name })
+    return result
+  })
+
+  // Call you over when Claude needs you. The permission reminder comes 6 s into a
+  // dialog PermissionRequest already flagged, so it raises nothing while that alert is up.
+  // The idle reminder has its own timer above, since a policy plugin can keep classic
+  // events from reaching user plugins.
+  on('classic.Notification', async ($, e, next) => {
+    const type = e.notification_type
+    const reminder = type === 'permission_prompt' && alertTools.size > 0
+    if (ALERT_NOTIFICATIONS.includes(type) && !reminder) raiseAlert({ ticks: Infinity })
+    return next(e)
+  })
+
+  // Each subagent the Agent tool starts is a Poké Ball in the party along the left of
+  // the strip, until its turn ends
+  on('agent.spawn', async ($, e, next) => {
+    const result = await next(e)
+    if (result?.agentId) party = joinParty(party, result.agentId, tick)
+    return result
   })
 }
