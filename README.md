@@ -97,12 +97,12 @@ The level shows above the meters as `Lv 12`, and in `/pokemon`.
 ## Install
 
 ```bash
-claude plugin marketplace add dgokcin/claude-pokemon
+claude plugin marketplace add dgokcin/claude-pokemon-mod
 claude plugin install pokemon@claude-pokemon
 ```
 
 To hack on it, clone the repo and add the clone instead
-(`claude plugin marketplace add ./claude-pokemon`). A local marketplace loads the
+(`claude plugin marketplace add ./claude-pokemon-mod`). A local marketplace loads the
 mod in place, so edits apply on `/reload-plugins`.
 
 ## Usage
@@ -231,13 +231,19 @@ its new fit on the next redraw, within a minute.
 | `sprites/<mon>/*.gif` | Source GIFs, 32x32 |
 | `scripts/build-frames.mjs` | Regenerates `frames.js` from the GIFs with ffmpeg |
 | `scripts/preview-attack.mjs` | Renders a move to a PNG contact sheet, one frame per tick |
+| `scripts/check-data.mjs` | Checks that the moves, evolutions, and sprite frames agree |
 | `tests/pokemon.test.ts` | `claude plugin test` suite |
+| `biome.json` | Lint rules |
+| `cliff.toml` | How git-cliff writes `CHANGELOG.md` and release notes |
+| `.github/workflows/ci.yml` | Lint, checks, tests, and releases |
 
 ## Development
 
 ```bash
 node scripts/build-frames.mjs      # after changing sprites/
 node scripts/preview-attack.mjs <mon> <move>   # writes /tmp/<mon>-<move>.png
+node scripts/check-data.mjs        # moves, evolutions, and sprite frames agree
+npx @biomejs/biome@2.5.15 ci .     # lint
 claude plugin validate .
 claude plugin test
 claude --plugin-dir .              # live-reloading session
@@ -245,6 +251,14 @@ claude --plugin-dir .              # live-reloading session
 
 Each terminal cell holds two vertical pixels with `▀`/`▄` half blocks. The
 sprite paces inside a 40 column strip.
+
+CI runs the lint, the table check, and `claude plugin test` on every pull request and
+push to `main`. Commits follow [Conventional Commits](https://www.conventionalcommits.org),
+and a push to `main` that passes releases on its own when it brings a `feat`, `fix`, or
+`perf` commit since the last release. git-cliff works out the version (a feature bumps
+the minor version, a fix the patch), and the release job bumps `plugin.json`, updates
+`CHANGELOG.md`, tags the commit, and publishes the GitHub release. Docs, tests, and
+chores don't release on their own.
 
 ## Credits
 
