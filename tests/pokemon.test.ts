@@ -315,6 +315,29 @@ test('falls asleep after five idle minutes', { timeoutMs: 30000 }, async ($, on)
   expect(paints(blits[blits.length - 1], Z_COLOR)).toBe(true)
 })
 
+test('a pet leaves a sleeping mon asleep, napping or tucked in, and still fills its happiness', { timeoutMs: 30000 }, async ($, on) => {
+  const saved: Record<string, any> = { wander: false, stats: { abra: { food: { value: 50, at: 0 }, happiness: { value: 50, at: 0 } } } }
+  const { clock, blits } = await startedWith($, on, saved, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+
+  // Napping after five idle minutes
+  await clock.advance(5 * 60 * 1000 + 1000)
+  expect(paints(blits[blits.length - 1], Z_COLOR)).toBe(true)
+  expect(await run('pet')).toMatch(/^Abra smiles in its sleep ♥/)
+  await clock.advance(4000)
+  expect(paints(blits[blits.length - 1], Z_COLOR)).toBe(true)
+  // 50, less five minutes' drain, plus the pet's 25
+  expect(Math.round(saved.stats.abra.happiness.value)).toBe(74)
+
+  // Tucked in with /pokemon sleep
+  await run('sleep')
+  expect(await run('pet')).toMatch(/^Abra smiles in its sleep ♥/)
+  await clock.advance(4000)
+  expect(paints(blits[blits.length - 1], Z_COLOR)).toBe(true)
+  expect(saved.stats.abra.asleep).toBe(true)
+})
+
 test('after five idle minutes, a mon out wandering walks home before it falls asleep', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, blits } = await started($, on)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })

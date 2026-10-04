@@ -71,7 +71,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon list` | List every mon name |
 | `/pokemon shiny`, `/pokemon default` | Pick a variant, saved across sessions |
 | `/pokemon wander` | Toggle idle wandering (on by default) |
-| `/pokemon pet` | Pet the mon. Wakes it up and counts pets across sessions |
+| `/pokemon pet` | Pet the mon. A sleeping mon stays asleep. Counts pets across sessions |
 | `/pokemon feed` | Toss it a random oran 🫐, pecha 🍑, razz 🍓, or sitrus 🍋 berry |
 | `/pokemon attack` | Use a random move from the mon's moveset |
 | `/pokemon attack <move>` | Use a named move, ignoring case, spaces, and dashes |

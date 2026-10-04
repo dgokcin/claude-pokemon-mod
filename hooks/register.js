@@ -442,10 +442,13 @@ function sweatStamps(head, y, side) {
 }
 
 // Stop to enjoy it, hop, and send a stream of hearts up around the sprite
+// Asleep, it stays asleep: the hearts still float up, but it doesn't hop
 function pet() {
-  markActive()
+  if (!isAsleep()) {
+    markActive()
+    hopStart = tick
+  }
   petUntil = tick + PET_TICKS
-  hopStart = tick
   const width = SPRITES[mon].width
   const lowest = bandRows() * 2 - 6
   for (let k = 0; k < HEART_COUNT; k++) {
@@ -1495,10 +1498,11 @@ export function register(on) {
   })
 
   on('command.run', { command: 'pokemon' }, async ($, e) => {
-    markActive()
+    const asked = e.args.trim().toLowerCase()
+    // A pet doesn't wake a sleeping mon, so it doesn't count as activity
+    if (asked !== 'pet' || !isAsleep()) markActive()
     clearAlert()
     nowMs = await $.clock.now()
-    const asked = e.args.trim().toLowerCase()
     if (waitsForEvolution(asked)) return { text: nameOf(mon) + ' is evolving! /pokemon stop cancels it.' }
     if (waitsForCare(asked)) return { text: nameOf(mon) + (food ? ' is busy eating.' : ' is enjoying the pets.') + ' Try again in a moment.' }
     if (MONS.includes(asked)) {
@@ -1528,8 +1532,9 @@ export function register(on) {
       // A mon as happy as can be, every heart filled, still enjoys it, but it fills no
       // meter and doesn't count as a pet
       const happiest = isHappiest()
+      const sleeping = isAsleep()
       pet()
-      const line = nameOf(mon) + ' ' + PET_LINES[Math.floor(Math.random() * PET_LINES.length)] + ' ♥'
+      const line = nameOf(mon) + ' ' + (sleeping ? 'smiles in its sleep' : PET_LINES[Math.floor(Math.random() * PET_LINES.length)]) + ' ♥'
       if (happiest) return { text: line + ' ' + nameOf(mon) + ' is already as happy as can be.' }
       pettingFills = mon
       const pets = Number((await $.store.get('pets')) ?? 0) + 1
