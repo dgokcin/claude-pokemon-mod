@@ -339,9 +339,14 @@ function dotsIcon() {
   return { rows: ['.....', '.....', row, '.....'], colors: { d: ink.dots } }
 }
 
-// A skill is in use: a Skill call runs in some agent, or a skill's prompt just expanded,
-// as when you type /name or a forked skill starts
+// A skill is in use: a Skill call runs in some agent, or a skill was typed as /name
 const skillInUse = () => runningSkills.size > 0 || tick < discUntil
+
+// Hold the disc when a command that ran is a skill, by its source in the command list
+async function markSkillCommand($, command) {
+  const found = (await $.command.list()).find((c) => c.name === command)
+  if (found && found.source !== 'builtin') discUntil = tick + DISC_TICKS
+}
 
 // The icon of the main loop's most recently started tool that is still running. A
 // skill in use anywhere, in the main loop or a subagent, shows as a TM disc instead.
@@ -1907,9 +1912,18 @@ export function register(on) {
     }
   })
 
-  // A skill's prompt expanding, for /name typed at the prompt, the Skill tool, or a
-  // preload into a subagent, shows the TM disc for a moment. A forked skill runs with
-  // no Skill call and no agent.spawn, so this is the only sign of it.
+  // A skill you type as /name runs as a command, with no Skill call, and a forked one
+  // also spawns no agent, so the command running is the only sign of it. A command from
+  // your own files, a plugin, or an MCP server counts as a skill; Claude Code's built-in
+  // commands, and /pokemon itself, don't. The disc shows for a moment.
+  on('command.run', async ($, e, next) => {
+    if (e.command !== 'pokemon') await markSkillCommand($, e.command).catch((err) => logOnce($, err))
+    return next(e)
+  })
+
+  // The typings say a skill's prompt expanding raises this, for /name, the Skill tool,
+  // and a preload into a subagent. In practice no session raises it yet, so the hooks
+  // above carry the disc, and this one is ready for when it does.
   on('skill.prompt', async ($, e, next) => {
     discUntil = tick + DISC_TICKS
     return next(e)

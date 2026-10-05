@@ -1668,6 +1668,13 @@ test('the bubble shows the main loop\'s running tool while Claude works', async 
 
 test('a skill shows a TM disc in the bubble, from the main loop or a subagent', async ($, on) => {
   on('skill.prompt', (_, e) => ({ text: e.text }))
+  on('command.run', (_, e) => ({ text: 'ran /' + e.command }))
+  on('command.list', () => ({
+    value: [
+      { name: 'commit', description: 'Commit the work', source: 'user' },
+      { name: 'compact', description: 'Compact the context', source: 'builtin' },
+    ],
+  }))
   const { clock, blits } = await started($, on)
   slowTools(on, clock)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
@@ -1697,15 +1704,23 @@ test('a skill shows a TM disc in the bubble, from the main loop or a subagent', 
   await clock.advance(100)
   expect(paints(await shown(ui, blits), DISC_ICON)).toBe(false)
 
-  // A skill typed as /name expands its prompt with no Skill call, and shows the disc
-  // for two seconds even while Claude isn't working
+  // A skill typed as /name runs as a command with no Skill call, and shows the disc
+  // for two seconds even while Claude isn't working. A built-in command doesn't.
   await ui.unmount()
   const idle = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  await $.skill.prompt({ skill: 'commit', text: 'Commit the work.' })
+  await $.command.run({ command: 'commit', args: '' })
   await clock.advance(100)
   expect(paints(await shown(idle, blits), DISC_ICON)).toBe(true)
   await clock.advance(2100)
   expect(paints(await shown(idle, blits), DISC_ICON)).toBe(false)
+  await $.command.run({ command: 'compact', args: '' })
+  await clock.advance(100)
+  expect(paints(await shown(idle, blits), DISC_ICON)).toBe(false)
+
+  // The event the typings promise for a skill's prompt holds the disc too
+  await $.skill.prompt({ skill: 'commit', text: 'Commit the work.' })
+  await clock.advance(100)
+  expect(paints(await shown(idle, blits), DISC_ICON)).toBe(true)
 })
 
 test('a permission request stops the mon with a "!" until its call resolves or you answer', async ($, on) => {
