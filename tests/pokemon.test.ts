@@ -1612,6 +1612,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
 // red top and white bottom, and the +n label, on the dark theme
 const SHELL_ICON = 0x5fe08a
 const PENCIL_ICON = 0xffc83d
+const DISC_ICON = 0xc0c0d4
 const DOTS = 0x9a9ab0
 const ALERT = 0xff3d3d
 const BALL_TOP = 0xe03030
@@ -1663,6 +1664,48 @@ test('the bubble shows the main loop\'s running tool while Claude works', async 
   expect(paints(await shown(ui, blits), PENCIL_ICON)).toBe(true)
   await clock.advance(2000)
   await edit
+})
+
+test('a skill shows a TM disc in the bubble, from the main loop or a subagent', async ($, on) => {
+  on('skill.prompt', (_, e) => ({ text: e.text }))
+  const { clock, blits } = await started($, on)
+  slowTools(on, clock)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.ui.mount({ ...SPINNER, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
+
+  const skill = $.tool.call({ tool: 'Skill', skill: 'commit' })
+  await clock.advance(100)
+  const running = await shown(ui, blits)
+  expect(paints(running, DISC_ICON)).toBe(true)
+  expect(paints(running, SHELL_ICON)).toBe(false)
+  await clock.advance(2000)
+  await skill
+  await clock.advance(100)
+  expect(paints(await shown(ui, blits), DISC_ICON)).toBe(false)
+
+  // A subagent's skill shows the disc too, over the Agent call's Poké Ball
+  const agent = $.tool.call({ tool: 'Agent', prompt: 'commit it' })
+  await clock.advance(100)
+  expect(paints(await shown(ui, blits), DISC_ICON)).toBe(false)
+  const sub = $.tool.call({ tool: 'Skill', skill: 'commit', agentId: 'sub1' })
+  await clock.advance(100)
+  expect(paints(await shown(ui, blits), DISC_ICON)).toBe(true)
+  await clock.advance(2000)
+  await sub
+  await agent
+  await clock.advance(100)
+  expect(paints(await shown(ui, blits), DISC_ICON)).toBe(false)
+
+  // A skill typed as /name expands its prompt with no Skill call, and shows the disc
+  // for two seconds even while Claude isn't working
+  await ui.unmount()
+  const idle = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.skill.prompt({ skill: 'commit', text: 'Commit the work.' })
+  await clock.advance(100)
+  expect(paints(await shown(idle, blits), DISC_ICON)).toBe(true)
+  await clock.advance(2100)
+  expect(paints(await shown(idle, blits), DISC_ICON)).toBe(false)
 })
 
 test('a permission request stops the mon with a "!" until its call resolves or you answer', async ($, on) => {
