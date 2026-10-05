@@ -69,13 +69,89 @@ test('cells one color top and bottom are spaces on that color, so no font can le
   expect(solid).toBeGreaterThan(20)
 })
 
-test('leaves the band alone on desktop and during a survey', async ($, on) => {
+test('leaves the band alone during a survey, on either surface', async ($, on) => {
   on('ui.render', () => THEIRS)
-  const desktop = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await desktop.find({ key: 'pokemon' })).toBeUndefined()
-  await desktop.unmount()
-  const survey = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, hasSurvey: true } })
-  expect(await survey.find({ key: 'pokemon' })).toBeUndefined()
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const survey = await $.ui.mount({ ...BAND, surface, props: { ...BAND.props, hasSurvey: true } })
+    expect(await survey.find({ key: 'pokemon' })).toBeUndefined()
+    expect(await survey.find({ type: 'Svg' })).toBeUndefined()
+    await survey.unmount()
+  }
+})
+
+// The desktop's Svg draws each pixel as a 4 px square, two pixel rows per band row
+const PIXEL_PX = 4
+
+function svgOf(element): string {
+  return element.props.source
+}
+
+test('draws Abra as pixels in an Svg on desktop, with the level and meters beside it as text', async ($, on) => {
+  await startedWith($, on, {}, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const svg = await ui.find({ type: 'Svg' })
+  expect(svg).toBeDefined()
+  expect(await ui.find({ key: 'pokemon' })).toBeUndefined()
+  // No panel on desktop: the scene is the margin and the strip, the meters beside it
+  expect(svg.props.width).toBe((MARGIN + STRIP) * PIXEL_PX)
+  expect(svg.props.height).toBe(11 * 2 * PIXEL_PX)
+  expect(svg.props.alt).toBe('Abra')
+  const source = svgOf(svg)
+  expect(source).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="0 0 52 22"/)
+  const abra = SPRITES.abra.variants.default.palette
+  expect(abra.some((hex) => source.includes(`fill="${hex.toLowerCase()}"`))).toBe(true)
+  expect(await ui.find({ type: 'Text', text: '●●●●○' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Lv ?\d+$/ })).toBeDefined()
+})
+
+test('the desktop draws the band again as the mon paces', async ($, on) => {
+  const { clock } = await started($, on)
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop', props: { ...BAND.props, isWorking: true } })
+  // The frame's key, pokemon-<n>, counting up from the last one found
+  let n = 0
+  const keyNow = async () => {
+    for (let k = n; k < n + 100; k++) {
+      if (await ui.find({ key: 'pokemon-' + k })) {
+        n = k
+        return k
+      }
+    }
+    return undefined
+  }
+  const frames = [svgOf(await ui.find({ type: 'Svg' }))]
+  const keys = [await keyNow()]
+  for (let i = 0; i < 10; i++) {
+    await clock.advance(150)
+    frames.push(svgOf(await ui.find({ type: 'Svg' })))
+    keys.push(await keyNow())
+  }
+  expect(keys.every((k) => k !== undefined)).toBe(true)
+  expect(new Set(frames).size).toBeGreaterThan(3)
+  // The desktop shows an Svg's first frame until its place in the tree changes, so each
+  // new frame goes under a new key
+  frames.forEach((frame, i) => {
+    if (i > 0 && frame !== frames[i - 1]) expect(keys[i]).not.toBe(keys[i - 1])
+  })
+})
+
+test('every mon fits the desktop Svg in its size limit', { timeoutMs: 60000 }, async ($, on) => {
+  await startedWith($, on, {}, 0)
+  for (const name of Object.keys(SPRITES)) {
+    await $.command.run({ command: 'pokemon', args: name })
+    const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+    expect(svgOf(await ui.find({ type: 'Svg' })).length).toBeLessThan(131072)
+    await ui.unmount()
+  }
+})
+
+test('leaves the band alone on surfaces without one of its own', async ($, on) => {
+  on('ui.render', () => THEIRS)
+  for (const surface of ['vscode', 'mobile'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+    await ui.unmount()
+  }
 })
 
 test('paces while Claude works', async ($, on) => {

@@ -94,8 +94,9 @@ Then pick your partner with `/pokemon <mon>`.
 
 ## Requirements
 
-- Claude Code v2.1.287 or later, in the terminal. The Desktop app can't draw the band.
-- A truecolor terminal, like iTerm2, Ghostty, kitty, or WezTerm. Light and dark themes both work.
+- Claude Code v2.1.287 or later, in the terminal or the Desktop app's Code tab.
+- In the terminal, a truecolor one, like iTerm2, Ghostty, kitty, or WezTerm. Light and dark themes both work.
+- The VS Code extension and the mobile app have no band to draw in, so the mon doesn't show there.
 
 ## How it works
 
@@ -215,7 +216,8 @@ match the source folders, so use `mrmime`, `farfetchd`, `nidoran_female`, and
 `nidoran_male`.
 
 Each terminal cell holds two pixels with `▀`/`▄` half blocks, and the mon paces inside a
-40 column strip. The build crops each 32x32 GIF to the smallest box that fits all its
+40 column strip. The Desktop app has no cell grid to paint, so it draws the same pixels as
+an SVG, 4 px per pixel, with the level and meters beside it as text. The build crops each 32x32 GIF to the smallest box that fits all its
 frames, so the band height depends on the mon. Diglett is the smallest at 7 rows. Fearow,
 Gyarados, and Pidgeot are the tallest at 17.
 
