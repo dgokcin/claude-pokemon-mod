@@ -1612,7 +1612,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
 // red top and white bottom, and the +n label, on the dark theme
 const SHELL_ICON = 0x5fe08a
 const PENCIL_ICON = 0xffc83d
-const DISC_ICON = 0xb08cff
+const DISC_ICON = 0xd4d4e0
 const DOTS = 0x9a9ab0
 const ALERT = 0xff3d3d
 const BALL_TOP = 0xe03030

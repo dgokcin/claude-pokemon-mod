@@ -68,13 +68,13 @@ const BERRIES = [
 const INKS = {
   dark: {
     bubble: 0xf0f0f0, dots: 0x9a9ab0, z: 0xe8e8ff, star: 0xffd54f, silhouette: 0xf8f8ff,
-    pencil: 0xffc83d, lens: 0x6cc4ff, shell: 0x5fe08a, ball: 0xeeeef6, disc: 0xb08cff, wrench: 0xb8b8c8, party: 0xb4b4c8,
-    discShade: 0x7a5ad0, sweat: 0x6ec8ff, sweatShine: 0xe6f7ff,
+    pencil: 0xffc83d, lens: 0x6cc4ff, shell: 0x5fe08a, ball: 0xeeeef6, disc: 0xd4d4e0, wrench: 0xb8b8c8, party: 0xb4b4c8,
+    discShade: 0x8e8ea0, sweat: 0x6ec8ff, sweatShine: 0xe6f7ff,
   },
   light: {
     bubble: 0x4a4a58, dots: 0x70708a, z: 0x5a5aa8, star: 0xe0a000, silhouette: 0x2e2e3a,
-    pencil: 0xe08a00, lens: 0x2a7ad0, shell: 0x1f9a4a, ball: 0xa8a8b4, disc: 0x7a52d6, wrench: 0x6a6a80, party: 0x5c5c74,
-    discShade: 0x4e3296, sweat: 0x2b8fe0, sweatShine: 0xbfe4ff,
+    pencil: 0xe08a00, lens: 0x2a7ad0, shell: 0x1f9a4a, ball: 0xa8a8b4, disc: 0x6e6e88, wrench: 0x6a6a80, party: 0x5c5c74,
+    discShade: 0x44445a, sweat: 0x2b8fe0, sweatShine: 0xbfe4ff,
   },
 }
 const UPPER_HALF = 0x2580
@@ -358,7 +358,7 @@ function toolIcon() {
     l: ink.lens, h: 0xb07040,
     s: ink.shell,
     r: 0xee4444, k: 0x60606c, w: 0xc0c0cc, b: ink.ball,
-    c: ink.disc, d: ink.discShade, n: 0xd8c8ff,
+    c: ink.disc, d: ink.discShade, n: 0xf6f6fc,
     m: ink.wrench,
   }
   return { rows: TOOL_ICONS[kind], colors }
