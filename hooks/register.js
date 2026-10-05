@@ -50,8 +50,8 @@ const FALL_TICKS = 2
 const EAT_TICKS = 30
 const YUM_TICKS = 30
 const FLINCH_TICKS = 24
-// How long the TM disc stays up after a skill's prompt expands
-const DISC_TICKS = 40
+// How long the TM disc stays up after a skill is typed as /name
+const DISC_TICKS = 60
 const SHAKE_TICKS = 12
 const DRIP_TICKS = 8
 // A 4x4 pixel berry: k leaf, b rim, B body, h highlight. Each kind recolors it.
@@ -68,13 +68,13 @@ const BERRIES = [
 const INKS = {
   dark: {
     bubble: 0xf0f0f0, dots: 0x9a9ab0, z: 0xe8e8ff, star: 0xffd54f, silhouette: 0xf8f8ff,
-    pencil: 0xffc83d, lens: 0x6cc4ff, shell: 0x5fe08a, ball: 0xeeeef6, disc: 0xc0c0d4, wrench: 0xb8b8c8, party: 0xb4b4c8,
-    sweat: 0x6ec8ff, sweatShine: 0xe6f7ff,
+    pencil: 0xffc83d, lens: 0x6cc4ff, shell: 0x5fe08a, ball: 0xeeeef6, disc: 0xb08cff, wrench: 0xb8b8c8, party: 0xb4b4c8,
+    discShade: 0x7a5ad0, sweat: 0x6ec8ff, sweatShine: 0xe6f7ff,
   },
   light: {
     bubble: 0x4a4a58, dots: 0x70708a, z: 0x5a5aa8, star: 0xe0a000, silhouette: 0x2e2e3a,
-    pencil: 0xe08a00, lens: 0x2a7ad0, shell: 0x1f9a4a, ball: 0xa8a8b4, disc: 0x5c5c78, wrench: 0x6a6a80, party: 0x5c5c74,
-    sweat: 0x2b8fe0, sweatShine: 0xbfe4ff,
+    pencil: 0xe08a00, lens: 0x2a7ad0, shell: 0x1f9a4a, ball: 0xa8a8b4, disc: 0x7a52d6, wrench: 0x6a6a80, party: 0x5c5c74,
+    discShade: 0x4e3296, sweat: 0x2b8fe0, sweatShine: 0xbfe4ff,
   },
 }
 const UPPER_HALF = 0x2580
@@ -94,7 +94,7 @@ let thinking = false
 const runningTools = new Map()
 // Skill calls in flight from any agent, main loop or subagent, by tool_use_id
 const runningSkills = new Set()
-// The tick a skill prompt's TM disc shows until
+// The tick a typed skill's TM disc shows until
 let discUntil = 0
 let toolCalls = 0
 const verdicts = new Map()
@@ -295,14 +295,14 @@ const SWEAT = ['..d.', '.dd.', 'dhdd', 'dddd', '.dd.']
 const ALERT_ICON = { rows: ['..a..', '..a..', '.....', '..a..'], colors: { a: 0xff3d3d } }
 // What the bubble shows while a tool runs: a pencil (p body, e eraser, t wood, g lead),
 // a magnifier (l rim, h handle), a shell prompt (s), a Poké Ball (r top, k band,
-// w button, b bottom), a TM disc (c disc, n shine) for a skill, or a wrench (m) for
+// w button, b bottom), a TM disc (c disc, d shade, n shine) for a skill, or a wrench (m) for
 // every other tool, MCP tools included
 const TOOL_ICONS = {
   pencil: ['...pe', '..pp.', '.pp..', 'gt...'],
   lens: ['.ll..', 'l..l.', '.llh.', '....h'],
   shell: ['s....', '.s...', 's....', '..sss'],
   ball: ['.rrr.', 'rrrrr', 'kkwkk', '.bbb.'],
-  disc: ['.ccc.', 'cn.cc', 'cc.cc', '.ccc.'],
+  disc: ['.ncc.', 'nc.cc', 'ccccd', '.cdd.'],
   wrench: ['..m.m', '..mmm', '.m...', 'm....'],
 }
 const TOOL_KINDS = {
@@ -358,7 +358,7 @@ function toolIcon() {
     l: ink.lens, h: 0xb07040,
     s: ink.shell,
     r: 0xee4444, k: 0x60606c, w: 0xc0c0cc, b: ink.ball,
-    c: ink.disc, n: ink.bubble,
+    c: ink.disc, d: ink.discShade, n: 0xd8c8ff,
     m: ink.wrench,
   }
   return { rows: TOOL_ICONS[kind], colors }
@@ -1252,6 +1252,26 @@ async function forgetOldKeys($) {
 }
 
 const SYNC_TICKS = 20
+// How often the party is checked against the live agents, and how old a ball must be
+// before a missing agent pops it, so a fresh spawn the list hasn't caught up with stays
+const PARTY_SYNC_TICKS = 40
+// An agent still at work, as the agent list reports it
+const LIVE_STATUSES = ['pending', 'running', 'waiting']
+
+// Pop the ball of any agent the engine no longer reports at work. A teammate in a pane of
+// its own runs no loop here, so its turn never completes in this process, and this is the
+// only way its ball ever pops.
+async function syncParty($) {
+  const open = party.filter((ball) => ball.popStart === null && tick - ball.born >= PARTY_SYNC_TICKS)
+  if (open.length === 0) return
+  const live = new Set()
+  for (const agent of await $.agent.list()) {
+    if (!LIVE_STATUSES.includes(agent.status)) continue
+    live.add(agent.id)
+    if (agent.teammateId) live.add(agent.teammateId)
+  }
+  for (const ball of open) if (!live.has(ball.id)) party = leaveParty(party, ball.id, tick)
+}
 
 // Show the mon this one evolved into in another session, once nothing here is mid-move
 function followEvolution($, into, record) {
@@ -1607,6 +1627,7 @@ export function register(on) {
         stepOwed($)
         if (tick % STAT_REDRAW_TICKS === 0) resyncMeters($).catch((err) => logOnce($, err))
         if (tick % SYNC_TICKS === 0) syncSessions($).catch((err) => logOnce($, err))
+        if (tick % PARTY_SYNC_TICKS === 0) syncParty($).catch((err) => logOnce($, err))
         if (tick % BEAT_TICKS === 0) beat($, lastBeat).catch((err) => logOnce($, err))
         if (bandId !== null && bandSurface === 'terminal') blitFrame($)
         if (bandId !== null && bandSurface === 'desktop' && tick % DESKTOP_FRAME_TICKS === 0) redrawSvg($)
@@ -1957,7 +1978,7 @@ export function register(on) {
   })
 
   // Each subagent the Agent tool starts is a Poké Ball in the party along the left of
-  // the strip, until its turn ends
+  // the strip, until its turn ends or the agent list stops reporting it at work
   on('agent.spawn', async ($, e, next) => {
     const result = await next(e)
     if (result?.agentId) party = joinParty(party, result.agentId, tick)
