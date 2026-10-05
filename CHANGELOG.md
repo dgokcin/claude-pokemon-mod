@@ -2,6 +2,12 @@
 
 Every release of the pokemon mod, generated from its commits by [git-cliff](https://git-cliff.org).
 
+## 1.2.0 (2026-10-05)
+
+### ✨ Features
+
+- **desktop:** Draw the mon in the Claude Code desktop app (#19)
+
 ## 1.1.0 (2026-10-04)
 
 ### ✨ Features
