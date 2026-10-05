@@ -25,8 +25,11 @@ import { zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 // Each open session shows its own mon, starting with the one last picked anywhere. XP,
 // meters, nickname, and sleep belong to the mon, so sessions showing the same mon share them.
 // The mon, hearts, berries, bubbles, balls, and Zs are pixels in one Raster, two per cell.
+// The desktop app has no Raster, so there the same pixels are one Svg.
 
 const TICK_MS = 50
+// CSS pixels per sprite pixel on the desktop
+const PIXEL_PX = 4
 const MOVE_TICKS = 3
 const HOP_TICKS = 12
 const SLEEP_AFTER_MS = 5 * 60 * 1000
@@ -95,6 +98,8 @@ let alertUntil = 0
 let idleAlertAt = null
 let party = []
 let bandId = null
+// The surface the band is drawn on, terminal or desktop
+let bandSurface = 'terminal'
 let columns = STRIP_COLUMNS
 // The columns behind the level and meters at the strip's right, 0 when they sit beside
 // a shrunk band instead. The scene runs on under them, so a bubble, hearts, and Zs
@@ -128,6 +133,10 @@ let evolving = null
 let evolveDue = null
 let joyHopAt = null
 let sentCells = null
+let sentSvg = null
+// Counts the distinct frames drawn on the desktop. Each one goes under a new key, since
+// the desktop keeps showing an Svg's first frame while its place in the tree holds.
+let svgFrame = 0
 let maxRows = Infinity
 let ink = INKS.dark
 
@@ -831,8 +840,9 @@ function ghostPixel(ghosts, pixel, box, width, flip, baseX, baseTop) {
   }
 }
 
-// Pack the current frame into Raster cells, two pixels per cell with half blocks
-function cellsNow() {
+// The current frame, zoomed to the band: a color or null per pixel, two pixel rows per
+// cell, and the effects' glyphs by cell
+function frameNow() {
   const playing = attack !== null && !isBackingUp()
   const age = attack ? tick - attack.start : 0
   const pose = playing ? attackPose(attack, age) : attack ? BACKING_POSE : NO_POSE
@@ -923,6 +933,15 @@ function cellsNow() {
     const gx = zoomedAt(effect.chars[k] + shakeX + margin, zoom.scale)
     glyphs.set(gx + ',' + zoomedAt(effect.chars[k + 1], zoom.scale), [effect.chars[k + 2], effect.chars[k + 3]])
   }
+  return { at, glyphs, zoom }
+}
+
+// The cells left blank under the level and meters, which are drawn over them
+const underPanel = (cx, cy, zoom) => cx >= margin + columns && cy >= zoom.rows - panelRows()
+
+// Pack the current frame into Raster cells, two pixels per cell with half blocks
+function cellsNow() {
+  const { at, glyphs, zoom } = frameNow()
   const words = new Uint32Array(zoom.columns * zoom.rows * 3)
   for (let cy = 0; cy < zoom.rows; cy++) {
     for (let cx = 0; cx < zoom.columns; cx++) {
@@ -930,8 +949,7 @@ function cellsNow() {
       const upper = at(cx, cy * 2)
       const lower = at(cx, cy * 2 + 1)
       const glyph = glyphs.get(cx + ',' + cy)
-      // Left blank under the level and meters, which are drawn over it
-      if (cx >= margin + columns && cy >= zoom.rows - panelRows()) words.set([SPACE, DEFAULT_COLOR, DEFAULT_COLOR], i)
+      if (underPanel(cx, cy, zoom)) words.set([SPACE, DEFAULT_COLOR, DEFAULT_COLOR], i)
       else if (glyph) words.set([glyph[0], glyph[1], upper ?? lower ?? DEFAULT_COLOR], i)
       // A cell one color top and bottom is a space on that background, which every
       // terminal fills edge to edge. Only a cell split in two needs a half block, whose
@@ -943,6 +961,44 @@ function cellsNow() {
     }
   }
   return new Uint8Array(words.buffer).toBase64()
+}
+
+const hexOf = (color) => '#' + color.toString(16).padStart(6, '0')
+
+// Draw the current frame as SVG for the desktop, which has no Raster. Each pixel is a
+// unit square, runs of one color in a row merged into one path per color. A glyph
+// takes its whole cell, two pixels tall, over the cell's top color or else its bottom.
+function svgNow() {
+  const { at, glyphs, zoom } = frameNow()
+  const width = zoom.columns
+  const height = zoom.rows * 2
+  const runs = new Map()
+  const fill = (color, d) => runs.set(color, (runs.get(color) ?? '') + d)
+  const pixelAt = (cx, py) => {
+    const cy = py >> 1
+    return underPanel(cx, cy, zoom) || glyphs.has(cx + ',' + cy) ? null : at(cx, py)
+  }
+  for (let py = 0; py < height; py++) {
+    for (let cx = 0; cx < width; ) {
+      const color = pixelAt(cx, py)
+      let end = cx + 1
+      while (end < width && pixelAt(end, py) === color) end++
+      if (color !== null) fill(color, `M${cx} ${py}h${end - cx}v1h${cx - end}z`)
+      cx = end
+    }
+  }
+  let text = ''
+  for (const [cell, [code, color]] of glyphs) {
+    const [cx, cy] = cell.split(',').map(Number)
+    if (cx < 0 || cx >= width || cy < 0 || cy >= zoom.rows) continue
+    const under = at(cx, cy * 2) ?? at(cx, cy * 2 + 1)
+    if (under !== null) fill(under, `M${cx} ${cy * 2}h1v2h-1z`)
+    text += `<text x="${cx + 0.5}" y="${cy * 2 + 1.6}" fill="${hexOf(color)}">&#${code};</text>`
+  }
+  let paths = ''
+  for (const [color, d] of runs) paths += `<path fill="${hexOf(color)}" d="${d}"/>`
+  const font = text ? `<g font-family="monospace" font-size="2" text-anchor="middle">${text}</g>` : ''
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" shape-rendering="crispEdges">${paths}${font}</svg>`
 }
 
 // Where a mon pacing right while Claude works turns back: before its bubble, which leads
@@ -1421,6 +1477,14 @@ function blitFrame($) {
     .catch((err) => logOnce($, err))
 }
 
+// The desktop has no Raster to repaint, so a changed frame draws the band again. The
+// host draws a plugin's band ten times a second at most.
+const DESKTOP_FRAME_TICKS = 2
+function redrawSvg($) {
+  if (!bandZoom() || svgNow() === sentSvg) return
+  $.ui.invalidate('ui.render')
+}
+
 // Ticks stop while the machine sleeps, so the meters resync with the real clock
 // The meters drain at OFF_DRAIN of their speed while no session runs: Claude Code closed,
 // or the laptop off or asleep. Every open session marks the store as seen every BEAT_MS.
@@ -1523,7 +1587,8 @@ export function register(on) {
         if (tick % STAT_REDRAW_TICKS === 0) resyncMeters($).catch((err) => logOnce($, err))
         if (tick % SYNC_TICKS === 0) syncSessions($).catch((err) => logOnce($, err))
         if (tick % BEAT_TICKS === 0) beat($, lastBeat).catch((err) => logOnce($, err))
-        if (bandId !== null) blitFrame($)
+        if (bandId !== null && bandSurface === 'terminal') blitFrame($)
+        if (bandId !== null && bandSurface === 'desktop' && tick % DESKTOP_FRAME_TICKS === 0) redrawSvg($)
       } catch (err) {
         logOnce($, err)
       }
@@ -1717,21 +1782,25 @@ export function register(on) {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.surface !== 'terminal' || e.props.hasSurvey) {
+    const desktop = e.surface === 'desktop'
+    if ((e.surface !== 'terminal' && !desktop) || e.props.hasSurvey) {
       bandId = null
       return next(e)
     }
-    const { Box, Raster, Text } = $.ui.resolve(e)
+    const elements = $.ui.resolve(e)
+    const { Box, Text } = elements
     const wasHome = isHome()
     working = e.props.isWorking
     if (!working) thinking = false
     bandId = e.requestId
+    bandSurface = e.surface
     maxRows = e.props.maxRows
     // The panel goes over the scene's right end when the band shows at full size and
-    // has room for it, and beside a shrunk band otherwise
+    // has room for it, and beside a shrunk band otherwise. The desktop draws text in its
+    // own font, so its meters can't line up with the pixels and always sit beside them.
     const panelColumns = meterColumns() + 1
     const fullSize = bandRows() <= maxRows
-    panel = fullSize && e.props.bodyColumns >= SPRITES[mon].width + panelColumns ? panelColumns : 0
+    panel = !desktop && fullSize && e.props.bodyColumns >= SPRITES[mon].width + panelColumns ? panelColumns : 0
     columns = Math.max(SPRITES[mon].width, Math.min(STRIP_COLUMNS, e.props.bodyColumns - panel))
     margin = fullSize ? Math.max(0, Math.min(BUBBLE_SPAN, e.props.bodyColumns - panel - columns)) : 0
     if (wasHome) x = homeX()
@@ -1753,8 +1822,17 @@ export function register(on) {
     const zoom = bandZoom()
     let corner
     if (zoom) {
-      sentCells = cellsNow()
-      const sprite = Raster({ key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells: sentCells })
+      let sprite
+      if (desktop) {
+        const svg = svgNow()
+        if (svg !== sentSvg) svgFrame += 1
+        sentSvg = svg
+        const image = elements.Svg({ source: svg, alt: nameOf(mon), width: zoom.columns * PIXEL_PX, height: zoom.rows * 2 * PIXEL_PX })
+        sprite = Box({ key: 'pokemon-' + svgFrame, children: [image] })
+      } else {
+        sentCells = cellsNow()
+        sprite = elements.Raster({ key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells: sentCells })
+      }
       const meterLines = needsOn ? [level, meter('food'), meter('happiness')] : [level]
       if (panel > 0) {
         const meters = Box({ position: 'absolute', right: 0, bottom: 0, width: panel, paddingLeft: 1, flexDirection: 'column', children: meterLines })
@@ -1762,6 +1840,8 @@ export function register(on) {
       } else {
         const meters = Box({ flexDirection: 'column', justifyContent: 'flex-end', paddingLeft: 1, children: meterLines })
         corner = e.props.bodyColumns >= zoom.columns + panelColumns ? [sprite, meters] : [sprite]
+        // The desktop clips the band's right edge, so its meters keep clear of it
+        if (desktop) corner = [Box({ flexDirection: 'row', flexShrink: 0, paddingRight: 2, children: corner })]
       }
     } else {
       // Too short even for a shrunk mon: its name, level, and meters on one line, and no blits
