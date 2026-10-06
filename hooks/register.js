@@ -1063,13 +1063,11 @@ const STATS = {
 // no emoji presentation. An emoji icon takes two columns: a filled one is drawn two wide from
 // the emoji font whatever the terminal's font, and an empty one is followed by a space. Some
 // fonts lack ○ or ♡ and borrow a wider glyph, which then spills into the space, not the next icon.
-// Many fonts lack ♡ too, so with dimEmpty the band draws empty icons as the filled glyph, dimmed.
-// Plain text replies can't dim, so they keep the empty glyph.
 const METER_STYLES = {
   text: {
     columns: 1,
     food: { icon: '●', emptyIcon: '○', color: '#ea697d' },
-    happiness: { icon: '♥', emptyIcon: '♡', color: '#ff5f9e', dimEmpty: true },
+    happiness: { icon: '♥', emptyIcon: '♡', color: '#ff5f9e' },
   },
   emoji: {
     columns: 2,
@@ -1806,18 +1804,7 @@ export function register(on) {
     if (wasHome) x = homeX()
     clampX()
 
-    const meter = (key, lead = '') => {
-      const icons = meterStyle()[key]
-      if (!icons.dimEmpty) return Text({ color: icons.color, children: [lead + iconsFor(key)] })
-      const filled = filledIcons(key)
-      return Box({
-        flexDirection: 'row',
-        children: [
-          Text({ color: icons.color, children: [lead + icons.icon.repeat(filled)] }),
-          Text({ dimColor: true, children: [icons.icon.repeat(STAT_ICONS - filled)] }),
-        ],
-      })
-    }
+    const meter = (key, lead = '') => Text({ color: meterStyle()[key].color, children: [lead + iconsFor(key)] })
     const level = Text({ dimColor: true, children: [levelLine()] })
     const zoom = bandZoom()
     let corner
