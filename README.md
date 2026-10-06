@@ -279,9 +279,15 @@ claude plugin install pokemon@claude-pokemon
 
 A local marketplace loads the mod in place, so your edits apply on `/reload-plugins`.
 
-To call a wild mon without waiting, set the `debug` store key to `true`, then run
-`/pokemon wild`, `/pokemon wild <mon>`, or `/pokemon wild <mon> shiny`. It skips the shared
-timer.
+To call a wild mon without waiting, turn on debug mode:
+
+1. Open the mod's store file, `~/.claude/plugins/store/pokemon_<marketplace>-<hash>.json`.
+   For the local marketplace above it's `pokemon_claude-pokemon-<hash>.json`.
+2. Add `"debug": true` to the top-level object.
+3. Run `/reload-plugins`.
+
+Then `/pokemon wild`, `/pokemon wild <mon>`, or `/pokemon wild <mon> shiny` calls one in
+without waiting for the shared timer. Without debug, `wild` replies as an unknown option.
 
 <details>
 <summary>Add a mon</summary>
