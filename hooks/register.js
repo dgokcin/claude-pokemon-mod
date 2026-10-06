@@ -124,6 +124,7 @@ const owed = []
 let pettingFills = null
 let yumUntil = 0
 let attack = null
+let drawnRows = null
 let nowMs = 0
 let stats = {}
 let needsOn = true
@@ -195,8 +196,12 @@ const WALK_HEAD_RIGHT = Object.fromEntries(
   ]),
 )
 const rowsOf = (name) => HEAD_ROWS + spriteRows(name)
-// While a mon evolves, the band is tall enough for both shapes
-const bandRows = () => (evolving ? Math.max(rowsOf(evolving.from), rowsOf(evolving.into)) : rowsOf(mon))
+// While a mon evolves or transforms, the band is tall enough for both shapes
+const bandRows = () => {
+  if (evolving) return Math.max(rowsOf(evolving.from), rowsOf(evolving.into))
+  if (attack?.move.effect === 'transform') return Math.max(rowsOf(mon), rowsOf(attack.swap))
+  return rowsOf(mon)
+}
 // The band's size on screen, shrunk to fit a short pane, or null when only the badge fits
 const bandZoom = () => zoomFor({ columns: sceneColumns(), rows: bandRows(), maxRows })
 // The strip and the panel, in the strip's own columns, and the whole scene with the margin
@@ -566,10 +571,8 @@ function startAttack(move) {
   const side = x >= homeX() - x ? 'left' : 'right'
   const seed = Math.floor(Math.random() * 0x7fffffff)
   const others = MONS.filter((name) => name !== mon)
-  const fitting = others.filter((name) => spriteRows(name) <= spriteRows(mon))
-  const pool = fitting.length > 0 ? fitting : others
   const aimed = attackPose(prepareAttack(move, { side, seed, x, home: homeX() }), 0).view === 'side'
-  attack = { move, side, seed, start: tick, backing: true, swap: pool[Math.floor(Math.random() * pool.length)] }
+  attack = { move, side, seed, start: tick, backing: true, swap: others[Math.floor(Math.random() * others.length)] }
   if (!aimed || x === edgeBehind(side)) playMove()
 }
 
@@ -1584,6 +1587,11 @@ export function register(on) {
         stepEvolution($)
         stepWake($)
         stepOwed($)
+        // The band grows and shrinks back around a Transform
+        if (bandRows() !== drawnRows) {
+          drawnRows = bandRows()
+          $.ui.invalidate('ui.render')
+        }
         if (tick % STAT_REDRAW_TICKS === 0) resyncMeters($).catch((err) => logOnce($, err))
         if (tick % SYNC_TICKS === 0) syncSessions($).catch((err) => logOnce($, err))
         if (tick % BEAT_TICKS === 0) beat($, lastBeat).catch((err) => logOnce($, err))

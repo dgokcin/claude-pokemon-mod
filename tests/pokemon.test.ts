@@ -1339,11 +1339,29 @@ test('Transform shows another mon for a while, then turns back', async ($, on) =
   await clock.advance(3000)
   const during = blits.slice(seen, seen + 70)
   expect(during.some((cells) => [...colorsOf(cells)].some((c) => !own.has(c)))).toBe(true)
-  // The band keeps its size while another sprite stands in
-  expect(new Set(blits.map((cells) => cells.length)).size).toBe(1)
 
   await clock.advance(1000)
   expect([...colorsOf(blits[blits.length - 1])].every((c) => own.has(c))).toBe(true)
+  // The band is back to its own size
+  expect(blits[blits.length - 1].length).toBe(blits[0].length)
+})
+
+test('Transform can pick a mon taller than the caster, and the band grows to fit it', async ($, on) => {
+  const { clock, blits } = await startedWith($, on, { wander: false, mon: 'ditto' }, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(1000)
+  const own = blits[blits.length - 1].length
+
+  // Almost every other mon is taller than Ditto, so a few tries all but surely land one
+  let grew = false
+  for (let i = 0; i < 5 && !grew; i++) {
+    const seen = blits.length
+    await $.command.run({ command: 'pokemon', args: 'attack transform' })
+    await clock.advance(4000)
+    grew = blits.slice(seen).some((cells) => cells.length > own)
+  }
+  expect(grew).toBe(true)
+  expect(blits[blits.length - 1].length).toBe(own)
 })
 
 test('Splash just hops, and nothing happens', async ($, on) => {
@@ -1381,7 +1399,9 @@ test('every move of every mon plays to the end without breaking a frame', { time
       expect(broken).toEqual([])
       const frames = blits.slice(seen)
       expect(frames.length).toBeGreaterThan(0)
-      expect(frames.every((cells) => cells.length === size)).toBe(true)
+      // Transform grows the band to fit a taller mon, then shrinks it back
+      if (move === 'Transform') expect(frames[frames.length - 1].length).toBe(size)
+      else expect(frames.every((cells) => cells.length === size)).toBe(true)
     }
     await ui.unmount()
   }
