@@ -63,6 +63,14 @@ export function attackPose(attack, t) {
   return { ...POSE, ...(typeof pose === 'function' ? pose(t, attack) : pose) }
 }
 
+// Whether a move plays side on toward a target, staying where it stands. Only those
+// can hit a foe in front of the mon.
+export function aimsAhead(move) {
+  const effect = effectOf(move.effect)
+  if (EFFECTS[effect].lands || effect === 'transform') return false
+  return attackPose(prepareAttack(move, { side: 'left', seed: 0, x: 0, home: 0 }), 0).view === 'side'
+}
+
 // The attack's drawing this tick, described in effects/draw.js
 export function attackFrame(attack, t, g) {
   const out = {
@@ -77,6 +85,7 @@ export function attackFrame(attack, t, g) {
 // Where the attack starts and lands. frontAt(y) is just in front of the sprite on row y.
 // The mouth is the front a third of the way down, which is the face for nearly every
 // side-on mon. A move can set its own `mouth` height for a mon whose face sits lower.
+// With a foe's box in g.foe, the move aims at the middle of the foe.
 function aim(g, a) {
   const cx = Math.round((g.left + g.right) / 2)
   const cy = Math.round((g.top + g.bottom) / 2)
@@ -88,9 +97,13 @@ function aim(g, a) {
   const my = g.top + Math.round((g.bottom - g.top + 1) * a.mouth)
   const mouth = { x: frontAt(my), y: my }
   const ground = g.pixels - 1
-  const reach = g.side > 0 ? g.columns - 1 - mouth.x : mouth.x
   const ahead = (d) => mouth.x + g.side * d
-  const target = { x: ahead(clamp(reach - 4, 3, 13)), y: clamp(ground - 7, mouth.y, ground - 3) }
+  let reach = g.side > 0 ? g.columns - 1 - mouth.x : mouth.x
+  let target = { x: ahead(clamp(reach - 4, 3, 13)), y: clamp(ground - 7, mouth.y, ground - 3) }
+  if (g.foe) {
+    target = { x: Math.round((g.foe.left + g.foe.right) / 2), y: Math.round((g.foe.top + g.foe.bottom) / 2) }
+    reach = Math.abs(target.x - mouth.x)
+  }
   const geo = { ...g, cx, cy, frontAt, mouth, ground, reach, ahead, target }
   if (a.from === 'top') geo.crown = crownOf(geo)
   return geo

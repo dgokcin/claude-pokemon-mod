@@ -7,7 +7,7 @@ const FIRST_LEVEL = 5
 
 // Female sprites take their base form's place in the family, so raichu comes from
 // pikachu and venusaur_female from ivysaur
-const BASE_FORM = { pikachu_female: 'pikachu', venusaur_female: 'venusaur' }
+export const BASE_FORM = { pikachu_female: 'pikachu', venusaur_female: 'venusaur' }
 
 export const EVOLUTIONS = {
   bulbasaur: [{ into: 'ivysaur', level: 16 }],

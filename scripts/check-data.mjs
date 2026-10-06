@@ -2,12 +2,13 @@
 
 // Checks that the mod's tables agree with each other: every move has an effect, every
 // mon has sprites and moves, evolutions name real mons without loops, levels round-trip,
-// the generated frames match their mon's size and palette, and every frame's eyes are
-// marked inside it.
+// the generated frames match their mon's size and palette, every frame's eyes are
+// marked inside it, and the Pokédex holds every mon once with a known tier.
 //
 // node scripts/check-data.mjs
 
 import { effectOf } from '../hooks/attacks.js'
+import { DEX, LEGENDARY, RARE, TIERS, dexKey, tierOf } from '../hooks/dex.js'
 import { EVOLUTIONS } from '../hooks/evolutions.js'
 import { EYES, eyesOf } from '../hooks/eyes.js'
 import { SPRITES } from '../hooks/frames.js'
@@ -101,10 +102,18 @@ for (const mon of mons) {
   }
 }
 
+if (DEX.length !== 151) fail(`the Pokédex has ${DEX.length} entries, not 151`)
+if (new Set(DEX).size !== DEX.length) fail('the Pokédex lists a mon twice')
+for (const mon of DEX) if (!SPRITES[mon]) fail(`Pokédex entry ${mon} has no sprites`)
+for (const mon of mons) if (!DEX.includes(dexKey(mon))) fail(`${mon} has no Pokédex entry`)
+for (const mon of [...LEGENDARY, ...RARE]) if (!DEX.includes(mon)) fail(`tier list names ${mon}, which isn't in the Pokédex`)
+for (const mon of DEX) if (!TIERS[tierOf(mon)]) fail(`${mon} has unknown tier ${tierOf(mon)}`)
+
 if (problems.length > 0) {
   for (const problem of problems) console.error(problem)
   console.error(`${problems.length} problems`)
   process.exit(1)
 }
 const moves = Object.values(MOVES).flat().length
-console.log(`${mons.length} mons, ${Object.keys(MOVE_FX).length} moves (${moves} in movesets), ${Object.keys(EVOLUTIONS).length} evolving mons: all consistent`)
+const tiers = Object.keys(TIERS).map((tier) => `${DEX.filter((mon) => tierOf(mon) === tier).length} ${tier}`).join(', ')
+console.log(`${mons.length} mons, ${Object.keys(MOVE_FX).length} moves (${moves} in movesets), ${Object.keys(EVOLUTIONS).length} evolving mons, ${DEX.length} in the Pokédex (${tiers}): all consistent`)
