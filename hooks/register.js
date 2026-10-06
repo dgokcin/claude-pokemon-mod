@@ -18,8 +18,8 @@ import { zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 // /pokemon emoji swaps the meters' icons for 🍓 and 💗.
 // /pokemon sleep tucks it in, so both meters drain slower until Claude starts working.
 // /pokemon attack plays one of its moves, with the animations in attacks.js.
-// While a tool runs, the bubble shows it, and when Claude waits on you the mon stops
-// and shows a "!". Each running subagent is a Poké Ball along the left of the strip.
+// While a tool runs, the bubble shows it, with a TM disc for a skill from any agent, and
+// when Claude waits on you the mon stops and shows a "!". Each running subagent is a Poké Ball along the left of the strip.
 // A main-loop tool call that fails makes it flinch, with a sweat drop by its head.
 // Answered turns earn XP, and the mon evolves at the levels from the games.
 // Each open session shows its own mon, starting with the one last picked anywhere. XP,
@@ -50,6 +50,8 @@ const FALL_TICKS = 2
 const EAT_TICKS = 30
 const YUM_TICKS = 30
 const FLINCH_TICKS = 24
+// How long the TM disc stays up after a skill is typed as /name
+const DISC_TICKS = 60
 const SHAKE_TICKS = 12
 const DRIP_TICKS = 8
 // A 4x4 pixel berry: k leaf, b rim, B body, h highlight. Each kind recolors it.
@@ -66,13 +68,13 @@ const BERRIES = [
 const INKS = {
   dark: {
     bubble: 0xf0f0f0, dots: 0x9a9ab0, z: 0xe8e8ff, star: 0xffd54f, silhouette: 0xf8f8ff,
-    pencil: 0xffc83d, lens: 0x6cc4ff, shell: 0x5fe08a, ball: 0xeeeef6, wrench: 0xb8b8c8, party: 0xb4b4c8,
-    sweat: 0x6ec8ff, sweatShine: 0xe6f7ff,
+    pencil: 0xffc83d, lens: 0x6cc4ff, shell: 0x5fe08a, ball: 0xeeeef6, disc: 0xd4d4e0, wrench: 0xb8b8c8, party: 0xb4b4c8,
+    discShade: 0x8e8ea0, sweat: 0x6ec8ff, sweatShine: 0xe6f7ff,
   },
   light: {
     bubble: 0x4a4a58, dots: 0x70708a, z: 0x5a5aa8, star: 0xe0a000, silhouette: 0x2e2e3a,
-    pencil: 0xe08a00, lens: 0x2a7ad0, shell: 0x1f9a4a, ball: 0xa8a8b4, wrench: 0x6a6a80, party: 0x5c5c74,
-    sweat: 0x2b8fe0, sweatShine: 0xbfe4ff,
+    pencil: 0xe08a00, lens: 0x2a7ad0, shell: 0x1f9a4a, ball: 0xa8a8b4, disc: 0x6e6e88, wrench: 0x6a6a80, party: 0x5c5c74,
+    discShade: 0x44445a, sweat: 0x2b8fe0, sweatShine: 0xbfe4ff,
   },
 }
 const UPPER_HALF = 0x2580
@@ -90,6 +92,10 @@ let working = false
 let turnRunning = false
 let thinking = false
 const runningTools = new Map()
+// Skill calls in flight from any agent, main loop or subagent, by tool_use_id
+const runningSkills = new Set()
+// The tick a typed skill's TM disc shows until
+let discUntil = 0
 let toolCalls = 0
 const verdicts = new Map()
 let flinchStart = -FLINCH_TICKS
@@ -289,12 +295,14 @@ const SWEAT = ['..d.', '.dd.', 'dhdd', 'dddd', '.dd.']
 const ALERT_ICON = { rows: ['..a..', '..a..', '.....', '..a..'], colors: { a: 0xff3d3d } }
 // What the bubble shows while a tool runs: a pencil (p body, e eraser, t wood, g lead),
 // a magnifier (l rim, h handle), a shell prompt (s), a Poké Ball (r top, k band,
-// w button, b bottom), or a wrench (m) for every other tool, MCP tools included
+// w button, b bottom), a TM disc (c disc, d shade, n shine) for a skill, or a wrench (m) for
+// every other tool, MCP tools included
 const TOOL_ICONS = {
   pencil: ['...pe', '..pp.', '.pp..', 'gt...'],
   lens: ['.ll..', 'l..l.', '.llh.', '....h'],
   shell: ['s....', '.s...', 's....', '..sss'],
   ball: ['.rrr.', 'rrrrr', 'kkwkk', '.bbb.'],
+  disc: ['.ncc.', 'nc.cc', 'ccccd', '.cdd.'],
   wrench: ['..m.m', '..mmm', '.m...', 'm....'],
 }
 const TOOL_KINDS = {
@@ -302,6 +310,7 @@ const TOOL_KINDS = {
   lens: ['Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch', 'LSP'],
   shell: ['Bash', 'PowerShell', 'Monitor', 'BashOutput', 'KillShell'],
   ball: ['Agent', 'Task', 'SendMessage', 'Workflow'],
+  disc: ['Skill'],
 }
 // Tools that ask you something, and notifications that wait on you
 const QUESTION_TOOLS = ['AskUserQuestion', 'ExitPlanMode']
@@ -330,15 +339,26 @@ function dotsIcon() {
   return { rows: ['.....', '.....', row, '.....'], colors: { d: ink.dots } }
 }
 
-// The icon of the main loop's most recently started tool that is still running
+// A skill is in use: a Skill call runs in some agent, or a skill was typed as /name
+const skillInUse = () => runningSkills.size > 0 || tick < discUntil
+
+// Hold the disc when a command that ran is a skill, by its source in the command list
+async function markSkillCommand($, command) {
+  const found = (await $.command.list()).find((c) => c.name === command)
+  if (found && found.source !== 'builtin') discUntil = tick + DISC_TICKS
+}
+
+// The icon of the main loop's most recently started tool that is still running. A
+// skill in use anywhere, in the main loop or a subagent, shows as a TM disc instead.
 function toolIcon() {
   const name = [...runningTools.values()].pop()
-  const kind = Object.keys(TOOL_KINDS).find((k) => TOOL_KINDS[k].includes(name)) ?? 'wrench'
+  const kind = skillInUse() ? 'disc' : (Object.keys(TOOL_KINDS).find((k) => TOOL_KINDS[k].includes(name)) ?? 'wrench')
   const colors = {
     p: ink.pencil, e: 0xe06888, t: 0xb88048, g: 0x767688,
     l: ink.lens, h: 0xb07040,
     s: ink.shell,
     r: 0xee4444, k: 0x60606c, w: 0xc0c0cc, b: ink.ball,
+    c: ink.disc, d: ink.discShade, n: 0xf6f6fc,
     m: ink.wrench,
   }
   return { rows: TOOL_ICONS[kind], colors }
@@ -349,6 +369,7 @@ function bubbleIcon() {
   if (attack) return null
   if (isAlerted()) return ALERT_ICON
   if (tick < yumUntil) return { rows: STAR, colors: { s: ink.star } }
+  if (skillInUse()) return toolIcon()
   if (working && runningTools.size > 0) return toolIcon()
   if (working && thinking) return dotsIcon()
   const need = needsOn && needNow()
@@ -1231,6 +1252,26 @@ async function forgetOldKeys($) {
 }
 
 const SYNC_TICKS = 20
+// How often the party is checked against the live agents, and how old a ball must be
+// before a missing agent pops it, so a fresh spawn the list hasn't caught up with stays
+const PARTY_SYNC_TICKS = 40
+// An agent still at work, as the agent list reports it
+const LIVE_STATUSES = ['pending', 'running', 'waiting']
+
+// Pop the ball of any agent the engine no longer reports at work. A teammate in a pane of
+// its own runs no loop here, so its turn never completes in this process, and this is the
+// only way its ball ever pops.
+async function syncParty($) {
+  const open = party.filter((ball) => ball.popStart === null && tick - ball.born >= PARTY_SYNC_TICKS)
+  if (open.length === 0) return
+  const live = new Set()
+  for (const agent of await $.agent.list()) {
+    if (!LIVE_STATUSES.includes(agent.status)) continue
+    live.add(agent.id)
+    if (agent.teammateId) live.add(agent.teammateId)
+  }
+  for (const ball of open) if (!live.has(ball.id)) party = leaveParty(party, ball.id, tick)
+}
 
 // Show the mon this one evolved into in another session, once nothing here is mid-move
 function followEvolution($, into, record) {
@@ -1586,6 +1627,7 @@ export function register(on) {
         stepOwed($)
         if (tick % STAT_REDRAW_TICKS === 0) resyncMeters($).catch((err) => logOnce($, err))
         if (tick % SYNC_TICKS === 0) syncSessions($).catch((err) => logOnce($, err))
+        if (tick % PARTY_SYNC_TICKS === 0) syncParty($).catch((err) => logOnce($, err))
         if (tick % BEAT_TICKS === 0) beat($, lastBeat).catch((err) => logOnce($, err))
         if (bandId !== null && bandSurface === 'terminal') blitFrame($)
         if (bandId !== null && bandSurface === 'desktop' && tick % DESKTOP_FRAME_TICKS === 0) redrawSvg($)
@@ -1859,15 +1901,18 @@ export function register(on) {
     })
   })
 
-  // Show the main loop's running tools in the bubble, and call you over while one
-  // asks you something. A call resolving also settles a dialog waiting on its tool.
+  // Show the main loop's running tools in the bubble, and any agent's running skill as
+  // a TM disc, and call you over while one asks you something. A call resolving also
+  // settles a dialog waiting on its tool.
   // A call that errors or throws makes the mon flinch, unless you interrupted it or
   // it was refused: by the permission check, at its dialog, or by a hook beneath.
   on('tool.call', async ($, e, next) => {
     const name = String(e.tool)
     let id = null
+    toolCalls += 1
+    const skillId = name === 'Skill' ? (e.tool_use_id ?? toolCalls) : null
+    if (skillId !== null) runningSkills.add(skillId)
     if (!e.agentId) {
-      toolCalls += 1
       id = e.tool_use_id ?? toolCalls
       runningTools.set(id, name)
       if (QUESTION_TOOLS.includes(name)) raiseAlert({ tool: name })
@@ -1878,6 +1923,7 @@ export function register(on) {
       failed = result?.isError === true && !REFUSED.test(String(result.text ?? ''))
       return result
     } finally {
+      if (skillId !== null) runningSkills.delete(skillId)
       if (id !== null) {
         runningTools.delete(id)
         if (failed && !next.signal?.aborted && verdicts.get(id) !== 'deny') flinch()
@@ -1885,6 +1931,23 @@ export function register(on) {
       }
       alertTools.delete(name)
     }
+  })
+
+  // A skill you type as /name runs as a command, with no Skill call, and a forked one
+  // also spawns no agent, so the command running is the only sign of it. A command from
+  // your own files, a plugin, or an MCP server counts as a skill; Claude Code's built-in
+  // commands, and /pokemon itself, don't. The disc shows for a moment.
+  on('command.run', async ($, e, next) => {
+    if (e.command !== 'pokemon') await markSkillCommand($, e.command).catch((err) => logOnce($, err))
+    return next(e)
+  })
+
+  // The typings say a skill's prompt expanding raises this, for /name, the Skill tool,
+  // and a preload into a subagent. In practice no session raises it yet, so the hooks
+  // above carry the disc, and this one is ready for when it does.
+  on('skill.prompt', async ($, e, next) => {
+    discUntil = tick + DISC_TICKS
+    return next(e)
   })
 
   // Note what the permission check decides for the main loop's calls, so a call it
@@ -1915,7 +1978,7 @@ export function register(on) {
   })
 
   // Each subagent the Agent tool starts is a Poké Ball in the party along the left of
-  // the strip, until its turn ends
+  // the strip, until its turn ends or the agent list stops reporting it at work
   on('agent.spawn', async ($, e, next) => {
     const result = await next(e)
     if (result?.agentId) party = joinParty(party, result.agentId, tick)

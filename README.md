@@ -22,7 +22,7 @@ Then pick your partner with `/pokemon <mon>`.
 
 ## Why you'll keep it on
 
-- 🔎 **It watches Claude work.** A pencil for edits, a magnifier for reads, `>_` for shell commands.
+- 🔎 **It watches Claude work.** A pencil for edits, a magnifier for reads, `>_` for shell commands, a TM disc for skills.
 - ⚪ **Every subagent is a Poké Ball.** It drops when the subagent starts and pops when it reports back.
 - ❗ **It tells you when Claude needs you.** A red "!" for questions, plan approvals, and permission prompts.
 - 💦 **It flinches when a tool fails.** A shake and a sweat drop, so you notice.
@@ -108,9 +108,10 @@ Then pick your partner with `/pokemon <mon>`.
 | Claude works | Paces back and forth across the strip | band `isWorking` |
 | Claude thinks | Shows a thought bubble with animated dots | spinner `mode === 'thinking'` |
 | Claude runs a tool | Shows the tool in its bubble: a pencil for edits, a magnifier for reads and searches, `>_` for shell, a Poké Ball for subagents, a wrench for the rest | `tool.call` (main agent only) |
+| A skill is used | Shows a TM disc in its bubble while a Skill call runs in any agent, and for 3 s when you type a skill as `/name`. Skills from your own files, plugins, and MCP servers count; Claude Code's built-in commands don't | `tool.call` (any agent), `command.run`, `skill.prompt` |
 | A tool call fails | Shakes, then holds still with a blue sweat drop. Calls you deny or interrupt don't count. It skips the flinch while a move or a "!" is showing | `tool.call` (main agent only), `tool.check` |
 | Claude needs you | Stops, faces you, and shows a red "!" until you answer. If you don't reply within a minute of a turn ending, it shows the "!" for 2 minutes | AskUserQuestion, ExitPlanMode, `turn.complete`, `classic.PermissionRequest`, `classic.Notification` |
-| A subagent runs | Drops a Poké Ball that wobbles while the subagent works and pops when it ends. Past six, the last slot shows `+n` | `agent.spawn`, `turn.complete` |
+| A subagent runs | Drops a Poké Ball that wobbles while the subagent works and pops when it ends, or when the agent list stops reporting it at work, as for a teammate in its own pane. Past six, the last slot shows `+n` | `agent.spawn`, `turn.complete`, `$.agent.list()` |
 | A turn ends | Hops twice, unless you interrupted it | `turn.complete` (main agent only) |
 | A turn ends with an answer | Earns XP, and may level up or evolve | `turn.complete` (main agent only) |
 | You're idle | Strolls to random spots, resting 3 to 8 s between walks. With wandering off, it walks home and bobs | |

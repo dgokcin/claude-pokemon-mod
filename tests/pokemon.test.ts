@@ -1612,6 +1612,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
 // red top and white bottom, and the +n label, on the dark theme
 const SHELL_ICON = 0x5fe08a
 const PENCIL_ICON = 0xffc83d
+const DISC_ICON = 0xd4d4e0
 const DOTS = 0x9a9ab0
 const ALERT = 0xff3d3d
 const BALL_TOP = 0xe03030
@@ -1663,6 +1664,65 @@ test('the bubble shows the main loop\'s running tool while Claude works', async 
   expect(paints(await shown(ui, blits), PENCIL_ICON)).toBe(true)
   await clock.advance(2000)
   await edit
+})
+
+test('a skill shows a TM disc in the bubble, from the main loop or a subagent', async ($, on) => {
+  on('skill.prompt', (_, e) => ({ text: e.text }))
+  on('command.run', (_, e) => ({ text: 'ran /' + e.command }))
+  on('command.list', () => ({
+    value: [
+      { name: 'commit', description: 'Commit the work', source: 'user' },
+      { name: 'compact', description: 'Compact the context', source: 'builtin' },
+    ],
+  }))
+  const { clock, blits } = await started($, on)
+  slowTools(on, clock)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.ui.mount({ ...SPINNER, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
+
+  const skill = $.tool.call({ tool: 'Skill', skill: 'commit' })
+  await clock.advance(100)
+  const running = await shown(ui, blits)
+  expect(paints(running, DISC_ICON)).toBe(true)
+  expect(paints(running, SHELL_ICON)).toBe(false)
+  await clock.advance(2000)
+  await skill
+  await clock.advance(100)
+  expect(paints(await shown(ui, blits), DISC_ICON)).toBe(false)
+
+  // A subagent's skill shows the disc too, over the Agent call's Poké Ball
+  const agent = $.tool.call({ tool: 'Agent', prompt: 'commit it' })
+  await clock.advance(100)
+  expect(paints(await shown(ui, blits), DISC_ICON)).toBe(false)
+  const sub = $.tool.call({ tool: 'Skill', skill: 'commit', agentId: 'sub1' })
+  await clock.advance(100)
+  expect(paints(await shown(ui, blits), DISC_ICON)).toBe(true)
+  await clock.advance(2000)
+  await sub
+  await agent
+  await clock.advance(100)
+  expect(paints(await shown(ui, blits), DISC_ICON)).toBe(false)
+
+  // A skill typed as /name runs as a command with no Skill call, and shows the disc
+  // for three seconds even while Claude isn't working. A built-in command doesn't.
+  await ui.unmount()
+  const idle = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.command.run({ command: 'commit', args: '' })
+  await clock.advance(100)
+  expect(paints(await shown(idle, blits), DISC_ICON)).toBe(true)
+  await clock.advance(2500)
+  expect(paints(await shown(idle, blits), DISC_ICON)).toBe(true)
+  await clock.advance(600)
+  expect(paints(await shown(idle, blits), DISC_ICON)).toBe(false)
+  await $.command.run({ command: 'compact', args: '' })
+  await clock.advance(100)
+  expect(paints(await shown(idle, blits), DISC_ICON)).toBe(false)
+
+  // The event the typings promise for a skill's prompt holds the disc too
+  await $.skill.prompt({ skill: 'commit', text: 'Commit the work.' })
+  await clock.advance(100)
+  expect(paints(await shown(idle, blits), DISC_ICON)).toBe(true)
 })
 
 test('a permission request stops the mon with a "!" until its call resolves or you answer', async ($, on) => {
@@ -1861,8 +1921,18 @@ const spawnOf = (id: string) => ({
   background: false,
 })
 
+// The engine's agent list, with every spawned agent still running
+function runningAgents(on) {
+  const ids: string[] = []
+  on('agent.spawn', ($, e) => {
+    ids.push('agent-' + e.tool_use_id)
+    return { model: 'claude-haiku-4-5', agentId: 'agent-' + e.tool_use_id }
+  })
+  on('agent.list', () => ({ value: ids.map((id) => ({ id, description: 'Count files', type: 'Explore', status: 'running' })) }))
+}
+
 test('a subagent drops a Poké Ball onto the ground, and it pops when its turn ends', async ($, on) => {
-  on('agent.spawn', ($, e) => ({ model: 'claude-haiku-4-5', agentId: 'agent-' + e.tool_use_id }))
+  runningAgents(on)
   on('turn.complete', () => ({ text: '' }))
   const { clock, blits } = await startedWith($, on, { wander: false }, 0)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
@@ -1882,8 +1952,27 @@ test('a subagent drops a Poké Ball onto the ground, and it pops when its turn e
   expect(paints(popped, BALL_BOTTOM)).toBe(false)
 })
 
+test('a teammate in its own pane pops its ball once the agent list shows it idle', async ($, on) => {
+  // A pane teammate's id is its address, and its turn never completes in this process
+  let status = 'running'
+  on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'designer@team' }))
+  on('agent.list', () => ({ value: [{ id: 'designer@team', teammateId: 'designer@team', description: 'Design', type: 'teammate', status }] }))
+  const { clock, blits } = await startedWith($, on, { wander: false }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  await $.agent.spawn(spawnOf('t1'))
+  await clock.advance(6000)
+  expect(groundColors(await shown(ui, blits)).has(BALL_BOTTOM)).toBe(true)
+
+  status = 'idle'
+  await clock.advance(4000)
+  const popped = await shown(ui, blits)
+  expect(paints(popped, BALL_TOP)).toBe(false)
+  expect(paints(popped, BALL_BOTTOM)).toBe(false)
+})
+
 test('past five subagents, the last slot counts the rest as +n', async ($, on) => {
-  on('agent.spawn', ($, e) => ({ model: 'claude-haiku-4-5', agentId: 'agent-' + e.tool_use_id }))
+  runningAgents(on)
   const { clock, blits } = await startedWith($, on, { wander: false }, 0)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
