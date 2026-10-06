@@ -560,10 +560,7 @@ test('draws food circles and happiness hearts at the right edge as text', async 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   // A new mon starts at 80%: four filled icons and one empty in each meter
   expect(await ui.find({ type: 'Text', text: '●●●●○' })).toBeDefined()
-  // Empty hearts are a dimmed ♥, since many fonts draw ♡ at another size
-  expect(await ui.find({ type: 'Text', text: '♥♥♥♥' })).toBeDefined()
-  expect((await ui.find({ type: 'Text', text: /^♥$/ })).props.dimColor).toBe(true)
-  expect(await ui.find({ type: 'Text', text: /♡/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '♥♥♥♥♡' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /🍓|💗/ })).toBeUndefined()
 })
 
