@@ -1646,7 +1646,7 @@ export function register(on) {
       pettingFills = mon
       const pets = Number((await $.store.get('pets')) ?? 0) + 1
       await $.store.set('pets', pets)
-      return { text: line + ' (pets: ' + pets + ')' }
+      return { text: line }
     } else if (asked === 'feed') {
       // A full mon, every food icon filled, still eats the berry, but it fills no meter
       // and doesn't count as a feed
@@ -1659,7 +1659,7 @@ export function register(on) {
       food.fills = mon
       const feeds = Number((await $.store.get('feeds')) ?? 0) + 1
       await $.store.set('feeds', feeds)
-      return { text: tossed + ' (feeds: ' + feeds + ')' }
+      return { text: tossed }
     } else if (asked === 'sleep') {
       const name = nameOf(mon)
       if (isTuckedIn()) {
