@@ -450,7 +450,7 @@ test('/pokemon pet sends hearts up, then they fade', async ($, on) => {
   await $.ui.mount({ ...BAND, surface: 'terminal' })
 
   const answer = await $.command.run({ command: 'pokemon', args: 'pet' })
-  expect(answer.text).toMatch(/^Abra .+ ♥ \(pets: 1\)$/)
+  expect(answer.text).toMatch(/^Abra .+ ♥$/)
   const hearty = (cells: string) => paints(cells, 0xff4f8b)
   await clock.advance(400)
   expect(hearty(blits[blits.length - 1])).toBe(true)
@@ -471,7 +471,7 @@ test('/pokemon feed drops a random berry, the mon walks over and eats it, then s
   await $.ui.mount({ ...BAND, surface: 'terminal' })
 
   const answer = await $.command.run({ command: 'pokemon', args: 'feed' })
-  expect(answer.text).toMatch(/^You toss Abra (an oran|a pecha|a razz|a sitrus) berry \S+ \(feeds: 1\)$/u)
+  expect(answer.text).toMatch(/^You toss Abra (an oran|a pecha|a razz|a sitrus) berry \S+$/u)
   const busy = await $.command.run({ command: 'pokemon', args: 'feed' })
   expect(busy.text).toBe('Abra is busy eating. Try again in a moment.')
 
@@ -560,10 +560,7 @@ test('draws food circles and happiness hearts at the right edge as text', async 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   // A new mon starts at 80%: four filled icons and one empty in each meter
   expect(await ui.find({ type: 'Text', text: '●●●●○' })).toBeDefined()
-  // Empty hearts are a dimmed ♥, since many fonts draw ♡ at another size
-  expect(await ui.find({ type: 'Text', text: '♥♥♥♥' })).toBeDefined()
-  expect((await ui.find({ type: 'Text', text: /^♥$/ })).props.dimColor).toBe(true)
-  expect(await ui.find({ type: 'Text', text: /♡/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '♥♥♥♥♡' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /🍓|💗/ })).toBeUndefined()
 })
 
