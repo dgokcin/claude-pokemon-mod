@@ -29,6 +29,7 @@ Then pick your partner with `/pokemon <mon>`.
 - 📈 **It levels up as you ship.** Every answered turn earns XP, and mons evolve at their levels from the games.
 - 🫐 **It needs you too.** Feed it and pet it, or it gets hungry and lonely.
 - ⚡ **It fights.** 135 moves from gen 1, each with its own pixel animation.
+- 🌿 **Wild Pokémon show up.** Your work wears them down, and `/pokemon catch` fills your Pokédex.
 - 🎨 **All 151 gen 1 Pokémon**, each in default and shiny.
 
 ## See it
@@ -60,6 +61,8 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon evolve` | Evolve with a stone or a trade |
 | `/pokemon stats` | Level, XP, evolution, and meters |
 | `/pokemon box` | Every mon you've raised |
+| `/pokemon catch` | Throw a Poké Ball at a wild mon |
+| `/pokemon dex` | Every wild mon you've seen and caught |
 
 <details>
 <summary>All commands</summary>
@@ -88,6 +91,10 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon box` | List every mon you've raised, highest level first |
 | `/pokemon nickname <name>` | Nickname the mon, up to 12 characters. It keeps the name when it evolves, and its species name takes the nickname away |
 | `/pokemon release <mon>` | Release a mon from your box. It starts over at its first level with fresh meters |
+| `/pokemon catch` | Throw a Poké Ball at the wild mon. The odds rise as its HP falls |
+| `/pokemon run` | Send the wild mon away |
+| `/pokemon dex` | Count the wild mons you've seen and caught, and list them in Pokédex order. ✦ marks a shiny catch |
+| `/pokemon dex <mon>` | Show one mon's Pokédex number, how rare it is, and whether you've seen or caught it |
 | Ctrl+X Ctrl+A | Collapse or expand the band (Claude Code's own binding) |
 
 </details>
@@ -114,6 +121,8 @@ Then pick your partner with `/pokemon <mon>`.
 | A subagent runs | Drops a Poké Ball that wobbles while the subagent works and pops when it ends, or when the agent list stops reporting it at work, as for a teammate in its own pane. Past six, the last slot shows `+n` | `agent.spawn`, `turn.complete`, `$.agent.list()` |
 | A turn ends | Hops twice, unless you interrupted it | `turn.complete` (main agent only) |
 | A turn ends with an answer | Earns XP, and may level up or evolve | `turn.complete` (main agent only) |
+| A wild mon is due | Walks home, and the strip widens as the foe walks in from the left | `tool.call` (main agent only), the shared `wildAt` store key |
+| Claude works during a battle | Banks a move per tool call and answered turn, and fires one at the foe every 6 to 8 s | `tool.call` (any agent), `turn.complete` |
 | You're idle | Strolls to random spots, resting 3 to 8 s between walks. With wandering off, it walks home and bobs | |
 | 5 minutes with no activity | Falls asleep with pixel Zs | `prompt.edit`, `prompt.submit`, turns |
 | Food or happiness under 30% | Thinks of a berry (hungry) or a heart (lonely). Walks slower when hungry | |
@@ -210,6 +219,37 @@ Smog. An unknown effect plays `impact`.
 </details>
 
 <details>
+<summary>Wild encounters</summary>
+
+About every 20 to 40 minutes of work, a wild mon walks in from the left. Open sessions
+share one timer, so running several brings no more, and the first one comes about 5
+minutes into your work. Base forms turn up most. Evolved mons, fossils, and the likes of
+Lapras and Snorlax are rarer, the five legendaries rarest, and 1 in 128 is shiny.
+
+Your work does the fighting. Each tool call and each answered turn banks a move, two at
+most, and the mon spends one every 6 to 8 s on a random move aimed at the foe. Each hit
+shrinks the HP bar over the foe's head. A common foe takes about 3 hits, a legendary about 10.
+
+`/pokemon catch` throws a Poké Ball. The odds rise as HP falls. At full HP the ball always
+breaks free, and a worn out foe at 0 HP is a sure catch. The ball rocks once per shake
+before it clicks shut or the foe breaks out.
+
+The foe leaves after 4 minutes without a hit, 90 s after it's worn out, after 4 turns end
+without a catch, when the mon falls asleep, or on `/pokemon run`. `/pokemon feed` waits
+until it's gone, and so does an evolution that comes due.
+
+The Pokédex counts wild mons only, seen when one shows up and caught when you catch it. A
+caught species joins your box at its first level, unless it's there already, and its line
+in `/pokemon box` shows ◓. Releasing a mon keeps it in the dex. `/pokemon <mon>` still
+picks any mon, and a mon evolved from a caught one shows no ◓ until you catch its evolved
+form too.
+
+The battle needs a wider strip than the mon alone. A band 80 columns wide fits every pair,
+a narrower one only the smaller foes, and under about 40 columns no encounter comes.
+
+</details>
+
+<details>
 <summary>Sprites and sizing</summary>
 
 All 151 gen 1 Pokémon are included, plus `pikachu_female` and `venusaur_female`. Names
@@ -239,6 +279,16 @@ claude plugin install pokemon@claude-pokemon
 
 A local marketplace loads the mod in place, so your edits apply on `/reload-plugins`.
 
+To call a wild mon without waiting, turn on debug mode:
+
+1. Open the mod's store file, `~/.claude/plugins/store/pokemon_<marketplace>-<hash>.json`.
+   For the local marketplace above it's `pokemon_claude-pokemon-<hash>.json`.
+2. Add `"debug": true` to the top-level object.
+3. Run `/reload-plugins`.
+
+Then `/pokemon wild`, `/pokemon wild <mon>`, or `/pokemon wild <mon> shiny` calls one in
+without waiting for the shared timer. Without debug, `wild` replies as an unknown option.
+
 <details>
 <summary>Add a mon</summary>
 
@@ -259,6 +309,9 @@ node scripts/build-frames.mjs                    # after changing sprites/
 node scripts/preview-attack.mjs <mon> <move>     # contact sheet in /tmp/<mon>-<move>.png
 node scripts/preview-attack.mjs <mon> <move> --at 2   # start from the left edge
 node scripts/preview-sleep.mjs <mon>...          # awake and asleep frames in /tmp/sleep.png
+node scripts/preview-wild.mjs <mon> <foe>        # a battle in /tmp/<mon>-vs-<foe>.png
+node scripts/preview-wild.mjs <mon> <foe> --move ember   # one move at the foe
+node scripts/preview-wild.mjs <mon> <foe> --throw catch  # a ball that holds, or --throw fail
 node scripts/check-data.mjs                      # moves, evolutions, and sprites agree
 npx @biomejs/biome@2.5.15 ci --error-on-warnings .   # lint, same as CI
 claude plugin validate .
@@ -276,11 +329,13 @@ claude --plugin-dir .                            # live-reloading session
 | `hooks/levels.js` | The XP curve, and the XP a turn earns |
 | `hooks/evolutions.js` | Gen 1 evolutions, and each mon's start level |
 | `hooks/party.js` | The Poké Balls of running subagents |
+| `hooks/dex.js` | The Pokédex, and how rare each mon is in the wild |
+| `hooks/wild.js` | A wild mon's visit: walking in, battle, throws, and fleeing |
 | `hooks/zoom.js` | Shrinks the band to fit a short pane |
 | `hooks/eyes.js` | Each mon's eyes on every frame, shut while it sleeps |
 | `hooks/frames.js` | Generated pixel frames. Don't edit by hand |
 | `sprites/<mon>/*.gif` | Source GIFs, 32x32 |
-| `scripts/` | Frame builder, attack and sleep previewers, data check |
+| `scripts/` | Frame builder, attack, sleep, and battle previewers on a stand-in host, data check |
 | `tests/pokemon.test.ts` | `claude plugin test` suite |
 
 CI runs the lint, the data check, and the tests on every pull request and push to `main`.

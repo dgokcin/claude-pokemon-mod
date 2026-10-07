@@ -492,9 +492,12 @@ const HOUR = 3600 * 1000
 async function startedWith($, on, saved: Record<string, unknown>, now: number) {
   const clock = mock.clock(on, { now })
   const blits: string[] = []
+  // Each blit's width in columns, alongside blits
+  const widths: number[] = []
   on('ui.render', () => THEIRS)
   on('ui.blit', ($, e) => {
     blits.push(e.cells)
+    widths.push(e.columns)
     return { value: {} }
   })
   on('session.start', () => ({ cwd: '/work' }))
@@ -510,7 +513,7 @@ async function startedWith($, on, saved: Record<string, unknown>, now: number) {
     return { value: undefined }
   })
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  return { clock, blits }
+  return { clock, blits, widths }
 }
 
 // The lowest pixel row a frame paints, two pixel rows per cell
@@ -1482,6 +1485,35 @@ test('/pokemon box says when the box is empty, or holds only the active mon', as
   expect(await run()).toBe('1 mon in your box:\nAbra, Lv. 5 ●●●●○ ♥♥♥♥♥ (active)\nOnly Abra so far. /pokemon <mon> picks another.')
 })
 
+test('/pokemon dex counts nothing before any wild mon turns up', async ($, on) => {
+  await startedWith($, on, {}, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await run('dex')).toBe('Pokédex: seen 0, caught 0 of 151. No wild mons met yet.')
+  expect(await run('dex pidgey')).toBe('#016 Pidgey, common. Not seen yet.')
+  expect(await run('dex agumon')).toBe('Unknown mon "agumon". See /pokemon list for every mon.')
+})
+
+test('/pokemon dex lists caught mons in dex order, then the ones only seen', async ($, on) => {
+  // Only a caught entry's shiny flag counts
+  const dex = {
+    snorlax: { seen: 3, caught: 4 },
+    pidgey: { seen: 1, caught: 2, shiny: true },
+    rattata: { seen: 5, shiny: true },
+    venusaur: { seen: 6 },
+    agumon: { seen: 7, caught: 7 },
+  }
+  await startedWith($, on, { dex }, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await run('dex')).toBe(
+    ['Pokédex: seen 4, caught 2 of 151 (1 shiny).', '#016 Pidgey ◓ ✦', '#143 Snorlax ◓', 'Seen: Venusaur, Rattata'].join('\n'),
+  )
+  expect(await run('dex pidgey')).toBe('#016 Pidgey, common. Caught ◓ ✦.')
+  expect(await run('dex snorlax')).toBe('#143 Snorlax, rare. Caught ◓.')
+  // A female sprite shares its base form's entry
+  expect(await run('dex venusaur_female')).toBe('#003 Venusaur, rare. Seen, not caught yet.')
+  expect(await run('dex mew')).toBe('#151 Mew, legendary. Not seen yet.')
+})
+
 test('/pokemon release drops a mon from the box, so it starts over at its first level with fresh meters', async ($, on) => {
   const low = { value: 10, at: 0 }
   const saved: Record<string, any> = { mon: 'pikachu', stats: { pikachu: { xp: 12 ** 3, food: low, happiness: low }, charizard: { xp: 40 ** 3 } } }
@@ -1616,7 +1648,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('session.start', () => ({ cwd: '/work' }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|autoevolve|pet|feed|sleep|attack|moves|evolve|stop|stats|box|nickname|release|list]')
+  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|autoevolve|pet|feed|sleep|attack|catch|run|moves|evolve|stop|stats|box|dex|nickname|release|list]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
@@ -2060,4 +2092,393 @@ test('a mon mid-strip backs up to the edge before its move shows, and stays busy
   const first = frames.findIndex((cells) => paints(cells, CONFUSION))
   expect(first).toBeGreaterThan(4)
   expect(rightEdge(frames[first - 1])).toBeGreaterThan(home - 3)
+})
+
+// The raster columns painting a color, in a raster width columns wide
+function columnsIn(cells: string, width: number, color: number): number[] {
+  const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
+  const columns: number[] = []
+  for (let i = 0; i < words.length; i += 3) {
+    if (words[i + 1] === color || words[i + 2] === color) columns.push((i / 3) % width)
+  }
+  return columns
+}
+
+// A color of the foe's palette that the home mon's lacks
+function foeColor(home: string, foe: string, variant = 'default'): number {
+  const own = new Set(SPRITES[home].variants.default.palette.map((hex) => hex.toLowerCase()))
+  const hex = SPRITES[foe].variants[variant].palette.find((c) => !own.has(c.toLowerCase()))
+  return parseInt(hex.slice(1), 16)
+}
+
+test('/pokemon wild spawns a mon only with debug on and a band it fits in', async ($, on) => {
+  const saved: Record<string, any> = { wander: false }
+  await startedWith($, on, saved, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await run('wild pidgey')).toMatch(/^Unknown option "wild pidgey"\. /)
+  saved.debug = true
+  // No band drawn yet, so no battle fits
+  expect(await run('wild pidgey')).toBe('The band is too narrow for a wild Pidgey. Widen the pane and try again.')
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await run('wild agumon')).toBe('Unknown mon "agumon". See /pokemon list for every mon.')
+  expect(await run('wild pidgey')).toBe('A wild Pidgey is on its way.')
+  expect(await run('wild rattata')).toBe('A wild Pidgey is already here.')
+})
+
+test('a wild mon walks in from the left, the strip widens to fit it, and the dex marks it seen', async ($, on) => {
+  const toasts = toastsOf(on)
+  const saved: Record<string, any> = { wander: false, debug: true }
+  const { clock, blits, widths } = await startedWith($, on, saved, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(100)
+  const seen = blits.length
+  await $.command.run({ command: 'pokemon', args: 'wild pidgeot' })
+  await clock.advance(10000)
+
+  const color = foeColor('abra', 'pidgeot')
+  const frames = blits.map((cells, i) => ({ cells, width: widths[i] })).slice(seen)
+  const showing = frames.filter((f) => columnsIn(f.cells, f.width, color).length > 0)
+  expect(showing.length).toBeGreaterThan(0)
+  // Pidgeot is too wide to share 40 columns with Abra
+  expect(showing.every((f) => f.width > RASTER)).toBe(true)
+  // It first shows at the scene's left edge, and stands further right once it arrives
+  const first = columnsIn(showing[0].cells, showing[0].width, color)
+  const last = columnsIn(showing[showing.length - 1].cells, showing[showing.length - 1].width, color)
+  expect(Math.min(...first)).toBe(0)
+  expect(Math.max(...first)).toBeLessThan(4)
+  expect(Math.min(...last)).toBeGreaterThan(0)
+
+  expect(toasts).toEqual(['A wild Pidgeot (Lv. 36) appeared!'])
+  expect(saved.dex).toEqual({ pidgeot: { seen: expect.any(Number) } })
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).toContain(', a wild Pidgeot is here (')
+})
+
+test('a wild mon flees after four minutes without a fight, and the strip shrinks back', async ($, on) => {
+  const toasts = toastsOf(on)
+  const { clock, widths } = await startedWith($, on, { wander: false, debug: true }, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.command.run({ command: 'pokemon', args: 'wild pidgeot' })
+  await clock.advance(10000)
+  expect(widths[widths.length - 1]).toBeGreaterThan(RASTER)
+  // Keep Abra awake meanwhile, since a sleeping mon sends the foe off too
+  for (let k = 0; k < 4; k++) {
+    await $.command.run({ command: 'pokemon', args: 'stats' })
+    await clock.advance(60 * 1000)
+  }
+  await clock.advance(10000)
+  expect(toasts).toEqual(['A wild Pidgeot (Lv. 36) appeared!', 'Wild Pidgeot fled!'])
+  expect(widths[widths.length - 1]).toBe(RASTER)
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).not.toContain('wild')
+})
+
+test('/pokemon run sends the wild mon off, and the strip shrinks back', async ($, on) => {
+  const toasts = toastsOf(on)
+  const { clock, widths } = await startedWith($, on, { wander: false, debug: true }, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await run('run')).toBe('There\'s no wild Pokémon here.')
+  await run('wild pidgeot')
+  await clock.advance(10000)
+  expect(await run('run')).toBe('Got away safely!')
+  expect(await run('run')).toBe('There\'s no wild Pokémon here.')
+  await clock.advance(10000)
+  expect(toasts).toEqual(['A wild Pidgeot (Lv. 36) appeared!'])
+  expect(widths[widths.length - 1]).toBe(RASTER)
+})
+
+test('a wild mon leaves when the shown mon goes to sleep', async ($, on) => {
+  const toasts = toastsOf(on)
+  const { clock } = await startedWith($, on, { wander: false, debug: true }, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.command.run({ command: 'pokemon', args: 'wild pidgey' })
+  await clock.advance(10000)
+  await $.command.run({ command: 'pokemon', args: 'sleep' })
+  await clock.advance(100)
+  expect(toasts).toEqual(['A wild Pidgey (Lv. 5) appeared!', 'Wild Pidgey fled!'])
+})
+
+test('the widest battles fit the desktop Svg in its size limit', { timeoutMs: 60000 }, async ($, on) => {
+  const { clock } = await startedWith($, on, { wander: false, debug: true }, 0)
+  const widest = ['gyarados', 'pidgeot', 'fearow', 'dragonair']
+  for (const home of widest) {
+    for (const foe of widest) {
+      await $.command.run({ command: 'pokemon', args: home })
+      const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+      expect((await $.command.run({ command: 'pokemon', args: 'wild ' + foe + ' shiny' })).text).toBe('A wild ' + foe.charAt(0).toUpperCase() + foe.slice(1) + ' is on its way.')
+      await clock.advance(10000)
+      const svg = await ui.find({ type: 'Svg' })
+      expect(svg.props.alt).toBe(home.charAt(0).toUpperCase() + home.slice(1) + ' vs. wild ' + foe.charAt(0).toUpperCase() + foe.slice(1))
+      expect(svgOf(svg).length).toBeLessThan(131072)
+      await $.command.run({ command: 'pokemon', args: 'run' })
+      await clock.advance(10000)
+      await ui.unmount()
+    }
+  }
+})
+
+const HP_GREEN = 0x48c858
+
+// Answer every tool call at once
+function quickTools(on) {
+  on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }))
+}
+
+// Start a session with a wild foe standing in battle. saved is the store itself, so the
+// test reads what the session writes.
+async function inBattle($, on, saved: Record<string, any>, foe = 'pidgey') {
+  const toasts = toastsOf(on)
+  quickTools(on)
+  Object.assign(saved, { wander: false, debug: true, ...saved })
+  const started = await startedWith($, on, saved, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.command.run({ command: 'pokemon', args: 'wild ' + foe })
+  await started.clock.advance(10000)
+  return { ...started, toasts }
+}
+
+const movesIn = (toasts: string[]) => toasts.filter((text) => / used .+!$/.test(text))
+
+test('work during a battle fires a move at the foe, and the hit shrinks its HP bar', async ($, on) => {
+  const { clock, blits, widths, toasts } = await inBattle($, on, {})
+  const green = () => columnsIn(blits[blits.length - 1], widths[widths.length - 1], HP_GREEN).length
+  expect(green()).toBe(12)
+  await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
+  await clock.advance(100)
+  // Teleport would leave the foe behind, so Confusion is the move that reaches it
+  expect(movesIn(toasts)).toEqual(['Abra used Confusion!'])
+  await clock.advance(5000)
+  expect(green()).toBeLessThan(12)
+})
+
+test('banked work fires one move at a time, at most one every six seconds', async ($, on) => {
+  const { clock, toasts } = await inBattle($, on, {})
+  for (let k = 0; k < 3; k++) await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
+  await clock.advance(100)
+  expect(movesIn(toasts).length).toBe(1)
+  await clock.advance(5800)
+  expect(movesIn(toasts).length).toBe(1)
+  await clock.advance(2200)
+  expect(movesIn(toasts).length).toBe(2)
+  // Work banks two moves at most
+  await clock.advance(20000)
+  expect(movesIn(toasts).length).toBe(2)
+})
+
+test('a sleeping mon makes no moves, and the foe leaves', async ($, on) => {
+  const { clock, toasts } = await inBattle($, on, {})
+  await $.command.run({ command: 'pokemon', args: 'sleep' })
+  await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
+  await clock.advance(10000)
+  expect(movesIn(toasts)).toEqual([])
+  expect(toasts).toContain('Wild Pidgey fled!')
+})
+
+test('an evolving mon makes no moves until it has evolved', async ($, on) => {
+  const stats = { charmander: { xp: 16 ** 3 } }
+  const { clock, toasts } = await inBattle($, on, { mon: 'charmander', autoEvolve: false, stats })
+  await $.command.run({ command: 'pokemon', args: 'evolve' })
+  await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
+  await clock.advance(6000)
+  expect(movesIn(toasts)).toEqual([])
+  await clock.advance(3000)
+  expect(movesIn(toasts)).toEqual([expect.stringMatching(/^Charmeleon used /)])
+})
+
+test('/pokemon feed waits until the foe is gone', async ($, on) => {
+  await inBattle($, on, {})
+  const feed = await $.command.run({ command: 'pokemon', args: 'feed' })
+  expect(feed.text).toBe('Not now, a wild Pidgey is right there!')
+})
+
+test('a foe at 0 HP is worn out, and leaves if no ball comes in time', async ($, on) => {
+  const { clock, toasts } = await inBattle($, on, {})
+  const worn = 'Wild Pidgey is worn out! Throw a ball with /pokemon catch.'
+  // A common foe takes three hits, give or take one
+  for (let k = 0; k < 6 && !toasts.includes(worn); k++) {
+    await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
+    await clock.advance(9000)
+  }
+  expect(toasts).toContain(worn)
+  const moves = movesIn(toasts).length
+  expect(moves).toBeGreaterThanOrEqual(2)
+  expect(moves).toBeLessThanOrEqual(5)
+  // Nothing left to hit, so work banks no more moves
+  await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
+  await clock.advance(9000)
+  expect(movesIn(toasts).length).toBe(moves)
+  expect(toasts).not.toContain('Wild Pidgey fled!')
+  await clock.advance(90 * 1000)
+  expect(toasts).toContain('Wild Pidgey fled!')
+})
+
+test('a foe left uncaught for four main turns moves on', async ($, on) => {
+  on('turn.complete', () => ({ text: '' }))
+  const { toasts } = await inBattle($, on, {})
+  const aborted = { ...ANSWERED, reason: 'aborted', isAborted: true }
+  for (let k = 0; k < 3; k++) await $.turn.complete(aborted)
+  await $.turn.complete({ ...aborted, agentId: 'sub1' })
+  expect(toasts).not.toContain('Wild Pidgey fled!')
+  await $.turn.complete(aborted)
+  expect(toasts).toContain('Wild Pidgey fled!')
+})
+
+const WORN = 'Wild Pidgey is worn out! Throw a ball with /pokemon catch.'
+
+// Bank work until the foe in battle is worn out
+async function wearOut($, clock, toasts: string[]) {
+  for (let k = 0; k < 6 && !toasts.includes(WORN); k++) {
+    await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
+    await clock.advance(9000)
+  }
+  expect(toasts).toContain(WORN)
+}
+
+test('a ball thrown at full HP always breaks free, and the foe fights on', async ($, on) => {
+  const { clock, blits, widths, toasts } = await inBattle($, on, {})
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await run('catch')).toBe('You threw a Poké Ball!')
+  expect(await run('catch')).toBe('Wait for the move to end.')
+  await clock.advance(4000)
+  expect(toasts).toContain('Oh no! It broke free!')
+  expect(columnsIn(blits[blits.length - 1], widths[widths.length - 1], foeColor('abra', 'pidgey')).length).toBeGreaterThan(0)
+  expect(await run('')).toContain(', a wild Pidgey is here (')
+})
+
+test('/pokemon catch needs a foe in battle', async ($, on) => {
+  await startedWith($, on, {}, 0)
+  const answer = await $.command.run({ command: 'pokemon', args: 'catch' })
+  expect(answer.text).toBe('There\'s no wild Pokémon here.')
+})
+
+test('a worn out foe is caught, joins the box parked at its first level, and the strip shrinks back', async ($, on) => {
+  const saved: Record<string, any> = {}
+  const { clock, widths, toasts } = await inBattle($, on, saved)
+  await wearOut($, clock, toasts)
+  await $.command.run({ command: 'pokemon', args: 'catch' })
+  await clock.advance(6000)
+  expect(toasts).toContain('Gotcha! Pidgey was caught! It joined your box.')
+  expect(saved.dex.pidgey).toEqual({ seen: expect.any(Number), caught: expect.any(Number) })
+  expect(saved.stats.pidgey).toEqual({ xp: 5 ** 3, parked: true })
+  expect(widths[widths.length - 1]).toBe(RASTER)
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  expect(status.text).not.toContain('wild')
+})
+
+test('catching a species already in the box leaves its record as it was', async ($, on) => {
+  const pidgey = { xp: 20 ** 3, nickname: 'Pidge', parked: true, food: { value: 40, at: 0 } }
+  const saved: Record<string, any> = { stats: { pidgey: structuredClone(pidgey) } }
+  const { clock, toasts } = await inBattle($, on, saved)
+  await wearOut($, clock, toasts)
+  await $.command.run({ command: 'pokemon', args: 'catch' })
+  await clock.advance(6000)
+  expect(toasts).toContain('Gotcha! Pidgey was caught! Pidgey is already in your box, so it\'s marked in your Pokédex.')
+  expect(saved.stats.pidgey).toEqual(pidgey)
+  expect(saved.dex.pidgey.caught).toEqual(expect.any(Number))
+})
+
+test('release keeps a caught species in the Pokédex, and the box marks it when raised again', async ($, on) => {
+  const saved: Record<string, any> = {}
+  const { clock, toasts } = await inBattle($, on, saved)
+  await wearOut($, clock, toasts)
+  await $.command.run({ command: 'pokemon', args: 'catch' })
+  await clock.advance(6000)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await run('box')).toContain('\nPidgey ◓, Lv. 5')
+
+  expect(await run('release pidgey')).toBe('You release Pidgey. Bye-bye, Pidgey!')
+  expect(saved.stats.pidgey).toBeUndefined()
+  expect(saved.dex.pidgey.caught).toEqual(expect.any(Number))
+
+  await run('pidgey')
+  await run('pet')
+  await clock.advance(4000)
+  expect(await run('box')).toContain('\nPidgey ◓, Lv. 5 ●●●●○ ♥♥♥♥♥ (active)')
+})
+
+test('a shiny foe paints the shiny palette, and catching it marks the Pokédex shiny', async ($, on) => {
+  const saved: Record<string, any> = {}
+  const { clock, blits, widths, toasts } = await inBattle($, on, saved, 'pidgey shiny')
+  expect(toasts[0]).toBe('A shiny wild Pidgey (Lv. 5) appeared!')
+  const shiny = foeColor('abra', 'pidgey', 'shiny')
+  expect(SPRITES.pidgey.variants.default.palette.map((hex) => parseInt(hex.slice(1), 16))).not.toContain(shiny)
+  expect(columnsIn(blits[blits.length - 1], widths[widths.length - 1], shiny).length).toBeGreaterThan(0)
+  await wearOut($, clock, toasts)
+  await $.command.run({ command: 'pokemon', args: 'catch' })
+  await clock.advance(6000)
+  expect(saved.dex.pidgey.shiny).toBe(true)
+  const dex = await $.command.run({ command: 'pokemon', args: 'dex' })
+  expect(dex.text).toBe('Pokédex: seen 1, caught 1 of 151 (1 shiny).\n#016 Pidgey ◓ ✦')
+})
+
+const MINUTE = 60 * 1000
+const APPEARED = /^A (shiny )?wild .+ \(Lv\. \d+\) appeared!$/
+
+// Start a session at an hour in with the band drawn and a turn running, so work can
+// bring a wild mon
+async function working($, on, saved: Record<string, any>) {
+  const toasts = toastsOf(on)
+  quickTools(on)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  Object.assign(saved, { wander: false, ...saved })
+  const started = await startedWith($, on, saved, HOUR)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.turn.start({ text: 'hi', turnId: 't' })
+  const read = async (agentId?: string) => {
+    await $.tool.call({ tool: 'Read', file_path: '/work/a.ts', ...(agentId ? { agentId } : {}) })
+    await started.clock.advance(100)
+  }
+  return { ...started, toasts, read }
+}
+
+test('a due encounter gate is claimed on a tool call, and the wild mon comes on the next check', async ($, on) => {
+  const saved: Record<string, any> = { wildAt: { at: HOUR - MINUTE, by: 'other' } }
+  const { clock, toasts, read } = await working($, on, saved)
+  await read()
+  const claim = saved.wildAt
+  expect(claim.by).not.toBe('other')
+  expect(claim.at).toBeGreaterThanOrEqual(HOUR + 20 * MINUTE)
+  expect(claim.at).toBeLessThanOrEqual(HOUR + 40 * MINUTE)
+  expect(toasts.filter((text) => APPEARED.test(text))).toEqual([])
+
+  // Checks come at most every 30 seconds
+  await read()
+  await clock.advance(10000)
+  expect(toasts.filter((text) => APPEARED.test(text))).toEqual([])
+  await clock.advance(20000)
+  await read()
+  await clock.advance(10000)
+  expect(toasts.filter((text) => APPEARED.test(text)).length).toBe(1)
+  expect(saved.wildAt).toEqual(claim)
+})
+
+test('a claim another session took over brings no wild mon here', async ($, on) => {
+  const saved: Record<string, any> = { wildAt: { at: HOUR - MINUTE, by: 'other' } }
+  const { clock, toasts, read } = await working($, on, saved)
+  await read()
+  saved.wildAt = { at: HOUR + 30 * MINUTE, by: 'other' }
+  await clock.advance(30000)
+  await read()
+  await clock.advance(10000)
+  expect(toasts.filter((text) => APPEARED.test(text))).toEqual([])
+  expect(saved.wildAt).toEqual({ at: HOUR + 30 * MINUTE, by: 'other' })
+})
+
+test('with no encounter gate yet, the first one is set five minutes out', async ($, on) => {
+  const saved: Record<string, any> = {}
+  const { clock, toasts, read } = await working($, on, saved)
+  await read()
+  expect(saved.wildAt).toEqual({ at: HOUR + 5 * MINUTE, by: expect.any(String) })
+  await clock.advance(30000)
+  await read()
+  await clock.advance(10000)
+  expect(toasts.filter((text) => APPEARED.test(text))).toEqual([])
+})
+
+test('a subagent\'s tool calls don\'t check the encounter gate', async ($, on) => {
+  const saved: Record<string, any> = { wildAt: { at: HOUR - MINUTE, by: 'other' } }
+  const { read } = await working($, on, saved)
+  await read('sub1')
+  expect(saved.wildAt).toEqual({ at: HOUR - MINUTE, by: 'other' })
 })
