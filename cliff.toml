@@ -1,4 +1,4 @@
-# git-cliff builds CHANGELOG.md and each release's notes from the conventional commits.
+# git-cliff builds each release's notes and next version from the conventional commits.
 # Features bump the minor version, fixes and performance work the patch, and docs,
 # tests, refactors, and chores don't release on their own.
 

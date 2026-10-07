@@ -340,10 +340,9 @@ claude --plugin-dir .                            # live-reloading session
 
 CI runs the lint, the data check, and the tests on every pull request and push to `main`.
 Commits follow [Conventional Commits](https://www.conventionalcommits.org). When `main`
-gains a `feat`, `fix`, or `perf` commit, CI opens a `chore(release)` PR that bumps
-`plugin.json` and `CHANGELOG.md` with git-cliff. Merging it tags the release and publishes
-the notes. This needs "Allow GitHub Actions to create and approve pull requests" turned on
-in the repository's Actions settings.
+gains a `feat`, `fix`, or `perf` commit, CI tags it with the next version from git-cliff
+and publishes a GitHub release with the notes. `plugin.json` carries no version, so Claude
+Code versions the plugin by commit and every merge reaches users.
 
 </details>
 

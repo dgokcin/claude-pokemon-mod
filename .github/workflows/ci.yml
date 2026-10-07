@@ -1,9 +1,8 @@
 # Lints the code, checks the move and evolution tables, and runs the plugin's tests on
-# every pull request and push to main. Main only takes changes through pull requests, so
-# releases go through one too. A push to main that passes and carries a feat, fix, or perf
-# commit since the last release opens or updates a release PR, in which git-cliff bumps
-# the plugin's version and CHANGELOG.md. Merging that PR tags the merge commit and
-# publishes the GitHub release.
+# every pull request and push to main. A push to main that passes and carries a feat, fix,
+# or perf commit since the last release tags that commit with the version git-cliff bumps
+# to and publishes a GitHub release with its notes. Tags aren't covered by the branch
+# rules, so nothing has to land on main.
 
 name: CI
 
@@ -60,7 +59,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     concurrency:
       group: release
       cancel-in-progress: false
@@ -75,46 +73,14 @@ jobs:
         with:
           tool: git-cliff@2.14.2
 
-      - name: Commit as the Actions bot
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      # A merged release PR leaves its chore(release) commit on main, with plugin.json at
-      # the new version. Tags aren't covered by the branch rules, so the tag goes straight up.
-      - name: Publish a merged release
-        run: |
-          case "$(git log -1 --format=%s)" in
-            "chore(release): "*) ;;
-            *) exit 0 ;;
-          esac
-          version="v$(jq -r .version .claude-plugin/plugin.json)"
-          if git rev-parse -q --verify "refs/tags/$version" > /dev/null; then exit 0; fi
-          git tag "$version"
-          git cliff --latest --strip all --output "$RUNNER_TEMP/notes.md"
-          git push origin "$version"
-          gh release create "$version" --title "$version" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
-
       # git-cliff prints the last tag again when nothing since it bumps the version
-      - name: Open or update the release PR
+      - name: Tag and publish the release
         run: |
           last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)
           next=$(git cliff --bumped-version)
           echo "Last release: ${last:-none}. Next: $next"
           if [ "$next" = "$last" ]; then exit 0; fi
-          git switch -C release
-          sed -i -E "s/(\"version\": \")[^\"]+/\1${next#v}/" .claude-plugin/plugin.json
-          git cliff --bump --output CHANGELOG.md
-          git add .claude-plugin/plugin.json CHANGELOG.md
-          git commit -m "chore(release): $next"
-          git push --force origin release
-          {
-            echo "Merging this releases $next. CI then tags the merge commit and publishes the GitHub release."
-            echo
-            git cliff --bump --unreleased --strip all
-          } > "$RUNNER_TEMP/body.md"
-          if [ "$(gh pr view release --json state --jq .state 2>/dev/null)" = "OPEN" ]; then
-            gh pr edit release --title "chore(release): $next" --body-file "$RUNNER_TEMP/body.md"
-          else
-            gh pr create --base main --head release --title "chore(release): $next" --body-file "$RUNNER_TEMP/body.md"
-          fi
+          git cliff --bump --unreleased --strip all --output "$RUNNER_TEMP/notes.md"
+          git tag "$next"
+          git push origin "$next"
+          gh release create "$next" --title "$next" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
