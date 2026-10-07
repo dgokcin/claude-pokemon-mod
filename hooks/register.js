@@ -1,9 +1,10 @@
 import { attackFrame, attackPose, prepareAttack } from './attacks.js'
+import { CUSTOM_PREFIX, fetchMon, monsOfGen } from './custom.js'
 import { evolutionsOf, levelEvolutionOf, startLevel } from './evolutions.js'
 import { closedEyes, eyesOf } from './eyes.js'
 import { SPRITES } from './frames.js'
 import { MAX_LEVEL, careOf, levelAt, turnXp, xpAt } from './levels.js'
-import { movesOf } from './moves.js'
+import { MOVES, movesOf } from './moves.js'
 import { displayName } from './names.js'
 import { joinParty, leaveParty, partyStamps, prunedParty } from './party.js'
 import { zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
@@ -80,10 +81,11 @@ const INKS = {
 const UPPER_HALF = 0x2580
 const LOWER_HALF = 0x2584
 const SPACE = 0x20
-const MONS = Object.keys(SPRITES)
+// Every mon that can be shown: the bundled ones, then any fetched with /pokemon new
+const MONS = []
 const VARIANTS = ['default', 'shiny']
 
-let mon = MONS.includes('abra') ? 'abra' : MONS[0]
+let mon = 'abra'
 let variant = 'default'
 let wander = true
 let working = false
@@ -148,20 +150,7 @@ let maxRows = Infinity
 let ink = INKS.dark
 
 // Palette letter to 0xRRGGBB, per mon and variant
-const COLORS = Object.fromEntries(
-  MONS.map((name) => [
-    name,
-    Object.fromEntries(
-      VARIANTS.map((v) => [
-        v,
-        Object.fromEntries(
-          SPRITES[name].variants[v].palette.map((hex, i) => [String.fromCharCode(97 + i), parseInt(hex.slice(1), 16)]),
-        ),
-      ]),
-    ),
-  ]),
-)
-
+const COLORS = {}
 const spriteRows = (name) => Math.ceil(SPRITES[name].height / 2)
 
 // The empty pixel rows under the feet in a frame, and the fewest across an animation's frames
@@ -169,38 +158,32 @@ const gapOf = (rows) => rows.length - 1 - rows.findLastIndex((row) => /[^.]/.tes
 const gapUnder = (anim) => Math.min(...anim.map(({ rows }) => gapOf(rows)))
 // How far to lower the walk frames so the feet stand where the idle frames' do,
 // per mon and variant. Some sheets leave more empty rows under a walking mon.
-const WALK_DROP = Object.fromEntries(
-  MONS.map((name) => [
-    name,
-    Object.fromEntries(VARIANTS.map((v) => [v, gapUnder(SPRITES[name].variants[v].walk) - gapUnder(SPRITES[name].variants[v].idle)])),
-  ]),
-)
+const WALK_DROP = {}
 // The empty columns right of an idle mon, the fewest across its idle frames, per variant.
 // Many sheets draw the idle mon right up to the frame's edge.
-const IDLE_RIGHT_GAP = Object.fromEntries(
-  MONS.map((name) => [
-    name,
-    Object.fromEntries(
-      VARIANTS.map((v) => {
-        const { width, variants } = SPRITES[name]
-        const rights = variants[v].idle.flatMap(({ rows }) => rows.map((row) => row.search(/[^.]\.*$/)))
-        return [v, width - 1 - Math.max(...rights)]
-      }),
-    ),
-  ]),
-)
+const IDLE_RIGHT_GAP = {}
 // The rightmost head column of a mon walking right, across its walk frames, per variant
-const WALK_HEAD_RIGHT = Object.fromEntries(
-  MONS.map((name) => [
-    name,
-    Object.fromEntries(
-      VARIANTS.map((v) => [
-        v,
-        Math.max(...SPRITES[name].variants[v].walk.flatMap(({ rows }) => rows.slice(0, HEAD_PIXELS).map((row) => row.search(/[^.]\.*$/)))),
-      ]),
-    ),
-  ]),
-)
+const WALK_HEAD_RIGHT = {}
+
+// Measure a mon's sprite into the tables above, and list it. Fetched mons join here too.
+function addSprite(name, sprite) {
+  SPRITES[name] = sprite
+  if (!MONS.includes(name)) MONS.push(name)
+  const perVariant = (fn) => Object.fromEntries(VARIANTS.map((v) => [v, fn(sprite.variants[v])]))
+  COLORS[name] = perVariant(({ palette }) =>
+    Object.fromEntries(palette.map((hex, i) => [String.fromCharCode(97 + i), parseInt(hex.slice(1), 16)])),
+  )
+  WALK_DROP[name] = perVariant(({ walk, idle }) => gapUnder(walk) - gapUnder(idle))
+  IDLE_RIGHT_GAP[name] = perVariant(({ idle }) => {
+    const rights = idle.flatMap(({ rows }) => rows.map((row) => row.search(/[^.]\.*$/)))
+    return sprite.width - 1 - Math.max(...rights)
+  })
+  WALK_HEAD_RIGHT[name] = perVariant(({ walk }) =>
+    Math.max(...walk.flatMap(({ rows }) => rows.slice(0, HEAD_PIXELS).map((row) => row.search(/[^.]\.*$/)))),
+  )
+}
+for (const name of Object.keys(SPRITES)) addSprite(name, SPRITES[name])
+
 const rowsOf = (name) => HEAD_ROWS + spriteRows(name)
 // While a mon evolves or transforms, the band is tall enough for both shapes
 const bandRows = () => {
@@ -624,7 +607,7 @@ function stepAttack() {
 const isFree = () => !working && !attack && !food && !isAsleep() && !isAlerted()
 
 // Petting, feeding, sleeping, attacking, releasing, and switching mons wait while it evolves
-const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack', 'release']
+const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack', 'release', 'new']
 // While it eats a berry or enjoys a pet, only the commands that just show something run,
 // so nothing changes the record the berry or pet is about to fill
 const SHOWS_ONLY = ['', 'list', 'stats', 'box', 'moves']
@@ -1468,7 +1451,7 @@ function hopForJoy() {
   }
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'emoji', 'autoevolve', 'pet', 'feed', 'sleep', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'nickname', 'release', 'list']
+const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'emoji', 'autoevolve', 'pet', 'feed', 'sleep', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'nickname', 'release', 'new', 'list']
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
@@ -1593,6 +1576,70 @@ async function themeInk($) {
 }
 
 
+// Show another mon, parking the one that leaves so its meters stop where they are
+async function switchTo($, asked) {
+  const wasHome = isHome()
+  evolveDue = null
+  const left = mon
+  nowMs = await $.clock.now()
+  await freshen($, [left, asked])
+  if (asked !== left && (stats[left] || stats[asked])) {
+    park(left)
+    unpark(asked)
+    await saveRecords($, [left, asked])
+  }
+  mon = asked
+  if (wasHome) x = homeX()
+  clampX()
+  await saveMon($)
+}
+
+const addCustom = (name, { sprite, moves }) => {
+  addSprite(name, sprite)
+  MOVES[name] = moves
+}
+
+// Load the mons fetched with /pokemon new, in this session or another, not loaded yet
+async function loadCustom($) {
+  for (const key of await $.store.keys()) {
+    const name = key.slice(CUSTOM_PREFIX.length)
+    if (!key.startsWith(CUSTOM_PREFIX) || SPRITES[name]) continue
+    const saved = await $.store.get(key)
+    if (saved?.sprite) addCustom(name, saved)
+  }
+}
+
+// /pokemon new <mon> fetches a mon from any generation and shows it. "random" picks one
+// from gen 2 to 5 you don't have yet, and "random gen3" or "gen3" one from that generation.
+async function newCommand($, wanted) {
+  const genAsked = wanted.match(/^(?:random\s*)?gen\s*([1-5])$/)
+  const random = wanted === 'random' || genAsked !== null
+  let name = random ? '' : wanted.replace(/\s+/g, '_')
+  let gen
+  const get = (url, init) => $.http.fetch(url, init)
+  if (!wanted) return { text: 'Name a mon to fetch, like /pokemon new mudkip, or try /pokemon new random or /pokemon new gen3.' }
+  try {
+    if (random) {
+      gen = genAsked ? Number(genAsked[1]) : 2 + Math.floor(Math.random() * 4)
+      const fresh = (await monsOfGen(get, gen)).filter((n) => !SPRITES[n])
+      if (fresh.length === 0) return { text: 'You already have every gen ' + gen + ' mon.' }
+      name = fresh[Math.floor(Math.random() * fresh.length)]
+    } else if (SPRITES[name]) {
+      return { text: nameOf(name) + ' is already here. /pokemon ' + name + ' shows it.' }
+    } else if (!/^[a-z0-9_.-]+$/.test(name)) {
+      return { text: 'Unknown mon "' + wanted + '". Names are like mudkip or mr._mime.' }
+    }
+    const entry = await fetchMon(get, name, gen)
+    await $.store.set(CUSTOM_PREFIX + name, entry)
+    addCustom(name, entry)
+    await switchTo($, name)
+    $.ui.invalidate('ui.render')
+    return { text: 'Fetched gen ' + entry.gen + ' ' + nameOf(name) + '. It knows ' + entry.moves.join(', ') + '. Now showing ' + variant + ' ' + nameOf(name) + '.' }
+  } catch (err) {
+    return { text: "Couldn't fetch " + (name || 'a mon') + ': ' + (err?.message ?? String(err)) }
+  }
+}
+
 export function register(on) {
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -1601,6 +1648,7 @@ export function register(on) {
       argumentHint: '[' + OPTIONS.join('|') + ']',
       immediate: true,
     })
+    await loadCustom($).catch((err) => logOnce($, err))
     const savedMon = await $.store.get('mon')
     if (MONS.includes(savedMon)) mon = savedMon
     forgetOldKeys($).catch((err) => logOnce($, err))
@@ -1656,6 +1704,8 @@ export function register(on) {
 
   on('command.run', { command: 'pokemon' }, async ($, e) => {
     const asked = e.args.trim().toLowerCase()
+    // Another session may have fetched a mon since this one started
+    await loadCustom($).catch(() => {})
     // A pet doesn't wake a sleeping mon, so it doesn't count as activity
     if (asked !== 'pet' || !isAsleep()) markActive()
     clearAlert()
@@ -1663,20 +1713,9 @@ export function register(on) {
     if (waitsForEvolution(asked)) return { text: nameOf(mon) + ' is evolving! /pokemon stop cancels it.' }
     if (waitsForCare(asked)) return { text: nameOf(mon) + (food ? ' is busy eating.' : ' is enjoying the pets.') + ' Try again in a moment.' }
     if (MONS.includes(asked)) {
-      const wasHome = isHome()
-      evolveDue = null
-      const left = mon
-      nowMs = await $.clock.now()
-      await freshen($, [left, asked])
-      if (asked !== left && (stats[left] || stats[asked])) {
-        park(left)
-        unpark(asked)
-        await saveRecords($, [left, asked])
-      }
-      mon = asked
-      if (wasHome) x = homeX()
-      clampX()
-      await saveMon($)
+      await switchTo($, asked)
+    } else if (asked === 'new' || asked.startsWith('new ')) {
+      return newCommand($, asked.slice('new'.length).trim())
     } else if (VARIANTS.includes(asked)) {
       variant = asked
       await $.store.set('variant', variant)

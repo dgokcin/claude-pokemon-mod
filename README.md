@@ -60,6 +60,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon evolve` | Evolve with a stone or a trade |
 | `/pokemon stats` | Level, XP, evolution, and meters |
 | `/pokemon box` | Every mon you've raised |
+| `/pokemon new <mon>` | Fetch a mon from gen 2 to 5, like `/pokemon new mudkip`, or a random one with `/pokemon new gen3` |
 
 <details>
 <summary>All commands</summary>
@@ -86,6 +87,8 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon emoji` | Toggle emoji meters, 🍓 and 💗 instead of ● and ♥ (off by default, saved across sessions) |
 | `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
 | `/pokemon box` | List every mon you've raised, highest level first |
+| `/pokemon new <mon>` | Fetch a mon from any generation in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) (gen 1 to 5) and show it. It's saved in the mod's store, so it stays through plugin updates and shows up in every session. Moves come from its types, using gen 1 animations |
+| `/pokemon new random`, `/pokemon new gen<N>` | Fetch a random mon you don't have yet, from gen 2 to 5 or from gen N |
 | `/pokemon nickname <name>` | Nickname the mon, up to 12 characters. It keeps the name when it evolves, and its species name takes the nickname away |
 | `/pokemon release <mon>` | Release a mon from your box. It starts over at its first level with fresh meters |
 | Ctrl+X Ctrl+A | Collapse or expand the band (Claude Code's own binding) |
@@ -241,6 +244,8 @@ A local marketplace loads the mod in place, so your edits apply on `/reload-plug
 
 <details>
 <summary>Add a mon</summary>
+
+To try a mon without changing the repo, `/pokemon new <mon>` fetches it at runtime instead. The steps below bundle it, with a hand-picked moveset, evolutions, and eyes that close when it sleeps.
 
 1. Copy the four GIFs from `media/gen<N>/<mon>/` in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) into `sprites/<mon>/`: `default_idle_8fps.gif`, `default_walk_8fps.gif`, `shiny_idle_8fps.gif`, and `shiny_walk_8fps.gif`.
 2. Run `node scripts/build-frames.mjs`.

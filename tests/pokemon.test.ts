@@ -1616,7 +1616,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('session.start', () => ({ cwd: '/work' }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|autoevolve|pet|feed|sleep|attack|moves|evolve|stop|stats|box|nickname|release|list]')
+  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|autoevolve|pet|feed|sleep|attack|moves|evolve|stop|stats|box|nickname|release|new|list]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
@@ -2060,4 +2060,103 @@ test('a mon mid-strip backs up to the edge before its move shows, and stays busy
   const first = frames.findIndex((cells) => paints(cells, CONFUSION))
   expect(first).toBeGreaterThan(4)
   expect(rightEdge(frames[first - 1])).toBeGreaterThan(home - 3)
+})
+
+// Diglett's idle GIF, served for every file of a fetched mon
+const GIF = 'R0lGODlhIAAgAIMAAAAAAJh4OHBwcEBAQAAAAEAwEHBIIKioqJggSGgIKMjIyNBAaOhwmAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQJHgAAACwAAAAAIAAgAAAIiQABCBxIsKDBgwgTKlzIsKHDhxAjSpxIsaLFixgzatzIsaPHjyBDihxJcmKBkyc1FgjAkmUBjCtbtnxpMabMADQrEjCgoKUCAwQsDti50wBQoAMoDhCwM8ECBgsSABWQNOJSAVQJINi6U8CBA1UfLj2AdSgBAljLCph41SvZAWDDKl06IOlShgEBACH5BAkeAAAALAAAAAAgACAAgwAAAHBwcJh4OEBAQEAwEAAAAHBIIKioqJggSGgIKMjIyNBAaOhwmAAAAAAAAAAAAAiLAAEIHEiwoMGDCBMqXMiwocOHECNKnEixosWLGDNq3Mixo8ePIEOKHHmRgEmTGgkIWLmSAEaVLFm6tAgzpoCZFQkYUMBSgQGcFAsYEGpg6FCLA4QmWMBgQYKhAygOCCC0AIKrVQNEjTg1QACdBcL+PHBAa0StAch29Xqg69azXcsOcHtR61yBUxkGBAA7'
+
+// Answers GitHub and PokéAPI the way /pokemon new reads them. gens maps each generation
+// to the mons in it, and status, when given, answers every GitHub request.
+function serveMons(on, gens: Record<number, string[]>, { status = 200, types = ['water'] } = {}) {
+  const asked: string[] = []
+  on('http.fetch', ($, e) => {
+    asked.push(e.url)
+    const reply = (code: number, body: unknown) => ({ value: { status: code, ok: code < 300, headers: {}, text: JSON.stringify(body) } })
+    if (e.url.startsWith('https://pokeapi.co/')) return reply(200, { types: types.map((name) => ({ type: { name } })) })
+    if (status !== 200) return reply(status, {})
+    const [, gen, name] = e.url.match(/media\/gen(\d)(?:\/([^/]+))?/) ?? []
+    if (!name) return reply(200, (gens[Number(gen)] ?? []).map((n) => ({ name: n, type: 'dir' })))
+    return gens[Number(gen)]?.includes(name) ? reply(200, { content: GIF, encoding: 'base64' }) : reply(404, {})
+  })
+  return asked
+}
+
+// A store in memory the test can read back, answering $.store as the engine does
+function memoryStore(on, entries: Record<string, unknown> = {}) {
+  const held = new Map<string, unknown>(Object.entries(entries))
+  on('store.get', ($, e) => ({ value: held.get(e.key) }))
+  on('store.set', ($, e) => {
+    held.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('store.keys', () => ({ value: [...held.keys()] }))
+  on('store.delete', ($, e) => {
+    held.delete(e.key)
+    return { value: undefined }
+  })
+  return held
+}
+
+test('/pokemon new fetches a mon from the generation that has it, saves it, and shows it', async ($, on) => {
+  mock.clock(on)
+  const store = memoryStore(on)
+  on('ui.render', () => THEIRS)
+  const asked = serveMons(on, { 3: ['mudkip'] })
+  const answer = await $.command.run({ command: 'pokemon', args: 'new mudkip' })
+  expect(answer.text).toBe('Fetched gen 3 Mudkip. It knows Water Gun, Bubble Beam, Tackle. Now showing default Mudkip.')
+  expect(asked.some((url) => url.includes('/gen1/mudkip/'))).toBe(true)
+  expect(store.get('mon')).toBe('mudkip')
+  const saved = store.get('custom:mudkip') as { gen: number; sprite: typeof SPRITES.diglett }
+  expect(saved.gen).toBe(3)
+  // Decoded the way the build decodes Diglett's own idle GIF, on every sheet
+  const { idle, palette } = SPRITES.diglett.variants.default
+  expect(saved.sprite.variants.default.palette).toEqual(palette)
+  expect(saved.sprite.variants.shiny.walk.map((f) => f.ms)).toEqual(idle.map((f) => f.ms))
+  expect(saved.sprite.variants.default.idle.map((f) => f.rows.join('').replace(/\./g, ''))).toEqual(idle.map((f) => f.rows.join('').replace(/\./g, '')))
+  expect((await $.command.run({ command: 'pokemon', args: 'attack list' })).text).toBe('Mudkip knows Water Gun, Bubble Beam, Tackle.')
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ key: 'pokemon' })).props.rows).toBe(7)
+})
+
+test('a mon fetched in another session loads at session start', async ($, on) => {
+  mock.clock(on)
+  const sprite = SPRITES.diglett
+  mock.store(on, { mon: 'torchic', 'custom:torchic': { gen: 3, sprite, moves: ['Ember', 'Tackle'] } })
+  on('ui.render', () => THEIRS)
+  on('command.register', () => ({ value: undefined }))
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  expect((await $.command.run({ command: 'pokemon', args: '' })).text).toMatch(/^Showing default Torchic Lv\. /)
+  expect((await $.command.run({ command: 'pokemon', args: 'list' })).text).toMatch(/, torchic$/)
+  expect((await $.command.run({ command: 'pokemon', args: 'moves' })).text).toBe('Torchic knows Ember, Tackle.')
+})
+
+test('/pokemon new gen3 picks a gen 3 mon you do not have yet', async ($, on) => {
+  mock.clock(on)
+  mock.store(on, { 'custom:mudkip': { gen: 3, sprite: SPRITES.diglett, moves: ['Tackle'] } })
+  on('ui.render', () => THEIRS)
+  serveMons(on, { 3: ['mudkip', 'treecko'] }, { types: ['grass'] })
+  const answer = await $.command.run({ command: 'pokemon', args: 'new gen3' })
+  expect(answer.text).toMatch(/^Fetched gen 3 Treecko\. It knows Vine Whip, Razor Leaf, Tackle\./)
+  expect((await $.command.run({ command: 'pokemon', args: 'new random gen3' })).text).toBe('You already have every gen 3 mon.')
+})
+
+test('/pokemon new explains a mon it cannot fetch', async ($, on) => {
+  mock.clock(on)
+  const store = memoryStore(on)
+  serveMons(on, { 3: ['mudkip'] })
+  expect((await $.command.run({ command: 'pokemon', args: 'new togepi' })).text).toBe(
+    "Couldn't fetch togepi: No mon named \"togepi\" in generations 1, 2, 3, 4, 5.",
+  )
+  expect((await $.command.run({ command: 'pokemon', args: 'new pikachu' })).text).toBe('Pikachu is already here. /pokemon pikachu shows it.')
+  expect(store.has('mon')).toBe(false)
+})
+
+test('/pokemon new says when GitHub refuses for the hourly limit', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  serveMons(on, {}, { status: 403 })
+  expect((await $.command.run({ command: 'pokemon', args: 'new mudkip' })).text).toBe(
+    "Couldn't fetch mudkip: GitHub's hourly limit for anonymous requests is used up. Try again in a while.",
+  )
 })
