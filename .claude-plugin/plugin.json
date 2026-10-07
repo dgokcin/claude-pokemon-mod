@@ -1,6 +1,6 @@
 {
   "name": "pokemon",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "A pixel Pokémon that lives at the right edge of the band above the prompt",
   "author": { "name": "deniz gökçin" }
 }

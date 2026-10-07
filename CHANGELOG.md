@@ -2,6 +2,18 @@
 
 Every release of the pokemon mod, generated from its commits by [git-cliff](https://git-cliff.org).
 
+## 1.3.0 (2026-10-07)
+
+### ✨ Features
+
+- **bubble:** Show a tm disc while a skill is in use (#21)
+- **wild:** Add wild encounters, catching and a pokedex (#25)
+
+### 🐛 Fixes
+
+- **transform:** Let the band grow to fit a taller mon (#22)
+- **meters:** Draw empty hearts as a pink outline instead of a gray heart (#23)
+
 ## 1.2.0 (2026-10-05)
 
 ### ✨ Features
