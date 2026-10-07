@@ -138,6 +138,10 @@ let stats = {}
 let needsOn = true
 let emojiOn = false
 let autoEvolve = true
+// With /pokemon sync on, every open session follows the last mon picked in any of them
+let syncOn = false
+// The saved pick this session last read or wrote, so a sync follows only a newer pick
+let seenPick = null
 let evolving = null
 let evolveDue = null
 let joyHopAt = null
@@ -1220,6 +1224,7 @@ async function saveRecords($, names) {
 // 'mon' is the last one picked in any session, and a new session starts with it. A mon
 // picked here is shown as itself, even if it once evolved in another session.
 async function saveMon($) {
+  seenPick = mon
   await $.store.set('mon', mon)
   const evolved = await $.store.get('evolved')
   if (evolved && mon in evolved) {
@@ -1273,10 +1278,28 @@ function followEvolution($, into, record) {
   $.ui.invalidate('ui.render')
 }
 
+// With sync on, show the mon last picked in another session. A pick that's this mon
+// evolving elsewhere is left to followEvolution. Says whether it switched.
+async function followPick($) {
+  const pick = await $.store.get('mon')
+  if (pick === seenPick || typeof pick !== 'string') return false
+  if (!MONS.includes(pick)) await loadCustom($)
+  const evolved = await $.store.get('evolved')
+  if (evolving || attack || evolved?.[mon] === pick) return false
+  seenPick = pick
+  if (pick === mon || !MONS.includes(pick)) return false
+  await switchTo($, pick, { save: false })
+  sentCells = null
+  $.ui.invalidate('ui.render')
+  return true
+}
+
 // Take the shown mon's record as another session showing it saved it: fed, petted, earned
 // XP, or put to bed. Put to bed elsewhere while Claude works here, it wakes right back up
 // in stepWake.
 async function syncSessions($) {
+  syncOn = (await $.store.get('sync')) === true
+  if (syncOn && (await followPick($))) return
   const writes = statWrites
   const saved = await $.store.get('stats')
   const evolved = await $.store.get('evolved')
@@ -1451,7 +1474,7 @@ function hopForJoy() {
   }
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'emoji', 'autoevolve', 'pet', 'feed', 'sleep', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'nickname', 'release', 'new', 'list']
+const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'emoji', 'sync', 'autoevolve', 'pet', 'feed', 'sleep', 'attack', 'moves', 'evolve', 'stop', 'stats', 'box', 'nickname', 'release', 'new', 'list']
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
@@ -1577,7 +1600,7 @@ async function themeInk($) {
 
 
 // Show another mon, parking the one that leaves so its meters stop where they are
-async function switchTo($, asked) {
+async function switchTo($, asked, { save = true } = {}) {
   const wasHome = isHome()
   evolveDue = null
   const left = mon
@@ -1591,7 +1614,7 @@ async function switchTo($, asked) {
   mon = asked
   if (wasHome) x = homeX()
   clampX()
-  await saveMon($)
+  if (save) await saveMon($)
 }
 
 const addCustom = (name, { sprite, moves }) => {
@@ -1651,6 +1674,8 @@ export function register(on) {
     await loadCustom($).catch((err) => logOnce($, err))
     const savedMon = await $.store.get('mon')
     if (MONS.includes(savedMon)) mon = savedMon
+    seenPick = savedMon ?? null
+    syncOn = (await $.store.get('sync')) === true
     forgetOldKeys($).catch((err) => logOnce($, err))
     const savedVariant = await $.store.get('variant')
     if (VARIANTS.includes(savedVariant)) variant = savedVariant
@@ -1776,6 +1801,14 @@ export function register(on) {
       $.ui.invalidate('ui.render')
       const icons = iconsFor('food').trimEnd() + ' ' + iconsFor('happiness').trimEnd()
       return { text: (emojiOn ? 'The meters show emoji: ' : 'The meters show text icons: ') + icons }
+    } else if (asked === 'sync') {
+      syncOn = !syncOn
+      await $.store.set('sync', syncOn)
+      const name = nameOf(mon)
+      if (!syncOn) return { text: 'Sync is off. Each session keeps the mon picked in it.' }
+      // This session's mon becomes the pick the others follow
+      await saveMon($)
+      return { text: 'Sync is on. Every open session shows ' + name + ', and follows the next mon you pick.' }
     } else if (asked === 'autoevolve') {
       autoEvolve = !autoEvolve
       await $.store.set('autoEvolve', autoEvolve)

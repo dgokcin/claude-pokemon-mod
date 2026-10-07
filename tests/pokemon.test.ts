@@ -1616,7 +1616,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('session.start', () => ({ cwd: '/work' }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|autoevolve|pet|feed|sleep|attack|moves|evolve|stop|stats|box|nickname|release|new|list]')
+  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|sync|autoevolve|pet|feed|sleep|attack|moves|evolve|stop|stats|box|nickname|release|new|list]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
@@ -2159,4 +2159,41 @@ test('/pokemon new says when GitHub refuses for the hourly limit', async ($, on)
   expect((await $.command.run({ command: 'pokemon', args: 'new mudkip' })).text).toBe(
     "Couldn't fetch mudkip: GitHub's hourly limit for anonymous requests is used up. Try again in a while.",
   )
+})
+
+// Starts a session over the store, so its tick loop runs the cross-session sync
+async function startSession($, on) {
+  on('ui.render', () => THEIRS)
+  on('command.register', () => ({ value: undefined }))
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+}
+
+test('with sync on, a session follows the mon picked in another, fetched mons included', async ($, on) => {
+  const clock = mock.clock(on)
+  const store = memoryStore(on, { mon: 'abra' })
+  await startSession($, on)
+  expect((await $.command.run({ command: 'pokemon', args: 'sync' })).text).toBe(
+    'Sync is on. Every open session shows Abra, and follows the next mon you pick.',
+  )
+  expect(store.get('sync')).toBe(true)
+  // Another session picks Vulpix, then fetches Torchic
+  store.set('mon', 'vulpix')
+  await clock.advance(50 * 25)
+  expect((await $.command.run({ command: 'pokemon', args: '' })).text).toMatch(/^Showing default Vulpix /)
+  store.set('custom:torchic', { gen: 3, sprite: SPRITES.diglett, moves: ['Ember'] })
+  store.set('mon', 'torchic')
+  await clock.advance(50 * 25)
+  expect((await $.command.run({ command: 'pokemon', args: '' })).text).toMatch(/^Showing default Torchic /)
+})
+
+test('with sync off, each session keeps its own mon', async ($, on) => {
+  const clock = mock.clock(on)
+  const store = memoryStore(on, { mon: 'abra' })
+  await startSession($, on)
+  store.set('mon', 'vulpix')
+  await clock.advance(50 * 25)
+  expect((await $.command.run({ command: 'pokemon', args: '' })).text).toMatch(/^Showing default Abra /)
+  expect((await $.command.run({ command: 'pokemon', args: 'sync' })).text).toMatch(/^Sync is on/)
+  expect((await $.command.run({ command: 'pokemon', args: 'sync' })).text).toBe('Sync is off. Each session keeps the mon picked in it.')
 })

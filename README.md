@@ -68,7 +68,7 @@ Then pick your partner with `/pokemon <mon>`.
 | Command | Effect |
 | --- | --- |
 | `/pokemon` | Show the active mon, its variant, level, meters, and the options |
-| `/pokemon <mon>` | Pick the mon for this session. A new session starts with the one picked last |
+| `/pokemon <mon>` | Pick the mon for this session, or for every open session with `/pokemon sync` on. A new session starts with the one picked last |
 | `/pokemon list` | List every mon name |
 | `/pokemon shiny`, `/pokemon default` | Pick a variant, saved across sessions |
 | `/pokemon wander` | Toggle idle wandering (on by default) |
@@ -83,6 +83,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon stop` | Cancel an evolution |
 | `/pokemon sleep` | Tuck the mon in, so its meters drain slower until Claude starts working in a session showing it. Run it again to wake it |
 | `/pokemon needs` | Toggle food and happiness (on by default) |
+| `/pokemon sync` | Toggle syncing the mon across sessions (off by default, saved across sessions). On, every open session switches to the mon picked last in any of them, fetched mons included. Off, each session keeps its own |
 | `/pokemon autoevolve` | Toggle level evolutions starting on their own once idle (on by default). Off, the mon waits for `/pokemon evolve` |
 | `/pokemon emoji` | Toggle emoji meters, 🍓 and 💗 instead of ● and ♥ (off by default, saved across sessions) |
 | `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
