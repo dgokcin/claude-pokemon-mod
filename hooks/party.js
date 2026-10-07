@@ -29,25 +29,25 @@ const SPARKS = 9
 // Frames are 7 pixels wide, drawn a pixel left of the slot so a ball can lean and
 // spill light. A 5x5 ball: K outline, R red top with an h shine, G dark band,
 // B light button, W white bottom with a g shade under the button.
-const BALL = ['..KKK..', '.KhRRK.', '.GGBGG.', '.KWgWK.', '..KKK..']
+export const BALL = ['..KKK..', '.KhRRK.', '.GGBGG.', '.KWgWK.', '..KKK..']
 // Rocking left and right: the band tips and the top two rows lean a pixel that way
-const LEANS = [
+export const LEANS = [
   ['.KKK...', 'KhRRG..', '.KGBGK.', '.GWgWK.', '..KKK..'],
   BALL,
   ['...KKK.', '..GhRRK', '.KGBGK.', '.KWgWG.', '..KKK..'],
 ]
 // Popping: the lid lifts off the bottom half and light spills out of the gap
-const OPEN = [
+export const OPEN = [
   ['..KKK..', '.KhRRK.', 'rwwwwwr', '.GGBGG.', '.KWgWK.', '..KKK..'],
   ['..KKK..', '.KhRRK.', 'r.www.r', 'rwwwwwr', '.GGBGG.', '.KWgWK.', '..KKK..'],
 ]
 // Then a flash where the ball was, big and then small
-const FLASH = [
+export const FLASH = [
   ['...r...', '..rwr..', '.rwwwr.', 'rwwwwwr', '.rwwwr.', '..rwr..', '...r...'],
   ['.......', '...r...', '..rwr..', '.rwwwr.', '..rwr..', '...r...', '.......'],
 ]
-const BALL_COLORS = { K: 0x000000, R: 0xe03030, h: 0xff9090, G: 0x4a4a56, B: 0xffffff, W: 0xf0f0f4, g: 0xa0a0ac }
-const LIGHT_COLORS = { ...BALL_COLORS, w: 0xffffff, r: 0xff8080 }
+export const BALL_COLORS = { K: 0x000000, R: 0xe03030, h: 0xff9090, G: 0x4a4a56, B: 0xffffff, W: 0xf0f0f4, g: 0xa0a0ac }
+export const LIGHT_COLORS = { ...BALL_COLORS, w: 0xffffff, r: 0xff8080 }
 const LABEL_COLOR = 0x9a9ab0
 
 // The +n label: a plus beside a digit, 5 pixels tall like a ball
