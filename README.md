@@ -63,6 +63,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon box` | Every mon you've raised |
 | `/pokemon catch` | Throw a Poké Ball at a wild mon |
 | `/pokemon dex` | Every wild mon you've seen and caught |
+| `/pokemon new <mon>` | Fetch a mon from gen 2 to 5, like `/pokemon new mudkip`, or a random one with `/pokemon new gen3` |
 
 <details>
 <summary>All commands</summary>
@@ -70,7 +71,7 @@ Then pick your partner with `/pokemon <mon>`.
 | Command | Effect |
 | --- | --- |
 | `/pokemon` | Show the active mon, its variant, level, meters, and the options |
-| `/pokemon <mon>` | Pick the mon for this session. A new session starts with the one picked last |
+| `/pokemon <mon>` | Pick the mon for this session, or for every open session with `/pokemon sync` on. A new session starts with the one picked last |
 | `/pokemon list` | List every mon name |
 | `/pokemon shiny`, `/pokemon default` | Pick a variant, saved across sessions |
 | `/pokemon wander` | Toggle idle wandering (on by default) |
@@ -85,10 +86,13 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon stop` | Cancel an evolution |
 | `/pokemon sleep` | Tuck the mon in, so its meters drain slower until Claude starts working in a session showing it. Run it again to wake it |
 | `/pokemon needs` | Toggle food and happiness (on by default) |
+| `/pokemon sync` | Toggle syncing the mon across sessions (off by default, saved across sessions). On, every open session switches to the mon picked last in any of them, fetched mons included. Off, each session keeps its own |
 | `/pokemon autoevolve` | Toggle level evolutions starting on their own once idle (on by default). Off, the mon waits for `/pokemon evolve` |
 | `/pokemon emoji` | Toggle emoji meters, 🍓 and 💗 instead of ● and ♥ (off by default, saved across sessions) |
 | `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
 | `/pokemon box` | List every mon you've raised, highest level first |
+| `/pokemon new <mon>` | Fetch a mon from any generation in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) (gen 1 to 5) and show it. It's saved in the mod's store, so it stays through plugin updates and shows up in every session. Moves come from its types, using gen 1 animations |
+| `/pokemon new random`, `/pokemon new gen<N>` | Fetch a random mon you don't have yet, from gen 2 to 5 or from gen N |
 | `/pokemon nickname <name>` | Nickname the mon, up to 12 characters. It keeps the name when it evolves, and its species name takes the nickname away |
 | `/pokemon release <mon>` | Release a mon from your box. It starts over at its first level with fresh meters |
 | `/pokemon catch` | Throw a Poké Ball at the wild mon. The odds rise as its HP falls |
@@ -291,6 +295,8 @@ without waiting for the shared timer. Without debug, `wild` replies as an unknow
 
 <details>
 <summary>Add a mon</summary>
+
+To try a mon without changing the repo, `/pokemon new <mon>` fetches it at runtime instead. The steps below bundle it, with a hand-picked moveset, evolutions, and eyes that close when it sleeps.
 
 1. Copy the four GIFs from `media/gen<N>/<mon>/` in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) into `sprites/<mon>/`: `default_idle_8fps.gif`, `default_walk_8fps.gif`, `shiny_idle_8fps.gif`, and `shiny_walk_8fps.gif`.
 2. Run `node scripts/build-frames.mjs`.
