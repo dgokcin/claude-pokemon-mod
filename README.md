@@ -20,6 +20,17 @@ claude plugin install pokemon@claude-pokemon
 
 Then pick your partner with `/pokemon <mon>`.
 
+> [!TIP]
+> It works best in iTerm2 or another terminal that draws images, like kitty or Ghostty, where the small band keeps every pixel. Turn images on in the `env` block of `~/.claude/settings.json`:
+>
+> ```json
+> {
+>   "env": {
+>     "CLAUDE_CODE_FORCE_TERMINAL_IMAGES": "1"
+>   }
+> }
+> ```
+
 ## Why you'll keep it on
 
 - 🔎 **It watches Claude work.** A pencil for edits, a magnifier for reads, `>_` for shell commands, a TM disc for skills.
@@ -89,7 +100,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon sync` | Toggle syncing the mon across sessions (off by default, saved across sessions). On, every open session switches to the mon picked last in any of them, fetched mons included. Off, each session keeps its own |
 | `/pokemon autoevolve` | Toggle level evolutions starting on their own once idle (on by default). Off, the mon waits for `/pokemon evolve` |
 | `/pokemon emoji` | Toggle emoji meters, 🍓 and 💗 instead of ● and ♥ (off by default, saved across sessions) |
-| `/pokemon size small`, `/pokemon size medium` | Draw the band at half size or full size (medium by default, saved across sessions). A short pane still shrinks it further. See [How it works](#how-it-works) for crisp small mons in iTerm2 |
+| `/pokemon size small`, `/pokemon size large` | Draw the band at half size or full size (large by default, saved across sessions). A short pane still shrinks it further. See [How it works](#how-it-works) for crisp small mons in iTerm2 |
 | `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
 | `/pokemon box` | List every mon you've raised, highest level first |
 | `/pokemon new <mon>` | Fetch a mon from any generation in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) (gen 1 to 5) and show it. It's saved in the mod's store, so it stays through plugin updates and shows up in every session. Moves come from its types, using gen 1 animations |
@@ -269,15 +280,27 @@ Gyarados, and Pidgeot are the tallest at 17.
 
 `/pokemon size small` draws the band at half size, laid out just like the full-size one.
 kitty and Ghostty draw the small band as a real image, so every pixel stays. iTerm2 3.7
-and older draws it in half blocks, because of an iTerm2 bug that freezes the image on its
-first frame. Newer iTerm2 builds, nightlies from 2026-09-18 on included, draw the image
-once you set `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1`, for example in the `env` block of
-`~/.claude/settings.json`.
+and older can't, because of an iTerm2 bug that freezes the image on its first frame.
+Newer iTerm2 builds, nightlies from 2026-09-18 on included, draw the image once you set
+`CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1`, for example in the `env` block of
+`~/.claude/settings.json`. VS Code's terminal, Cursor's included, and macOS Terminal
+can't show the image even with that set. In those terminals the small band is drawn in
+half blocks and shrinks no shorter than a full-size Diglett, since a half-size mon in
+half blocks is too small to read. In a small band a wild mon taller than yours shrinks to your
+mon's height, so it doesn't make the band taller and shrink yours with it, and a short
+one grows to look as tall as a large Diglett, up to your mon's height.
 
 When the pane is too short, the whole scene shrinks to fit in half blocks, and so does
 the small band in other terminals. Each shrunk pixel takes the most common color of its
-block, and ties go to the darker color, so outlines and eyes survive. Below 4 rows it
-shows a line of text instead, like `Pikachu Lv 12 ●●●●○ ♥♥♥♥♡`.
+block. Ties go to the color at the middle of the block, so lines stay unbroken, and then
+to the darker color, so outlines survive. Each eye shrinks to one dot of its pupil, its
+darkest color or on a dark face its brightest, with the rest of the eye painted over as
+skin, so a shrunk mon never loses its eyes and both come out alike. An eye drawn as a
+line keeps the middle of the line. The thought bubble, the Zs, and the berry
+aren't shrunk with the scene, as they'd break into specks: a shrunk band draws them from
+smaller art of its own: a smaller round bubble with 3 px icons and a pixel of room around
+them, 3 px Zs, and a 3 px berry.
+Below 4 rows it shows a line of text instead, like `Pikachu Lv 12 ●●●●○ ♥♥♥♥♡`.
 
 </details>
 
