@@ -346,6 +346,7 @@ claude --plugin-dir .                            # live-reloading session
 | `hooks/dex.js` | The Pokédex, and how rare each mon is in the wild |
 | `hooks/wild.js` | A wild mon's visit: walking in, battle, throws, and fleeing |
 | `hooks/zoom.js` | Shrinks the band to its size and to fit a short pane |
+| `hooks/png.js` | Encodes the small band's frames as PNGs for terminals that draw images |
 | `hooks/eyes.js` | Each mon's eyes on every frame, shut while it sleeps |
 | `hooks/frames.js` | Generated pixel frames. Don't edit by hand |
 | `sprites/<mon>/*.gif` | Source GIFs, 32x32 |
