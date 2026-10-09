@@ -275,7 +275,9 @@ Newer iTerm2 builds, nightlies from 2026-09-18 on included, draw the image once 
 `~/.claude/settings.json`. VS Code's terminal, Cursor's included, and macOS Terminal
 can't show the image even with that set. In those terminals the small band is drawn in
 half blocks and shrinks no shorter than a full-size Diglett, since a half-size mon in
-half blocks is too small to read.
+half blocks is too small to read. In a small band a wild mon taller than yours shrinks to your
+mon's height, so it doesn't make the band taller and shrink yours with it, and a short
+one grows to look as tall as a medium Diglett, up to your mon's height.
 
 When the pane is too short, the whole scene shrinks to fit in half blocks, and so does
 the small band in other terminals. Each shrunk pixel takes the most common color of its
@@ -285,7 +287,8 @@ darkest color or on a dark face its brightest, with the rest of the eye painted 
 skin, so a shrunk mon never loses its eyes and both come out alike. An eye drawn as a
 line keeps the middle of the line. The thought bubble, the Zs, and the berry
 aren't shrunk with the scene, as they'd break into specks: a shrunk band draws them from
-smaller art of its own, a tighter bubble around the same icons, 3 px Zs, and a 3 px berry.
+smaller art of its own: a smaller round bubble with 3 px icons and a pixel of room around
+them, 3 px Zs, and a 3 px berry.
 Below 4 rows it shows a line of text instead, like `Pikachu Lv 12 ●●●●○ ♥♥♥♥♡`.
 
 </details>

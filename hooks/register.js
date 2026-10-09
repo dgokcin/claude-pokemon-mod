@@ -207,10 +207,11 @@ const IDLE_RIGHT_GAP = {}
 // The rightmost head column of a mon walking right, across its walk frames, per variant
 const WALK_HEAD_RIGHT = {}
 
-// Measure a mon's sprite into the tables above, and list it. Fetched mons join here too.
-function addSprite(name, sprite) {
+// Measure a mon's sprite into the tables above, and list it unless it's a resized foe.
+// Fetched mons join here too.
+function addSprite(name, sprite, listed = true) {
   SPRITES[name] = sprite
-  if (!MONS.includes(name)) MONS.push(name)
+  if (listed && !MONS.includes(name)) MONS.push(name)
   const perVariant = (fn) => Object.fromEntries(VARIANTS.map((v) => [v, fn(sprite.variants[v])]))
   COLORS[name] = perVariant(({ palette }) =>
     Object.fromEntries(palette.map((hex, i) => [String.fromCharCode(97 + i), parseInt(hex.slice(1), 16)])),
@@ -226,22 +227,93 @@ function addSprite(name, sprite) {
 }
 for (const name of Object.keys(SPRITES)) addSprite(name, SPRITES[name])
 
+// Along one axis of size pixels resized to count, the pixels that full-size pixels lo up
+// to hi land on: blocks voted down to one when shrinking, copies spread out when growing
+function resizedSpan(lo, hi, size, count) {
+  if (count >= size) return [Math.ceil((lo * count) / size - 0.5), Math.ceil(((hi + 1) * count) / size - 0.5) - 1]
+  const cell = (v) => {
+    let t = 0
+    while (t + 1 < count && Math.ceil(((t + 1) * size) / count) <= v) t++
+    return t
+  }
+  return [cell(lo), cell(hi)]
+}
+
+// A mon's sprite resized to height pixels, the same scale both ways. A shrinking one takes
+// the band's votes, eyes kept, and a growing one copies each pixel into a block. Each frame
+// carries its pupils, moved with it, as eyes.js has no boxes for it.
+function resizedSprite(name, height) {
+  const sprite = SPRITES[name]
+  const scale = height / sprite.height
+  const width = Math.max(1, Math.round(sprite.width * scale))
+  const at = (v, size, count) => (count >= size ? Math.floor(((v + 0.5) * count) / size) : resizedSpan(v, v, size, count)[0])
+  const variants = {}
+  for (const v of VARIANTS) {
+    const sheet = sprite.variants[v]
+    const colors = COLORS[name][v]
+    const letters = new Map(Object.entries(colors).map(([l, c]) => [c, l]))
+    const resize = (view) =>
+      sheet[view].map((frame, index) => {
+        const source = frame.rows
+        const pupils = pupilsOf(source, sheet.palette, keptEyesOf(name, v, view, index))
+        const colorAt = (x, y) => colors[source[y]?.[x]] ?? null
+        const kept = pupils.map(([x, y, box, skin, inked]) => [x, y, colorAt(x, y), box && [...box, colors[skin], [...inked].map((l) => colors[l])]])
+        const shrunk = scale < 1 && zoomedPixel(colorAt, { columns: sprite.width, pixels: sprite.height, scale, pupils: kept })
+        const pixel = shrunk
+          ? (x, y) => letters.get(shrunk(x, y)) ?? '.'
+          : (x, y) => source[Math.floor(((y + 0.5) * sprite.height) / height)]?.[Math.floor(((x + 0.5) * sprite.width) / width)] ?? '.'
+        const rows = Array.from({ length: height }, (_, y) => Array.from({ length: width }, (_, x) => pixel(x, y)).join(''))
+        const moved = pupils.map(([x, y, box, skin, inked]) => {
+          const point = [at(x, sprite.width, width), at(y, sprite.height, height)]
+          if (!box) return point
+          const [left, right] = resizedSpan(box[0], box[0] + box[2] - 1, sprite.width, width)
+          const [top, bottom] = resizedSpan(box[1], box[1] + box[3] - 1, sprite.height, height)
+          return [...point, [left, top, right - left + 1, bottom - top + 1], skin, inked]
+        })
+        return { ...frame, rows, pupils: moved }
+      })
+    variants[v] = { ...sheet, idle: resize('idle'), walk: resize('walk') }
+  }
+  return { ...sprite, width, height, variants }
+}
+
+// A wild mon in a small band stands no shorter on screen than a medium Diglett
+const FOE_MIN_PIXELS = SPRITES.diglett.height
+
+// The foe as drawn. In a small band a foe taller than the home mon shrinks to its height,
+// so it doesn't grow the band and shrink the home mon with it, and a short one grows to
+// look as tall as a medium Diglett, up to the home mon's height. Each size is resized once
+// and kept under its own name, unlisted. It goes by the size picked and the home mon's
+// scale alone, as the band's scale depends on the foe.
+function foeAs(name) {
+  if (SIZES[size] >= 1) return name
+  const own = SPRITES[name].height
+  const home = SPRITES[mon].height
+  const least = Math.min(home, Math.ceil(FOE_MIN_PIXELS / bandScale(rowsOf(mon)) - 1e-9))
+  const height = own > home ? home : Math.max(own, least)
+  if (height === own) return name
+  const sized = name + '@' + height
+  if (!SPRITES[sized]) addSprite(sized, resizedSprite(name, height), false)
+  return sized
+}
+const foeName = () => foeAs(wild.mon)
+
 const rowsOf = (name) => HEAD_ROWS + spriteRows(name)
 // While a mon evolves or transforms, the band is tall enough for both shapes
 const bandRows = () => {
   if (evolving) return Math.max(rowsOf(evolving.from), rowsOf(evolving.into))
   if (attack?.move.effect === 'transform') return Math.max(rowsOf(mon), rowsOf(attack.swap))
-  if (isOnStage(wild)) return Math.max(rowsOf(mon), rowsOf(wild.mon))
+  if (isOnStage(wild)) return Math.max(rowsOf(mon), rowsOf(foeName()))
   return rowsOf(mon)
 }
 // The band's size on screen, shrunk to fit a short pane, or null when only the badge fits
 // A terminal known to lack Images draws the small band in half blocks, where a mon at
 // half size loses too much to read. It shrinks no shorter than a full-size Diglett.
 const HALF_BLOCK_MIN_ROWS = rowsOf('diglett')
-const bandScale = () => {
+const bandScale = (rows = bandRows()) => {
   const scale = SIZES[size]
   if (scale >= 1 || !noImages || bandSurface !== 'terminal') return scale
-  return Math.min(1, Math.max(scale, HALF_BLOCK_MIN_ROWS / bandRows()))
+  return Math.min(1, Math.max(scale, HALF_BLOCK_MIN_ROWS / rows))
 }
 const bandZoom = () => zoomFor({ columns: sceneColumns(), rows: bandRows(), maxRows, size: bandScale() })
 // The strip and the panel, in the strip's own columns, and the whole scene with the margin
@@ -316,11 +388,13 @@ const BUBBLE_WIDTH = BUBBLE[0].length
 // The columns a bubble and its tail take beside the head
 const BUBBLE_SPAN = BUBBLE_WIDTH + 3
 const BUBBLE_TAIL_ROW = 2
+// Each icon has small art too, for a shrunk band's bubble
 const BUBBLE_ICONS = {
-  food: { rows: ['.rgr.', 'rrrrr', '.rrr.', '..r..'], colors: { r: 0xd84040, g: 0x58a040 } },
-  happiness: { rows: ['pp.pp', 'ppppp', '.ppp.', '..p..'], colors: { p: 0xf0609a } },
+  food: { rows: ['.rgr.', 'rrrrr', '.rrr.', '..r..'], small: ['.g.', 'rrr', '.r.'], colors: { r: 0xd84040, g: 0x58a040 } },
+  happiness: { rows: ['pp.pp', 'ppppp', '.ppp.', '..p..'], small: ['p.p', 'ppp', '.p.'], colors: { p: 0xf0609a } },
 }
 const STAR = ['..s..', 'sssss', '.sss.', '.s.s.']
+const SMALL_STAR = ['.s.', 'sss', 's.s']
 const SMALL_Z = ['zzz', '.z.', 'zzz']
 const BIG_Z = ['zzzz', '..z.', '.z..', 'zzzz']
 const ZZZ_EVERY_MS = 1100
@@ -329,20 +403,25 @@ const ZZZ_LIFE_MS = 2200
 const ZZZ_GAP = 0
 const ZZZ_DRIFT = 4
 // A shrunk band draws the bubble, Zs, and berry at its own pixel size, from art made for
-// it, instead of shrinking the full-size art down to specks. The bubble hugs the same
-// icons with no gap inside, so they stay as clear as at medium.
-const SMALL_BUBBLE = ['.OOOOO.', 'O.....O', 'O.....O', 'O.....O', 'O.....O', '.OOOOO.']
+// it, instead of shrinking the full-size art down to specks. Its bubble is the full-size
+// one's shape a size down, holding the icons' small art with a pixel of room around it.
 const SMALL_ZS = { glyphs: [SMALL_Z, SMALL_Z], drift: 3 }
 const SMALL_BERRY = ['.k.', 'BhB', '.b.']
-// The bubble drawn: the small one in a shrunk band, and the full-size one otherwise
-const FULL_BUBBLE = { frame: BUBBLE, inset: 2 }
-const SHRUNK_BUBBLE = { frame: SMALL_BUBBLE, inset: 1 }
+// The bubble drawn: the full-size one, with the icon's columns and rows in from its corner
+const FULL_BUBBLE = { frame: BUBBLE, inset: [2, 2], small: false }
+// A shrunk band's bubble, with the icon's small art in the middle of it
+const SMALL_BUBBLE = ['.OOOOO.', 'O.....O', 'O.....O', 'O.....O', 'O.....O', 'O.....O', '.OOOOO.']
+function shrunkBubble(icon) {
+  const room = SMALL_BUBBLE.length - 2
+  const inset = [1 + Math.floor((room - icon.small[0].length) / 2), 1 + Math.floor((room - icon.small.length) / 2)]
+  return { frame: SMALL_BUBBLE, inset, small: true }
+}
 // The columns a bubble and its tail take beside the head
 const bubbleSpan = (look) => look.frame[0].length + 3
 // A sweat drop on the head when a tool call fails: d drop, h shine
 const SWEAT = ['..d.', '.dd.', 'dhdd', 'dddd', '.dd.']
 // The "!" of a trainer who spots you, shown while Claude waits on you
-const ALERT_ICON = { rows: ['..a..', '..a..', '.....', '..a..'], colors: { a: 0xff3d3d } }
+const ALERT_ICON = { rows: ['..a..', '..a..', '.....', '..a..'], small: ['a', 'a', '.', 'a'], colors: { a: 0xff3d3d } }
 // What the bubble shows while a tool runs: a pencil (p body, e eraser, t wood, g lead),
 // a magnifier (l rim, h handle), a shell prompt (s), a Poké Ball (r top, k band,
 // w button, b bottom), a TM disc (c disc, d shade, n shine) for a skill, or a wrench (m) for
@@ -354,6 +433,14 @@ const TOOL_ICONS = {
   ball: ['.rrr.', 'rrrrr', 'kkwkk', '.bbb.'],
   disc: ['.ncc.', 'nc.cc', 'ccccd', '.cdd.'],
   wrench: ['..m.m', '..mmm', '.m...', 'm....'],
+}
+const SMALL_TOOL_ICONS = {
+  pencil: ['..e', '.p.', 'g..'],
+  lens: ['.l.', 'l.l', '.lh'],
+  shell: ['s..', '.s.', 's..'],
+  ball: ['rrr', 'kwk', 'bbb'],
+  disc: ['ncc', 'c.c', 'ccd'],
+  wrench: ['m.m', 'mmm', '.m.'],
 }
 const TOOL_KINDS = {
   pencil: ['Edit', 'Write', 'NotebookEdit', 'MultiEdit'],
@@ -386,7 +473,7 @@ function stampPixel(s, cx, py) {
 function dotsIcon() {
   const dots = 1 + (Math.floor((tick * TICK_MS) / 400) % 3)
   const row = ['d', '.', 'd', '.', 'd'].map((ch, i) => (i / 2 < dots ? ch : '.')).join('')
-  return { rows: ['.....', '.....', row, '.....'], colors: { d: ink.dots } }
+  return { rows: ['.....', '.....', row, '.....'], small: [row], colors: { d: ink.dots } }
 }
 
 // A skill is in use: a Skill call runs in some agent, or a skill was typed as /name
@@ -411,14 +498,14 @@ function toolIcon() {
     c: ink.disc, d: ink.discShade, n: 0xf6f6fc,
     m: ink.wrench,
   }
-  return { rows: TOOL_ICONS[kind], colors }
+  return { rows: TOOL_ICONS[kind], small: SMALL_TOOL_ICONS[kind], colors }
 }
 
 // What the bubble beside the head shows, if anything
 function bubbleIcon() {
   if (attack) return null
   if (isAlerted()) return ALERT_ICON
-  if (tick < yumUntil) return { rows: STAR, colors: { s: ink.star } }
+  if (tick < yumUntil) return { rows: STAR, small: SMALL_STAR, colors: { s: ink.star } }
   if (skillInUse()) return toolIcon()
   if (working && runningTools.size > 0) return toolIcon()
   if (working && thinking) return dotsIcon()
@@ -465,13 +552,13 @@ function bubbleOnLeft(head, side, room = [-margin, stripColumns()], look = FULL_
 }
 
 function bubbleStamps(icon, head, side, room, look = FULL_BUBBLE) {
-  const { frame, inset } = look
+  const { frame, inset, small } = look
   const onLeft = bubbleOnLeft(head, side, room, look)
   const left = onLeft ? head[0] - bubbleSpan(look) : head[1] + 4
   const tail = onLeft ? head[0] - 2 : head[1] + 2
   // The first stamp with a pixel wins, so the icon goes before the bubble
   return [
-    stamp(left + inset, inset, icon.rows, icon.colors),
+    stamp(left + inset[0], inset[1], small ? icon.small : icon.rows, icon.colors),
     stamp(left, 0, frame, { O: ink.bubble }),
     stamp(tail, BUBBLE_TAIL_ROW, ['O'], { O: ink.bubble }),
   ]
@@ -829,7 +916,7 @@ function pupilsAt(name, shade, view, rows, { left, top, mirrored }) {
   const sheet = SPRITES[name].variants[shade]
   if (!framePupils.has(rows)) {
     const index = Math.max(0, sheet[view].findIndex((f) => f.rows === rows))
-    framePupils.set(rows, pupilsOf(rows, sheet.palette, keptEyesOf(name, shade, view, index)))
+    framePupils.set(rows, sheet[view][index].pupils ?? pupilsOf(rows, sheet.palette, keptEyesOf(name, shade, view, index)))
   }
   const { width } = SPRITES[name]
   const colors = COLORS[name][shade]
@@ -960,26 +1047,27 @@ function sceneRoom(bodyColumns) {
   return (small ? Math.floor(bodyColumns / small.scale) : bodyColumns) - panel
 }
 
-const battleFits = (foe, foeVariant) => battleNeeds(foe, foeVariant) <= sceneRoom(lastBodyColumns)
+const battleFits = (foe, foeVariant) => battleNeeds(foeAs(foe), foeVariant) <= sceneRoom(lastBodyColumns)
 
 // The strip's width in a band bodyColumns wide, grown on the left while a foe is on stage
 function stripTarget(bodyColumns) {
   const room = sceneRoom(bodyColumns)
   const strip = Math.max(SPRITES[mon].width, Math.min(STRIP_COLUMNS, room))
-  return isOnStage(wild) ? Math.max(strip, Math.min(battleNeeds(wild.mon, wild.variant), room)) : strip
+  return isOnStage(wild) ? Math.max(strip, Math.min(battleNeeds(foeName(), wild.variant), room)) : strip
 }
 
 // The foe's spot facing the home mon, and the column just out of sight past the scene's left edge
 const wildAt = () => ({
-  spot: foeSpotX(homeX() + idleBox(mon, variant).left, idleBox(wild.mon, wild.variant)),
-  offLeft: -margin - SPRITES[wild.mon].width,
+  spot: foeSpotX(homeX() + idleBox(mon, variant).left, idleBox(foeName(), wild.variant)),
+  offLeft: -margin - SPRITES[foeName()].width,
 })
 
 // The foe's opaque box in strip pixels, as it stands in battle
 function foeBox(rows) {
-  const box = idleBox(wild.mon, wild.variant)
+  const foe = foeName()
+  const box = idleBox(foe, wild.variant)
   const left = foeX(wild, wildAt())
-  const top = rows * 2 - SPRITES[wild.mon].height
+  const top = rows * 2 - SPRITES[foe].height
   return { left: left + box.left, right: left + box.right, top: top + box.top, bottom: top + box.bottom }
 }
 
@@ -1000,13 +1088,14 @@ function foePixel(rows) {
   if (foeBlinks(wild, tick)) return () => null
   const held = wild.phase === 'throw' ? throwStage(wild.throw, tick) : null
   if (held && !['arc', 'open'].includes(held.stage) && !(held.stage === 'breakout' && held.t >= THROW_TICKS.open)) return () => null
-  const sprite = SPRITES[wild.mon]
+  const foe = foeName()
+  const sprite = SPRITES[foe]
   const sheet = sprite.variants[wild.variant]
   const walking = wild.phase === 'entering' || wild.phase === 'fleeing'
   const frame = frameAt(walking ? sheet.walk : sheet.idle, tick * TICK_MS)
-  const colors = COLORS[wild.mon][wild.variant]
+  const colors = COLORS[foe][wild.variant]
   const flip = wild.phase === 'fleeing'
-  const top = rows * 2 - sprite.height + (walking ? WALK_DROP[wild.mon][wild.variant] : 0)
+  const top = rows * 2 - sprite.height + (walking ? WALK_DROP[foe][wild.variant] : 0)
   const left = foeX(wild, wildAt()) + foeJolt(wild, tick)
   const pixel = (cx, py) => {
     const px = cx - left
@@ -1015,7 +1104,7 @@ function foePixel(rows) {
     return colors[row[flip ? sprite.width - 1 - px : px]] ?? null
   }
   if (held?.stage !== 'open') {
-    pixel.pupils = pupilsAt(wild.mon, wild.variant, walking ? 'walk' : 'idle', frame, { left, top, mirrored: flip })
+    pixel.pupils = pupilsAt(foe, wild.variant, walking ? 'walk' : 'idle', frame, { left, top, mirrored: flip })
     return pixel
   }
   const scale = 1 - (held.t + 1) / (THROW_TICKS.open + 1)
@@ -1342,7 +1431,7 @@ function frameNow(full = false) {
   const zoomedHead = [zoomedAt(headLeft, zoom.scale), Math.max(zoomedAt(headRight, zoom.scale), zoomedAt(headRight + 1, zoom.scale) - 1)]
   // It keeps clear of the meters drawn over the small band's right end
   const bubbleRoom = [0, zoom.columns - (isSmall() ? Math.round(panel * zoom.scale) : 0)]
-  const zoomedBubble = shrunk && icon ? bubbleStamps(icon, zoomedHead, bubbleSide, bubbleRoom, SHRUNK_BUBBLE) : []
+  const zoomedBubble = shrunk && icon ? bubbleStamps(icon, zoomedHead, bubbleSide, bubbleRoom, shrunkBubble(icon)) : []
   // The Zs and the berry, in front of the shrunk scene as they are at full size
   const zoomedX = (c) => zoomedAt(c + margin + shakeX, zoom.scale)
   const zoomedY = (py) => zoomedAt(py + shakeY, zoom.scale)

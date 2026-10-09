@@ -1961,14 +1961,14 @@ function pixelCount(cells: string, color: number): number {
 // band in half blocks
 const DENY_IMAGES = { deny: 'the Image draws its alt here: the terminal draws no placeholder images' }
 
-test('a half block small band draws a smaller thought bubble around the same icon', async ($, on) => {
+test('a half block small band draws a smaller thought bubble around small icon art', async ($, on) => {
   const { clock } = await startedWith($, on, { mon: 'gyarados', size: 'small' }, 0, {}, (e) => (e.source ? DENY_IMAGES : {}))
   await $.ui.mount({ ...SPINNER, surface: 'terminal' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
   await clock.advance(200)
   const raster = (await ui.find({ key: 'pokemon' })).props
-  // The small outline's 18 pixels and the tail's one
-  expect(pixelCount(raster.cells, BUBBLE_OUTLINE)).toBe(19)
+  // The small 7 by 7 outline is 20 pixels, and the tail one more
+  expect(pixelCount(raster.cells, BUBBLE_OUTLINE)).toBe(21)
   expect(paints(raster.cells, DOTS)).toBe(true)
 })
 
@@ -2109,6 +2109,52 @@ test('a battle that fits a medium band fits a small one in the same pane', async
     await clock.advance(10000)
     await ui.unmount()
   }
+})
+
+// The pixel rows a half-block raster columns wide paints in any of colors
+function rowsPainted(cells: string, columns: number, colors: number[]): number {
+  const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
+  const rows = new Set<number>()
+  for (let i = 0; i < words.length; i += 3) {
+    const [cp, fg, bg] = [words[i], words[i + 1], words[i + 2]]
+    const pair = cp === 0x2580 ? [fg, bg] : cp === 0x2584 ? [bg, fg] : cp === 0x20 ? [bg, bg] : []
+    const row = Math.floor(i / 3 / columns) * 2
+    pair.forEach((c, k) => colors.includes(c) && rows.add(row + k))
+  }
+  return rows.size
+}
+
+test('a small band draws a short foe no shorter than a medium Diglett', async ($, on) => {
+  const { clock, blits, widths } = await startedWith($, on, { mon: 'snorlax', wander: false, debug: true }, 0, {}, (e) => (e.source ? DENY_IMAGES : {}))
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  // Diglett's colors from its head to its mound, all but the black and gray Snorlax paints
+  const DIGLETT = [0x403010, 0x987838, 0x704820, 0xc8c8c8, 0x707070, 0x680828, 0xd04068, 0xe87098, 0x982048, 0xa8a8a8]
+  const tall: Record<string, number> = {}
+  for (const size of ['medium', 'small']) {
+    await run('size ' + size)
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: 120 } })
+    expect(await run('wild diglett')).toBe('A wild Diglett is on its way.')
+    await clock.advance(10000)
+    const columns = widths[widths.length - 1] ?? (await ui.find({ key: 'pokemon' })).props.columns
+    tall[size] = rowsPainted(await shown(ui, blits), columns, DIGLETT)
+    await run('run')
+    await clock.advance(10000)
+    await ui.unmount()
+  }
+  // At half scale beside Snorlax, a 12 px Diglett would paint 6 rows. It's grown so it
+  // paints as many as at medium, give or take a row the shrink rounds off.
+  expect(tall.small).toBeGreaterThanOrEqual(tall.medium - 1)
+  expect(tall.medium).toBe(12)
+})
+
+test('a small band shrinks a foe taller than the home mon to its height, so the band does not grow', async ($, on) => {
+  const { clock } = await startedWith($, on, { mon: 'pikachu', size: 'small', wander: false, debug: true }, 0, {}, (e) => (e.source ? DENY_IMAGES : {}))
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: 120 } })
+  await clock.advance(200)
+  const alone = (await ui.find({ key: 'pokemon' })).props.rows
+  expect((await $.command.run({ command: 'pokemon', args: 'wild gyarados' })).text).toBe('A wild Gyarados is on its way.')
+  await clock.advance(10000)
+  expect((await ui.find({ key: 'pokemon' })).props.rows).toBe(alone)
 })
 
 test('a saved small size draws the band small from the start, and a short pane still shrinks it', async ($, on) => {
