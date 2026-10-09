@@ -41,6 +41,9 @@ const PIXEL_PX = 4
 // Image pixels per sprite pixel. The terminal scales the Image to its box, so sending
 // each pixel as a block keeps its edges sharp.
 const IMAGE_UP = 4
+// How long a terminal that drew an Image's alt gets half blocks before the Image is asked
+// for again, from the first wait to the longest
+const IMAGE_WAIT_TICKS = [(2 * 1000) / TICK_MS, (5 * 60 * 1000) / TICK_MS]
 const MOVE_TICKS = 3
 const HOP_TICKS = 12
 const SLEEP_AFTER_MS = 5 * 60 * 1000
@@ -172,9 +175,15 @@ let sentImage = null
 // Set once a blit swaps the Image's source, so the terminal draws Images and a redraw
 // needn't ask again
 let imagesDrawn = false
-// Set when the small band can't be an Image here: an iTerm2 whose Image swaps freeze, or
-// a terminal that draws an Image's alt, as one without kitty graphics does
-let imagesDenied = false
+// Set on an iTerm2 whose Image swaps freeze, which gets the small band in half blocks
+let swapsFreeze = false
+// After a terminal draws an Image's alt, the small band is half blocks until this tick.
+// Each deny in a row doubles the wait, since a terminal without kitty graphics never
+// draws one, while one whose graphics aren't ready yet soon does.
+let imageRetryAt = null
+let imageWait = IMAGE_WAIT_TICKS[0]
+// Whether the band as last drawn holds the Image, or else Raster cells
+let drawnImage = false
 let sentSvg = null
 // Counts the distinct frames drawn on the desktop. Each one goes under a new key, since
 // the desktop keeps showing an Svg's first frame while its place in the tree holds.
@@ -891,11 +900,18 @@ function battleNeeds(foe, foeVariant) {
   return battleColumns(homeSpan, idleBox(foe, foeVariant))
 }
 
-const battleFits = (foe, foeVariant) => battleNeeds(foe, foeVariant) <= lastBodyColumns - panel
+// The scene columns left of the panel in a band bodyColumns wide. The small band shows
+// the scene at its scale, so each band column holds more than one of the scene's.
+function sceneRoom(bodyColumns) {
+  const small = smallZoom()
+  return (small ? Math.floor(bodyColumns / small.scale) : bodyColumns) - panel
+}
+
+const battleFits = (foe, foeVariant) => battleNeeds(foe, foeVariant) <= sceneRoom(lastBodyColumns)
 
 // The strip's width in a band bodyColumns wide, grown on the left while a foe is on stage
 function stripTarget(bodyColumns) {
-  const room = bodyColumns - panel
+  const room = sceneRoom(bodyColumns)
   const strip = Math.max(SPRITES[mon].width, Math.min(STRIP_COLUMNS, room))
   return isOnStage(wild) ? Math.max(strip, Math.min(battleNeeds(wild.mon, wild.variant), room)) : strip
 }
@@ -1274,11 +1290,18 @@ function frameNow(full = false) {
 const underPanel = (cx, cy, zoom) => cx >= (isSmall() ? zoom.columns - Math.round(panel * zoom.scale) : margin + columns) && cy >= zoom.rows - panelRows()
 
 // The small band is the full-size scene drawn into a smaller box: an Image in the
-// terminal, scaled by the terminal so no pixel is lost, and an Svg on the desktop. A
-// short pane's shrink keeps the votes. The effects' glyphs need cells, so an Image goes
-// without them.
+// terminal, scaled by the terminal so no pixel is lost, and an Svg on the desktop. In
+// half blocks, it takes the zoom's votes as a shrunk band does.
 const isSmall = () => SIZES[size] < 1
-const drawsImage = () => bandSurface === 'terminal' && isSmall() && !imagesDenied
+const drawsImage = () => bandSurface === 'terminal' && isSmall() && !swapsFreeze && imageRetryAt === null
+
+// The small band's zoom while it shows at its own size, laid out as a full-size scene.
+// Null otherwise, as when a short pane shrinks it further, which lays it out like a
+// shrunk medium band so it's never the wider of the two.
+function smallZoom() {
+  const zoom = isSmall() ? bandZoom() : null
+  return zoom?.scale === SIZES[size] ? zoom : null
+}
 
 // iTerm2 3.7 and older, before the 2026-09-18 nightly, freezes a swapped Image's source
 function freezesImages(program, version) {
@@ -1300,21 +1323,46 @@ function fullFrame(zoom) {
   return { at: (cx, py) => at(cx - dx, py - dy), width, height }
 }
 
-// The full-size frame as a PNG, each pixel IMAGE_UP wide and tall
+// The last frame encoded, a color or -1 per full-size pixel, and its Image source
+let encodedPixels = null
+let encodedWidth = 0
+let encodedSource = null
+
+// The full-size frame as a PNG, each pixel IMAGE_UP wide and tall. A frame like the last
+// one encoded reuses its PNG.
 function imageNow(zoom) {
   const { at, width, height } = fullFrame(zoom)
+  const pixels = new Int32Array(width * height)
+  let same = encodedPixels?.length === pixels.length && encodedWidth === width
+  for (let py = 0; py < height; py++) {
+    for (let cx = 0; cx < width; cx++) {
+      const c = at(cx, py)
+      const i = py * width + cx
+      pixels[i] = c === null || underPanel(zoomedAt(cx, zoom.scale), zoomedAt(py, zoom.scale) >> 1, zoom) ? -1 : c
+      if (same && pixels[i] !== encodedPixels[i]) same = false
+    }
+  }
+  if (same) return encodedSource
   const span = width * IMAGE_UP * 4
   const bytes = new Uint8Array(span * height * IMAGE_UP)
   for (let py = 0; py < height; py++) {
     const line = py * IMAGE_UP * span
     for (let cx = 0; cx < width; cx++) {
-      const c = at(cx, py)
-      if (c === null || underPanel(zoomedAt(cx, zoom.scale), zoomedAt(py, zoom.scale) >> 1, zoom)) continue
-      for (let k = 0; k < IMAGE_UP; k++) bytes.set([c >> 16, (c >> 8) & 255, c & 255, 255], line + (cx * IMAGE_UP + k) * 4)
+      const c = pixels[py * width + cx]
+      if (c < 0) continue
+      for (let o = line + cx * IMAGE_UP * 4, end = o + IMAGE_UP * 4; o < end; o += 4) {
+        bytes[o] = c >> 16
+        bytes[o + 1] = (c >> 8) & 255
+        bytes[o + 2] = c & 255
+        bytes[o + 3] = 255
+      }
     }
     for (let k = 1; k < IMAGE_UP; k++) bytes.copyWithin(line + k * span, line, line + span)
   }
-  return { png: encodePng(width * IMAGE_UP, height * IMAGE_UP, bytes) }
+  encodedPixels = pixels
+  encodedWidth = width
+  encodedSource = { png: encodePng(width * IMAGE_UP, height * IMAGE_UP, bytes) }
+  return encodedSource
 }
 
 // Pack the current frame into Raster cells, two pixels per cell with half blocks
@@ -1907,7 +1955,10 @@ let refusedAt = -Infinity
 function blitFrame($) {
   const zoom = bandZoom()
   if (!zoom) return
-  if (drawsImage()) return blitImage($, zoom)
+  if (imageRetryAt !== null && tick >= imageRetryAt) imageRetryAt = null
+  // Going between the Image and cells takes a redraw, so the blits wait for it
+  if (drawsImage() !== drawnImage) return $.ui.invalidate('ui.render')
+  if (drawnImage) return blitImage($, zoom)
   const cells = cellsNow()
   if (cells === sentCells) return
   sentCells = cells
@@ -1928,7 +1979,8 @@ function redrawRefused($, deny) {
   $.ui.invalidate('ui.render')
 }
 
-// Swap the small band's Image to the frame now, the same way
+// Swap the small band's Image to the frame now, when it differs from the last one sent
+// or drawn. A terminal that draws the Image's alt gets half blocks for a while.
 function blitImage($, zoom) {
   const source = imageNow(zoom)
   if (source.png === sentImage) return
@@ -1942,9 +1994,13 @@ function blitImage($, zoom) {
       }
       sentImage = null
       if (!/draws its alt/.test(result.deny)) return redrawRefused($, result.deny)
-      // The terminal draws no Images, so the band goes back to half blocks for good
-      if (imagesDenied) return
-      imagesDenied = true
+      if (imageRetryAt !== null) return
+      // A terminal that has drawn Images denies one only for a while, as when its focus
+      // resets, so the wait starts over
+      if (imagesDrawn) imageWait = IMAGE_WAIT_TICKS[0]
+      imagesDrawn = false
+      imageRetryAt = tick + imageWait
+      imageWait = Math.min(IMAGE_WAIT_TICKS[1], imageWait * 2)
       logOnce($, 'drawing half blocks: ' + result.deny)
       $.ui.invalidate('ui.render')
     })
@@ -2119,7 +2175,9 @@ export function register(on) {
     // A refused env read leaves the band as it is on any other terminal
     const program = await $.env.get('TERM_PROGRAM').catch(() => undefined)
     const version = await $.env.get('TERM_PROGRAM_VERSION').catch(() => undefined)
-    imagesDenied = freezesImages(program, version)
+    swapsFreeze = freezesImages(program, version)
+    imageRetryAt = null
+    imageWait = IMAGE_WAIT_TICKS[0]
     await beat($, await $.store.get('seenAt')).catch((err) => logOnce($, err))
     // Shown again, a parked mon's meters pick up where they stopped
     if (stats[mon]?.parked) {
@@ -2388,11 +2446,11 @@ export function register(on) {
     // The panel goes over the scene's right end when the band shows at full size and
     // has room for it, and beside a shrunk band otherwise. The desktop draws text in its
     // own font, so its meters can't line up with the pixels and always sit beside them.
-    // A small band lays out as a full-size one and shows it at its scale, so its panel
-    // and margin take more of the scene's columns per band column.
+    // A small band at its own size lays out as a full-size one and shows it at its scale,
+    // so its panel and margin take more of the scene's columns per band column.
     const panelColumns = meterColumns() + 1
     const fullSize = !isSmall() && bandRows() <= maxRows
-    const small = isSmall() ? bandZoom() : null
+    const small = smallZoom()
     panel = !desktop && fullSize && e.props.bodyColumns >= SPRITES[mon].width + panelColumns ? panelColumns : 0
     if (small && !desktop && e.props.bodyColumns >= SPRITES[mon].width * small.scale + panelColumns) panel = Math.ceil(panelColumns / small.scale)
     lastBodyColumns = e.props.bodyColumns
@@ -2410,6 +2468,7 @@ export function register(on) {
     const level = Text({ dimColor: true, children: [levelLine()] })
     const zoom = bandZoom()
     let corner
+    drawnImage = false
     if (zoom) {
       let sprite
       if (desktop) {
@@ -2422,6 +2481,7 @@ export function register(on) {
         const source = imageNow(zoom)
         // Until a blit says the terminal draws Images, the next tick asks with one
         sentImage = imagesDrawn ? source.png : null
+        drawnImage = true
         sprite = elements.Image({ key: 'pokemon', source, columns: zoom.columns, rows: zoom.rows, alt: ' ' })
       } else {
         sentCells = cellsNow()
