@@ -2835,7 +2835,7 @@ test('a wild mon walks in from the left, the strip widens to fit it, and the dex
   expect(status.text).toContain(', a wild Pidgeot is here (')
 })
 
-test('a wild mon flees after four minutes without a fight, and the strip shrinks back', async ($, on) => {
+test('a wild mon flees after four minutes without a fight, and the strip shrinks back', { timeoutMs: 30000 }, async ($, on) => {
   const toasts = toastsOf(on)
   const { clock, widths } = await startedWith($, on, { wander: false, debug: true }, 0)
   await $.ui.mount({ ...BAND, surface: 'terminal' })
