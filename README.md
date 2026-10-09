@@ -89,6 +89,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon sync` | Toggle syncing the mon across sessions (off by default, saved across sessions). On, every open session switches to the mon picked last in any of them, fetched mons included. Off, each session keeps its own |
 | `/pokemon autoevolve` | Toggle level evolutions starting on their own once idle (on by default). Off, the mon waits for `/pokemon evolve` |
 | `/pokemon emoji` | Toggle emoji meters, 🍓 and 💗 instead of ● and ♥ (off by default, saved across sessions) |
+| `/pokemon size small`, `/pokemon size medium` | Draw the band at half size or full size (medium by default, saved across sessions). A short pane still shrinks it further. See [How it works](#how-it-works) for crisp small mons in iTerm2 |
 | `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
 | `/pokemon box` | List every mon you've raised, highest level first |
 | `/pokemon new <mon>` | Fetch a mon from any generation in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) (gen 1 to 5) and show it. It's saved in the mod's store, so it stays through plugin updates and shows up in every session. Moves come from its types, using gen 1 animations |
@@ -266,10 +267,17 @@ an SVG, 4 px per pixel, with the level and meters beside it as text. The build c
 frames, so the band height depends on the mon. Diglett is the smallest at 7 rows. Fearow,
 Gyarados, and Pidgeot are the tallest at 17.
 
-When the pane is too short, the band shrinks the whole scene to fit. Each shrunk pixel
-takes the most common color of its block, and ties go to the darker color, so outlines and
-eyes survive. Below 4 rows it shows a line of text instead, like
-`Pikachu Lv 12 ●●●●○ ♥♥♥♥♡`.
+`/pokemon size small` draws the band at half size, laid out just like the full-size one.
+kitty and Ghostty draw the small band as a real image, so every pixel stays. iTerm2 3.7
+and older draws it in half blocks, because of an iTerm2 bug that freezes the image on its
+first frame. Newer iTerm2 builds, nightlies from 2026-09-18 on included, draw the image
+once you set `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1`, for example in the `env` block of
+`~/.claude/settings.json`.
+
+When the pane is too short, the whole scene shrinks to fit in half blocks, and so does
+the small band in other terminals. Each shrunk pixel takes the most common color of its
+block, and ties go to the darker color, so outlines and eyes survive. Below 4 rows it
+shows a line of text instead, like `Pikachu Lv 12 ●●●●○ ♥♥♥♥♡`.
 
 </details>
 
@@ -337,7 +345,8 @@ claude --plugin-dir .                            # live-reloading session
 | `hooks/party.js` | The Poké Balls of running subagents |
 | `hooks/dex.js` | The Pokédex, and how rare each mon is in the wild |
 | `hooks/wild.js` | A wild mon's visit: walking in, battle, throws, and fleeing |
-| `hooks/zoom.js` | Shrinks the band to fit a short pane |
+| `hooks/zoom.js` | Shrinks the band to its size and to fit a short pane |
+| `hooks/png.js` | Encodes the small band's frames as PNGs for terminals that draw images |
 | `hooks/eyes.js` | Each mon's eyes on every frame, shut while it sleeps |
 | `hooks/frames.js` | Generated pixel frames. Don't edit by hand |
 | `sprites/<mon>/*.gif` | Source GIFs, 32x32 |

@@ -10,10 +10,18 @@ export const MIN_ZOOM_ROWS = 4
 // Stops floating error from flooring a whole number to the one below
 const EPSILON = 1e-9
 
-// Scale 1 keeps the band as it is when it fits or the room is unknown. A band that
-// doesn't fit shrinks to the room, and null means the room is too short even for that.
-export function zoomFor({ columns, rows, maxRows }) {
-  if (!Number.isFinite(maxRows) || rows <= maxRows) return { scale: 1, columns, rows }
+// The scale each /pokemon size draws the band at. A half keeps every block 2x2, so the
+// votes stay even across the mon.
+export const SIZES = { small: 0.5, medium: 1 }
+
+// The band at the chosen size when it fits or the room is unknown. A band that doesn't
+// fit shrinks to the room, and null means the room is too short even for that.
+export function zoomFor({ columns, rows, maxRows, size = 1 }) {
+  const wanted = Math.ceil(rows * size - EPSILON)
+  if (!Number.isFinite(maxRows) || wanted <= maxRows) {
+    if (size >= 1) return { scale: 1, columns, rows }
+    return { scale: size, columns: Math.max(1, Math.round(columns * size)), rows: wanted }
+  }
   const room = Math.floor(maxRows)
   if (room < MIN_ZOOM_ROWS) return null
   const scale = room / rows

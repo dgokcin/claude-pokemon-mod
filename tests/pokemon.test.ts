@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { closedEyes, eyesOf } from '../hooks/eyes.js'
 import { SPRITES } from '../hooks/frames.js'
+import { encodePng } from '../hooks/png.js'
 
 const BAND = {
   plugin: 'pokemon',
@@ -159,10 +160,11 @@ test('paces while Claude works', async ($, on) => {
   const blits: string[] = []
   on('ui.render', () => THEIRS)
   on('ui.blit', ($, e) => {
-    blits.push(e.cells)
+    blits.push(e.cells ?? e.source.png)
     return { value: {} }
   })
   on('session.start', () => ({ cwd: '/work' }))
+  on('env.get', () => ({ value: undefined }))
   on('command.register', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
 
@@ -234,6 +236,7 @@ test('with wandering off, walks back to the right edge after a turn and idles th
     return { value: {} }
   })
   on('session.start', () => ({ cwd: '/work' }))
+  on('env.get', () => ({ value: undefined }))
   on('command.register', () => ({ value: undefined }))
   on('store.get', ($, e) => ({ value: e.key === 'wander' ? false : undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
@@ -269,10 +272,11 @@ async function started($, on) {
   const blits: string[] = []
   on('ui.render', () => THEIRS)
   on('ui.blit', ($, e) => {
-    blits.push(e.cells)
+    blits.push(e.cells ?? e.source.png)
     return { value: {} }
   })
   on('session.start', () => ({ cwd: '/work' }))
+  on('env.get', () => ({ value: undefined }))
   on('command.register', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
   on('store.set', () => ({ value: undefined }))
@@ -492,15 +496,18 @@ const HOUR = 3600 * 1000
 async function startedWith($, on, saved: Record<string, unknown>, now: number) {
   const clock = mock.clock(on, { now })
   const blits: string[] = []
-  // Each blit's width in columns, alongside blits
+  // Each blit's width in columns, and the blit itself, alongside blits
   const widths: number[] = []
+  const sent: any[] = []
   on('ui.render', () => THEIRS)
   on('ui.blit', ($, e) => {
-    blits.push(e.cells)
+    blits.push(e.cells ?? e.source.png)
     widths.push(e.columns)
+    sent.push(e)
     return { value: {} }
   })
   on('session.start', () => ({ cwd: '/work' }))
+  on('env.get', () => ({ value: undefined }))
   on('command.register', () => ({ value: undefined }))
   on('store.get', ($, e) => ({ value: saved[e.key] }))
   on('store.set', ($, e) => {
@@ -513,7 +520,7 @@ async function startedWith($, on, saved: Record<string, unknown>, now: number) {
     return { value: undefined }
   })
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  return { clock, blits, widths }
+  return { clock, blits, widths, sent }
 }
 
 // The lowest pixel row a frame paints, two pixel rows per cell
@@ -1270,6 +1277,116 @@ function colorsOf(cells: string): Set<number> {
   return new Set(Array.from(words).filter((_, i) => i % 3 !== 0))
 }
 
+// An Image's PNG source by chunk type, read without inflating it
+function pngChunks(png: string): Map<string, Uint8Array> {
+  const bytes = Uint8Array.fromBase64(png)
+  const view = new DataView(bytes.buffer)
+  const chunks = new Map<string, Uint8Array>()
+  for (let at = 8; at < bytes.length; ) {
+    const length = view.getUint32(at)
+    chunks.set(String.fromCharCode(...bytes.subarray(at + 4, at + 8)), bytes.subarray(at + 8, at + 8 + length))
+    at += 12 + length
+  }
+  return chunks
+}
+
+function pngSize(png: string): { width: number; height: number } {
+  const header = new DataView(pngChunks(png).get('IHDR').slice().buffer)
+  return { width: header.getUint32(0), height: header.getUint32(4) }
+}
+
+// The opaque colors in an Image's PNG palette
+function imageColors(png: string): Set<number> {
+  const chunks = pngChunks(png)
+  const palette = chunks.get('PLTE')
+  const alpha = chunks.get('tRNS')
+  const colors = new Set<number>()
+  for (let k = 0; k < palette.length / 3; k++) if (alpha[k] > 0) colors.add((palette[k * 3] << 16) | (palette[k * 3 + 1] << 8) | palette[k * 3 + 2])
+  return colors
+}
+
+function crc32(bytes: Uint8Array): number {
+  let c = 0xffffffff
+  for (const byte of bytes) {
+    c ^= byte
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+  }
+  return (c ^ 0xffffffff) >>> 0
+}
+
+function adler32(bytes: number[]): number {
+  let [a, b] = [1, 0]
+  for (const byte of bytes) {
+    a = (a + byte) % 65521
+    b = (b + a) % 65521
+  }
+  return ((b << 16) | a) >>> 0
+}
+
+// Each chunk of a PNG, in order, with whether its CRC matches
+function pngParts(png: string): { type: string; data: Uint8Array; crcOk: boolean }[] {
+  const bytes = Uint8Array.fromBase64(png)
+  const view = new DataView(bytes.buffer)
+  const parts = []
+  for (let at = 8; at < bytes.length; ) {
+    const length = view.getUint32(at)
+    const type = String.fromCharCode(...bytes.subarray(at + 4, at + 8))
+    const crcOk = crc32(bytes.subarray(at + 4, at + 8 + length)) === view.getUint32(at + 8 + length)
+    parts.push({ type, data: bytes.subarray(at + 8, at + 8 + length), crcOk })
+    at += 12 + length
+  }
+  return parts
+}
+
+test('png.js writes a valid paletted PNG, with every chunk checksummed', async () => {
+  // Red, see-through, blue, red
+  const rgba = new Uint8Array([255, 0, 0, 255, 9, 9, 9, 0, 0, 0, 255, 255, 255, 0, 0, 255])
+  const png = encodePng(2, 2, rgba)
+  expect(Array.from(Uint8Array.fromBase64(png).subarray(0, 8))).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+  const parts = pngParts(png)
+  expect(parts.map((part) => part.type)).toEqual(['IHDR', 'PLTE', 'tRNS', 'IDAT', 'IEND'])
+  expect(parts.every((part) => part.crcOk)).toBe(true)
+  expect(pngSize(png)).toEqual({ width: 2, height: 2 })
+  // 8 bits per index, a palette of colors in order of first use, the see-through one black
+  expect(Array.from(parts[0].data.subarray(8))).toEqual([8, 3, 0, 0, 0])
+  expect(Array.from(parts[1].data)).toEqual([255, 0, 0, 0, 0, 0, 0, 0, 255])
+  expect(Array.from(parts[2].data)).toEqual([255, 0, 255])
+  // A zlib stream of one final fixed Huffman block, ending in the Adler-32 of the rows,
+  // each filtered against the one above
+  const idat = parts[3].data
+  expect([idat[0], idat[1], idat[2] & 7]).toEqual([0x78, 0x01, 3])
+  const sum = new DataView(idat.slice(-4).buffer).getUint32(0)
+  expect(sum).toBe(adler32([2, 0, 1, 2, 2, 255]))
+  expect(parts[4].data.length).toBe(0)
+
+  // Past 256 colors, the pixels go out as RGBA
+  const many = new Uint8Array(32 * 32 * 4).map((_, i) => [(i >> 2) & 255, i >> 10, 0, 255][i % 4])
+  const rgbaParts = pngParts(encodePng(32, 32, many))
+  expect(rgbaParts.map((part) => part.type)).toEqual(['IHDR', 'IDAT', 'IEND'])
+  expect(rgbaParts[0].data[9]).toBe(6)
+  expect(rgbaParts.every((part) => part.crcOk)).toBe(true)
+})
+
+test('png.js encodes a sprite frame the same way every time, in a small part of its RGBA', async () => {
+  const { palette, idle } = SPRITES.gyarados.variants.default
+  const [width, height, up] = [64, SPRITES.gyarados.height + 4, 4]
+  const rgba = new Uint8Array(width * up * height * up * 4)
+  idle[0].rows.forEach((row, y) =>
+    [...row].forEach((letter, x) => {
+      if (letter === '.') return
+      const hex = parseInt(palette[letter.charCodeAt(0) - 97].slice(1), 16)
+      for (let dy = 0; dy < up; dy++) {
+        for (let dx = 0; dx < up; dx++) rgba.set([hex >> 16, (hex >> 8) & 255, hex & 255, 255], (((y + 2) * up + dy) * width * up + (x + 10) * up + dx) * 4)
+      }
+    }),
+  )
+  const png = encodePng(width * up, height * up, rgba)
+  expect(encodePng(width * up, height * up, rgba)).toBe(png)
+  expect(pngSize(png)).toEqual({ width: width * up, height: height * up })
+  expect(pngParts(png).every((part) => part.crcOk)).toBe(true)
+  expect(Uint8Array.fromBase64(png).length).toBeLessThan(rgba.length / 20)
+})
+
 test('/pokemon attack plays a random move, then ends', async ($, on) => {
   const { clock, blits } = await started($, on)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
@@ -1604,6 +1721,7 @@ test('a refused frame, as when a resize remounts the band, asks for a redraw at 
   on('ui.blit', () => ({ value: refuse ? { deny: 'not mounted' } : {} }))
   on('ui.log', () => ({ value: undefined }))
   on('session.start', () => ({ cwd: '/work' }))
+  on('env.get', () => ({ value: undefined }))
   on('command.register', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
@@ -1638,6 +1756,265 @@ test('a short pane shrinks the band to fit, and a very short one shows a one-lin
   expect(await tiny.find({ type: 'Text', text: ' ●●●●○' })).toBeDefined()
 })
 
+// A small band lays out like a full-size one, its margin and panel included, at half
+// the columns. Abra's 11 rows halve to 6, the full-size scene padded to 12 on top.
+const SMALL = (MARGIN + STRIP + 2 * PANEL) / 2
+
+// The env.get stub for a terminal, by the names TERM_PROGRAM and TERM_PROGRAM_VERSION
+function terminalEnv(on, env: Record<string, string>) {
+  on('env.get', ($, e) => ({ value: env[e.name] }))
+}
+
+test('/pokemon size small halves the band, saves it, and medium brings it back', async ($, on) => {
+  const saved: Record<string, any> = {}
+  const { clock, sent } = await startedWith($, on, saved, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const full = (await ui.find({ key: 'pokemon' })).props
+  expect(full.columns).toBe(RASTER)
+
+  const small = await $.command.run({ command: 'pokemon', args: 'size small' })
+  expect(small.text).toBe('The band is small.')
+  expect(saved.size).toBe('small')
+  await clock.advance(100)
+  // The terminal scales the Image, so it holds every full-size pixel, 4 wide and tall
+  const image = await ui.find({ type: 'Image' })
+  expect(image.key).toBe('pokemon')
+  expect(image.props.rows).toBe(Math.ceil(full.rows / 2))
+  expect(image.props.columns).toBe(SMALL)
+  expect(pngSize(image.props.source.png)).toEqual({ width: SMALL * 2 * 4, height: 12 * 2 * 4 })
+  expect(imageColors(image.props.source.png).size).toBeGreaterThan(3)
+  expect(await ui.find({ type: 'Text', text: '●●●●○' })).toBeDefined()
+
+  // Later frames swap the one Image's source, as new frames do a Raster's cells
+  const from = sent.length
+  await clock.advance(2000)
+  const swaps = sent.slice(from)
+  expect(swaps.length).toBeGreaterThan(0)
+  expect(swaps.every((e) => e.key === 'pokemon' && e.source && e.columns === SMALL && e.rows === image.props.rows)).toBe(true)
+  expect(swaps.some((e, i) => i > 0 && e.source.png === swaps[i - 1].source.png)).toBe(false)
+  expect(await ui.findAll({ type: 'Image' })).toHaveLength(1)
+
+  const status = await $.command.run({ command: 'pokemon', args: 'size' })
+  expect(status.text).toBe('The band is small. Sizes: small, medium.')
+  const unknown = await $.command.run({ command: 'pokemon', args: 'size huge' })
+  expect(unknown.text).toBe('Unknown size "huge". Try one of: small, medium.')
+  expect(saved.size).toBe('small')
+
+  await $.command.run({ command: 'pokemon', args: 'size medium' })
+  expect(saved.size).toBe('medium')
+  await clock.advance(100)
+  expect((await ui.find({ key: 'pokemon' })).props.columns).toBe(RASTER)
+  expect(await ui.find({ type: 'Image' })).toBeUndefined()
+})
+
+// Start a session with the small size saved, each blit answered by answer
+async function startedSmall($, on, answer: (e: any) => object) {
+  const clock = mock.clock(on)
+  on('ui.render', () => THEIRS)
+  on('ui.blit', ($, e) => ({ value: answer(e) }))
+  on('ui.log', () => ({ value: undefined }))
+  on('session.start', () => ({ cwd: '/work' }))
+  on('env.get', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined }))
+  on('store.get', ($, e) => ({ value: e.key === 'size' ? 'small' : undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('store.keys', () => ({ value: [] }))
+  on('store.delete', () => ({ value: undefined }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  return clock
+}
+
+test('a terminal that draws an Image as its alt gets the small band in half blocks, asking again less and less often', async ($, on) => {
+  const kinds: string[] = []
+  const clock = await startedSmall($, on, (e) => {
+    kinds.push(e.cells ? 'cells' : 'image')
+    return e.cells ? {} : { deny: 'the Image draws its alt here: the terminal draws no placeholder images' }
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Image' })).toBeDefined()
+
+  await clock.advance(200)
+  const raster = await ui.find({ key: 'pokemon' })
+  expect(raster.type).toBe('Raster')
+  expect(raster.props.columns).toBe(SMALL)
+  expect(colorsOf(raster.props.cells).size).toBeGreaterThan(3)
+  const asked = kinds.filter((kind) => kind === 'image').length
+  expect(asked).toBeGreaterThan(0)
+  await clock.advance(1000)
+  expect(kinds.filter((kind) => kind === 'image')).toHaveLength(asked)
+  expect(kinds).toContain('cells')
+
+  // The waits go 2, 4, 8, 16, and 32 seconds, so a minute holds only a few asks
+  await clock.advance(60 * 1000)
+  const retries = kinds.filter((kind) => kind === 'image').length - asked
+  expect(retries).toBeGreaterThanOrEqual(3)
+  expect(retries).toBeLessThanOrEqual(8)
+  expect((await ui.find({ key: 'pokemon' })).type).toBe('Raster')
+})
+
+test('a terminal whose graphics are not ready yet gets the small band back as an Image', async ($, on) => {
+  let ready = false
+  const answers: boolean[] = []
+  const clock = await startedSmall($, on, (e) => {
+    if (e.cells) return {}
+    answers.push(ready)
+    return ready ? {} : { deny: 'the Image draws its alt here: kitty graphics not asked yet' }
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(200)
+  expect((await ui.find({ key: 'pokemon' })).type).toBe('Raster')
+
+  ready = true
+  await clock.advance(3000)
+  const image = await ui.find({ key: 'pokemon' })
+  expect(image.type).toBe('Image')
+  expect(image.props.columns).toBe(SMALL)
+  const from = answers.length
+  await clock.advance(2000)
+  expect(answers.length).toBeGreaterThan(from)
+  expect(answers.slice(from).every(Boolean)).toBe(true)
+
+  // Once it has drawn Images, a deny is brief, so the Image comes back after the first wait
+  // The deny comes with the next changed frame, well inside the 2 s wait
+  ready = false
+  await clock.advance(1000)
+  expect((await ui.find({ key: 'pokemon' })).type).toBe('Raster')
+  ready = true
+  await clock.advance(3000)
+  expect((await ui.find({ key: 'pokemon' })).type).toBe('Image')
+})
+
+test('iTerm2 builds whose Image swaps freeze draw the small band in half blocks', async ($, on) => {
+  const clock = mock.clock(on)
+  const blits: any[] = []
+  const env: Record<string, string> = {}
+  on('ui.render', () => THEIRS)
+  on('ui.blit', ($, e) => {
+    blits.push(e)
+    return { value: {} }
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  terminalEnv(on, env)
+  on('command.register', () => ({ value: undefined }))
+  on('store.get', ($, e) => ({ value: e.key === 'size' ? 'small' : undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('store.keys', () => ({ value: [] }))
+  on('store.delete', () => ({ value: undefined }))
+  const cases: [string, string | undefined, boolean][] = [
+    ['iTerm.app', '3.7.3', false],
+    ['iTerm.app', '3.7.20260901-nightly', false],
+    ['iTerm.app', undefined, false],
+    ['iTerm.app', '3.7.20261008-nightly', true],
+    ['iTerm.app', '3.8.0', true],
+    ['ghostty', '1.2.0', true],
+  ]
+  for (const [program, version, image] of cases) {
+    env.TERM_PROGRAM = program
+    if (version === undefined) delete env.TERM_PROGRAM_VERSION
+    else env.TERM_PROGRAM_VERSION = version
+    await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+    blits.length = 0
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await clock.advance(1000)
+    const where = program + ' ' + version
+    const band = await ui.find({ key: 'pokemon' })
+    expect({ where, type: band.type }).toEqual({ where, type: image ? 'Image' : 'Raster' })
+    expect({ where, swaps: blits.length > 0 && blits.every((e) => (image ? e.source : e.cells)) }).toEqual({ where, swaps: true })
+    if (!image) {
+      expect(band.props.columns).toBe(SMALL)
+      // The spare half row goes on top, so the mon still stands on the band's bottom row
+      const painted = paintedCells(band.props.cells)
+      expect(painted.slice(-SMALL).some(Boolean)).toBe(true)
+    }
+    await ui.unmount()
+  }
+})
+
+test('a small band keeps animating through an attack, a pet, and a feed', async ($, on) => {
+  const { clock, sent } = await startedWith($, on, { size: 'small', wander: false }, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  // The Image swaps over two seconds, and the colors they paint
+  const swapsOver = async () => {
+    const from = sent.length
+    await clock.advance(2000)
+    const swaps = sent.slice(from)
+    expect(swaps.every((e) => e.source && e.key === 'pokemon')).toBe(true)
+    return { pngs: new Set<string>(swaps.map((e) => e.source.png)), colors: new Set(swaps.flatMap((e) => [...imageColors(e.source.png)])) }
+  }
+  await clock.advance(5000)
+  const idle = await swapsOver()
+
+  await $.command.run({ command: 'pokemon', args: 'attack' })
+  const attack = await swapsOver()
+  expect([...attack.pngs].filter((png) => !idle.pngs.has(png)).length).toBeGreaterThan(3)
+
+  await clock.advance(5000)
+  await $.command.run({ command: 'pokemon', args: 'pet' })
+  const pet = await swapsOver()
+  expect(idle.colors.has(0xff4f8b)).toBe(false)
+  expect(pet.colors.has(0xff4f8b)).toBe(true)
+
+  await clock.advance(5000)
+  await $.command.run({ command: 'pokemon', args: 'feed' })
+  const feed = await swapsOver()
+  expect(BERRY_BODIES.some((color) => idle.colors.has(color))).toBe(false)
+  expect(BERRY_BODIES.some((color) => feed.colors.has(color))).toBe(true)
+})
+
+test('a short pane that shrinks a small band further lays it out no wider than medium', async ($, on) => {
+  await startedWith($, on, {}, 0)
+  const columns: Record<string, number> = {}
+  for (const size of ['medium', 'small']) {
+    await $.command.run({ command: 'pokemon', args: 'size ' + size })
+    // Abra's 11 rows would halve to 6, so a 5 row pane shrinks either size to the same scale
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, maxRows: 5 } })
+    const band = (await ui.find({ key: 'pokemon' })).props
+    expect(band.rows).toBe(5)
+    columns[size] = band.columns
+    expect(await ui.find({ type: 'Text', text: '●●●●○' })).toBeDefined()
+    await ui.unmount()
+  }
+  expect(columns.small).toBeLessThanOrEqual(columns.medium)
+})
+
+test('a battle that fits a medium band fits a small one in the same pane', async ($, on) => {
+  const { clock } = await startedWith($, on, { mon: 'charizard', emoji: true, wander: false, debug: true }, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  for (const size of ['medium', 'small']) {
+    await run('size ' + size)
+    // The narrowest band a medium Charizard battles a Gyarados in, with emoji meters
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: 82 } })
+    expect({ size, reply: await run('wild gyarados') }).toEqual({ size, reply: 'A wild Gyarados is on its way.' })
+    await clock.advance(10000)
+    expect((await ui.find({ key: 'pokemon' })).props.columns).toBeLessThanOrEqual(82)
+    await run('run')
+    await clock.advance(10000)
+    await ui.unmount()
+  }
+})
+
+test('a saved small size draws the band small from the start, and a short pane still shrinks it', async ($, on) => {
+  await startedWith($, on, { size: 'small' }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ type: 'Image' })).props.columns).toBe(SMALL)
+  await ui.unmount()
+
+  // Abra's 11 rows would halve to 6, so a 5 row pane shrinks it further
+  const short = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, maxRows: 5 } })
+  expect((await short.find({ type: 'Image' })).props.rows).toBe(5)
+})
+
+test('a small band on desktop draws every full-size pixel into a half-size Svg', async ($, on) => {
+  await startedWith($, on, { size: 'small' }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const svg = await ui.find({ type: 'Svg' })
+  // No panel on desktop: the margin and the strip, at half the columns, the meters beside
+  expect(svg.props.width).toBe(((MARGIN + STRIP) / 2) * PIXEL_PX)
+  expect(svg.props.height).toBe(6 * 2 * PIXEL_PX)
+  expect(svgOf(svg)).toMatch(/viewBox="0 0 52 24"/)
+  expect(await ui.find({ type: 'Text', text: '●●●●○' })).toBeDefined()
+})
+
 test('/pokemon list names every mon, and the hint and status stay short', async ($, on) => {
   mock.clock(on)
   let hint = ''
@@ -1646,9 +2023,10 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
     return { value: undefined }
   })
   on('session.start', () => ({ cwd: '/work' }))
+  on('env.get', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|sync|autoevolve|pet|feed|sleep|attack|catch|run|moves|evolve|stop|stats|box|dex|nickname|release|new|list]')
+  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|size|sync|autoevolve|pet|feed|sleep|attack|catch|run|moves|evolve|stop|stats|box|dex|nickname|release|new|list]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
@@ -2157,6 +2535,7 @@ test('a mon fetched in another session loads at session start', async ($, on) =>
   on('ui.render', () => THEIRS)
   on('command.register', () => ({ value: undefined }))
   on('session.start', () => ({ cwd: '/work' }))
+  on('env.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   expect((await $.command.run({ command: 'pokemon', args: '' })).text).toMatch(/^Showing default Torchic Lv\. /)
   expect((await $.command.run({ command: 'pokemon', args: 'list' })).text).toMatch(/, torchic$/)
@@ -2199,6 +2578,7 @@ async function startSession($, on) {
   on('ui.render', () => THEIRS)
   on('command.register', () => ({ value: undefined }))
   on('session.start', () => ({ cwd: '/work' }))
+  on('env.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
 }
 
