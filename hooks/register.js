@@ -175,8 +175,6 @@ let sentImage = null
 // Set once a blit swaps the Image's source, so the terminal draws Images and a redraw
 // needn't ask again
 let imagesDrawn = false
-// Set on an iTerm2 whose Image swaps freeze, which gets the small band in half blocks
-let swapsFreeze = false
 // After a terminal draws an Image's alt, the small band is half blocks until this tick.
 // Each deny in a row doubles the wait, since a terminal without kitty graphics never
 // draws one, while one whose graphics aren't ready yet soon does.
@@ -1293,7 +1291,7 @@ const underPanel = (cx, cy, zoom) => cx >= (isSmall() ? zoom.columns - Math.roun
 // terminal, scaled by the terminal so no pixel is lost, and an Svg on the desktop. In
 // half blocks, it takes the zoom's votes as a shrunk band does.
 const isSmall = () => SIZES[size] < 1
-const drawsImage = () => bandSurface === 'terminal' && isSmall() && !swapsFreeze && imageRetryAt === null
+const drawsImage = () => bandSurface === 'terminal' && isSmall() && imageRetryAt === null
 
 // The small band's zoom while it shows at its own size, laid out as a full-size scene.
 // Null otherwise, as when a short pane shrinks it further, which lays it out like a
@@ -1301,15 +1299,6 @@ const drawsImage = () => bandSurface === 'terminal' && isSmall() && !swapsFreeze
 function smallZoom() {
   const zoom = isSmall() ? bandZoom() : null
   return zoom?.scale === SIZES[size] ? zoom : null
-}
-
-// iTerm2 3.7 and older, before the 2026-09-18 nightly, freezes a swapped Image's source
-function freezesImages(program, version) {
-  if (program !== 'iTerm.app') return false
-  const [major, minor, patch = ''] = String(version ?? '').split('.')
-  if (Number(major) > 3 || (Number(major) === 3 && Number(minor) > 7)) return false
-  const nightly = /^(\d{8})-nightly$/.exec(patch)
-  return !(nightly && Number(nightly[1]) >= 20260918)
 }
 
 // The full-size frame, padded on the left and top to fill the zoomed box at its scale, so
@@ -2172,10 +2161,6 @@ export function register(on) {
     if (savedStats && typeof savedStats === 'object') stats = savedStats
     nowMs = await $.clock.now()
     ink = await themeInk($)
-    // A refused env read leaves the band as it is on any other terminal
-    const program = await $.env.get('TERM_PROGRAM').catch(() => undefined)
-    const version = await $.env.get('TERM_PROGRAM_VERSION').catch(() => undefined)
-    swapsFreeze = freezesImages(program, version)
     imageRetryAt = null
     imageWait = IMAGE_WAIT_TICKS[0]
     await beat($, await $.store.get('seenAt')).catch((err) => logOnce($, err))

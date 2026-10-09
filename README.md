@@ -268,11 +268,14 @@ frames, so the band height depends on the mon. Diglett is the smallest at 7 rows
 Gyarados, and Pidgeot are the tallest at 17.
 
 `/pokemon size small` draws the band at half size, laid out just like the full-size one.
-kitty and Ghostty draw the small band as a real image, so every pixel stays. iTerm2 3.7
-and older draws it in half blocks, because of an iTerm2 bug that freezes the image on its
-first frame. Newer iTerm2 builds, nightlies from 2026-09-18 on included, draw the image
-once you set `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1`, for example in the `env` block of
-`~/.claude/settings.json`.
+A terminal that Claude Code draws images in, like kitty or Ghostty, shows the small band as
+a real image, so every pixel stays. Anywhere else, Claude Code draws the image's alt text,
+and the band falls back to half blocks. It never checks the terminal's name.
+
+iTerm2 gets images once you set `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1`, for example in the
+`env` block of `~/.claude/settings.json`. Set it only on a build above 3.7 or a nightly from
+2026-09-18 on. iTerm2 3.7.x has a bug that freezes the image on its first frame, so the mon
+stops moving there.
 
 When the pane is too short, the whole scene shrinks to fit in half blocks, and so does
 the small band in other terminals. Each shrunk pixel takes the most common color of its

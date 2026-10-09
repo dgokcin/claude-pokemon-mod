@@ -1884,50 +1884,26 @@ test('a terminal whose graphics are not ready yet gets the small band back as an
   expect((await ui.find({ key: 'pokemon' })).type).toBe('Image')
 })
 
-test('iTerm2 builds whose Image swaps freeze draw the small band in half blocks', async ($, on) => {
+test('the small band draws an Image whenever the host does, whatever the terminal', async ($, on) => {
   const clock = mock.clock(on)
   const blits: any[] = []
-  const env: Record<string, string> = {}
   on('ui.render', () => THEIRS)
   on('ui.blit', ($, e) => {
     blits.push(e)
     return { value: {} }
   })
   on('session.start', () => ({ cwd: '/work' }))
-  terminalEnv(on, env)
+  terminalEnv(on, { TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: '3.7.3' })
   on('command.register', () => ({ value: undefined }))
   on('store.get', ($, e) => ({ value: e.key === 'size' ? 'small' : undefined }))
   on('store.set', () => ({ value: undefined }))
   on('store.keys', () => ({ value: [] }))
   on('store.delete', () => ({ value: undefined }))
-  const cases: [string, string | undefined, boolean][] = [
-    ['iTerm.app', '3.7.3', false],
-    ['iTerm.app', '3.7.20260901-nightly', false],
-    ['iTerm.app', undefined, false],
-    ['iTerm.app', '3.7.20261008-nightly', true],
-    ['iTerm.app', '3.8.0', true],
-    ['ghostty', '1.2.0', true],
-  ]
-  for (const [program, version, image] of cases) {
-    env.TERM_PROGRAM = program
-    if (version === undefined) delete env.TERM_PROGRAM_VERSION
-    else env.TERM_PROGRAM_VERSION = version
-    await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-    blits.length = 0
-    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-    await clock.advance(1000)
-    const where = program + ' ' + version
-    const band = await ui.find({ key: 'pokemon' })
-    expect({ where, type: band.type }).toEqual({ where, type: image ? 'Image' : 'Raster' })
-    expect({ where, swaps: blits.length > 0 && blits.every((e) => (image ? e.source : e.cells)) }).toEqual({ where, swaps: true })
-    if (!image) {
-      expect(band.props.columns).toBe(SMALL)
-      // The spare half row goes on top, so the mon still stands on the band's bottom row
-      const painted = paintedCells(band.props.cells)
-      expect(painted.slice(-SMALL).some(Boolean)).toBe(true)
-    }
-    await ui.unmount()
-  }
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(1000)
+  expect((await ui.find({ key: 'pokemon' })).type).toBe('Image')
+  expect(blits.length > 0 && blits.every((e) => e.source)).toBe(true)
 })
 
 test('a small band keeps animating through an attack, a pet, and a feed', async ($, on) => {
