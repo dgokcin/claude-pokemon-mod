@@ -2,7 +2,7 @@ import { aimsAhead, attackFrame, attackPose, prepareAttack } from './attacks.js'
 import { CUSTOM_PREFIX, fetchMon, monsOfGen } from './custom.js'
 import { DEX, dexKey, dexNumber, isCaught, mergedDexEntry, pickWild, tierOf } from './dex.js'
 import { evolutionsOf, levelEvolutionOf, startLevel } from './evolutions.js'
-import { closedEyes, eyesOf } from './eyes.js'
+import { closedEyes, eyesOf, keptEyesOf, pupilsOf } from './eyes.js'
 import { SPRITES } from './frames.js'
 import { MAX_LEVEL, careOf, levelAt, turnXp, xpAt } from './levels.js'
 import { MOVES, movesOf } from './moves.js'
@@ -175,8 +175,8 @@ let sentImage = null
 // Set once a blit swaps the Image's source, so the terminal draws Images and a redraw
 // needn't ask again
 let imagesDrawn = false
-// Set on an iTerm2 whose Image swaps freeze, which gets the small band in half blocks
-let swapsFreeze = false
+// Set on a terminal that can't show the small band's Image, which gets it in half blocks
+let noImages = false
 // After a terminal draws an Image's alt, the small band is half blocks until this tick.
 // Each deny in a row doubles the wait, since a terminal without kitty graphics never
 // draws one, while one whose graphics aren't ready yet soon does.
@@ -235,7 +235,15 @@ const bandRows = () => {
   return rowsOf(mon)
 }
 // The band's size on screen, shrunk to fit a short pane, or null when only the badge fits
-const bandZoom = () => zoomFor({ columns: sceneColumns(), rows: bandRows(), maxRows, size: SIZES[size] })
+// A terminal known to lack Images draws the small band in half blocks, where a mon at
+// half size loses too much to read. It shrinks no shorter than a full-size Diglett.
+const HALF_BLOCK_MIN_ROWS = rowsOf('diglett')
+const bandScale = () => {
+  const scale = SIZES[size]
+  if (scale >= 1 || !noImages || bandSurface !== 'terminal') return scale
+  return Math.min(1, Math.max(scale, HALF_BLOCK_MIN_ROWS / bandRows()))
+}
+const bandZoom = () => zoomFor({ columns: sceneColumns(), rows: bandRows(), maxRows, size: bandScale() })
 // The strip and the panel, in the strip's own columns, and the whole scene with the margin
 const stripColumns = () => columns + panel
 const sceneColumns = () => margin + columns + panel
@@ -320,6 +328,17 @@ const ZZZ_LIFE_MS = 2200
 // The gap between a new Z and the side of the body, and how far out it drifts from there, in pixels
 const ZZZ_GAP = 0
 const ZZZ_DRIFT = 4
+// A shrunk band draws the bubble, Zs, and berry at its own pixel size, from art made for
+// it, instead of shrinking the full-size art down to specks. The bubble hugs the same
+// icons with no gap inside, so they stay as clear as at medium.
+const SMALL_BUBBLE = ['.OOOOO.', 'O.....O', 'O.....O', 'O.....O', 'O.....O', '.OOOOO.']
+const SMALL_ZS = { glyphs: [SMALL_Z, SMALL_Z], drift: 3 }
+const SMALL_BERRY = ['.k.', 'BhB', '.b.']
+// The bubble drawn: the small one in a shrunk band, and the full-size one otherwise
+const FULL_BUBBLE = { frame: BUBBLE, inset: 2 }
+const SHRUNK_BUBBLE = { frame: SMALL_BUBBLE, inset: 1 }
+// The columns a bubble and its tail take beside the head
+const bubbleSpan = (look) => look.frame[0].length + 3
 // A sweat drop on the head when a tool call fails: d drop, h shine
 const SWEAT = ['..d.', '.dd.', 'dhdd', 'dddd', '.dd.']
 // The "!" of a trainer who spots you, shown while Claude waits on you
@@ -436,22 +455,24 @@ function stepIdleAlert() {
 
 // A framed thought bubble beside the head, with a single pixel of tail between it and
 // the head. It leads on the side a walking mon heads for, and sits on the left of a
-// standing one, unless that side has no room for it.
-function bubbleOnLeft(head, side) {
-  const fitsLeft = head[0] - BUBBLE_SPAN >= -margin
-  const fitsRight = head[1] + BUBBLE_SPAN + 1 <= stripColumns()
+// standing one, unless that side has no room for it. room is the columns it may take,
+// the margin and the strip, or a shrunk band's own columns, and look the bubble drawn.
+function bubbleOnLeft(head, side, room = [-margin, stripColumns()], look = FULL_BUBBLE) {
+  const span = bubbleSpan(look)
+  const fitsLeft = head[0] - span >= room[0]
+  const fitsRight = head[1] + span + 1 <= room[1]
   return side === 'left' ? fitsLeft : fitsLeft && !fitsRight
 }
 
-function bubbleStamps(icon, head, side) {
-  const span = BUBBLE_SPAN
-  const onLeft = bubbleOnLeft(head, side)
-  const left = onLeft ? head[0] - span : head[1] + 4
+function bubbleStamps(icon, head, side, room, look = FULL_BUBBLE) {
+  const { frame, inset } = look
+  const onLeft = bubbleOnLeft(head, side, room, look)
+  const left = onLeft ? head[0] - bubbleSpan(look) : head[1] + 4
   const tail = onLeft ? head[0] - 2 : head[1] + 2
   // The first stamp with a pixel wins, so the icon goes before the bubble
   return [
-    stamp(left + 2, 2, icon.rows, icon.colors),
-    stamp(left, 0, BUBBLE, { O: ink.bubble }),
+    stamp(left + inset, inset, icon.rows, icon.colors),
+    stamp(left, 0, frame, { O: ink.bubble }),
     stamp(tail, BUBBLE_TAIL_ROW, ['O'], { O: ink.bubble }),
   ]
 }
@@ -460,18 +481,18 @@ function bubbleStamps(icon, head, side) {
 // they float off the top of the band, small and big in turn, a new one every ZZZ_EVERY_MS.
 // body is the sprite's drawn pixels in strip columns and pixel rows, so every mon's Zs
 // start at the same spot on it whatever its shape. With no room on the left, they start
-// from the right edge instead.
-function sleepStamps(body) {
+// from the right edge instead. look is the Zs drawn, and a shrunk band passes its own.
+function sleepStamps(body, { glyphs, drift: reach } = { glyphs: [SMALL_Z, BIG_Z], drift: ZZZ_DRIFT }) {
   const elapsed = tick * TICK_MS
   const middleY = Math.floor((body.top + body.bottom) / 2)
-  const onLeft = body.left - ZZZ_GAP - BIG_Z[0].length - ZZZ_DRIFT >= 0
+  const onLeft = body.left - ZZZ_GAP - glyphs[1][0].length - reach >= 0
   const newest = Math.floor(elapsed / ZZZ_EVERY_MS)
   const zs = []
   for (let i = Math.max(0, newest - 2); i <= newest; i++) {
     const p = (elapsed - i * ZZZ_EVERY_MS) / ZZZ_LIFE_MS
     if (p >= 1) continue
-    const glyph = i % 2 === 0 ? SMALL_Z : BIG_Z
-    const drift = Math.round(p * ZZZ_DRIFT)
+    const glyph = glyphs[i % 2]
+    const drift = Math.round(p * reach)
     const x = onLeft ? body.left - ZZZ_GAP - glyph[0].length - drift : body.right + 1 + ZZZ_GAP + drift
     const startY = middleY - Math.floor(glyph.length / 2)
     zs.push(stamp(x, startY - Math.round(p * (startY + glyph.length)), glyph, { z: ink.z }))
@@ -552,18 +573,31 @@ function foodTop() {
   return Math.min(ground, -BERRY_SIZE + Math.floor((tick - food.born) / FALL_TICKS))
 }
 
-// The berry's color at a strip column and pixel row, or null. Bites take a column
-// at a time from either edge in turn, until the middle is gone too.
+// Whether column fx of a berry size pixels wide is eaten yet. Bites take a column at a
+// time from either edge in turn, until the middle is gone too.
+function bitten(fx, size) {
+  if (food.eatStart === null) return false
+  const bites = Math.floor(((tick - food.eatStart) / EAT_TICKS) * size)
+  return fx < Math.ceil(bites / 2) || size - 1 - fx < Math.floor(bites / 2)
+}
+
+// The berry's color at a strip column and pixel row, or null
 function foodPixel(cx, py) {
   if (!food) return null
   const fx = cx - food.x
   const fy = py - foodTop()
-  if (fx < 0 || fx >= BERRY_SIZE || fy < 0 || fy >= BERRY_SIZE) return null
-  if (food.eatStart !== null) {
-    const bites = Math.floor(((tick - food.eatStart) / EAT_TICKS) * BERRY_SIZE)
-    if (fx < Math.ceil(bites / 2) || BERRY_SIZE - 1 - fx < Math.floor(bites / 2)) return null
-  }
+  if (fx < 0 || fx >= BERRY_SIZE || fy < 0 || fy >= BERRY_SIZE || bitten(fx, BERRY_SIZE)) return null
   return food.berry.colors[BERRY[fy][fx]] ?? null
+}
+
+// The berry as a shrunk band draws it, in its own pixels: centred where the full-size one
+// is, a scene column offset from the strip's, and falling and bitten as it is
+function smallBerryStamp(scale, offset) {
+  const size = SMALL_BERRY.length
+  const left = Math.round((offset + food.x + BERRY_SIZE / 2) * scale - size / 2)
+  const top = Math.round((foodTop() + BERRY_SIZE) * scale) - size
+  const rows = SMALL_BERRY.map((row) => [...row].map((ch, fx) => (bitten(fx, size) ? '.' : ch)).join(''))
+  return stamp(left, top, rows, food.berry.colors)
 }
 
 // Walk to the berry once it lands, eat it, then hop with a "yum!"
@@ -786,6 +820,25 @@ function needNow() {
   return needs[Math.floor((tick * TICK_MS) / 3000) % needs.length]
 }
 
+// Where a frame's pupils land in strip pixels, as [x, y, color, eye], for a sprite drawn
+// unscaled at left and top, mirrored or not, with eye the box around it as [x, y, width,
+// height, skin color, the box's other colors], or null for a line. Each frame's pupils
+// are cached.
+const framePupils = new WeakMap()
+function pupilsAt(name, shade, view, rows, { left, top, mirrored }) {
+  const sheet = SPRITES[name].variants[shade]
+  if (!framePupils.has(rows)) {
+    const index = Math.max(0, sheet[view].findIndex((f) => f.rows === rows))
+    framePupils.set(rows, pupilsOf(rows, sheet.palette, keptEyesOf(name, shade, view, index)))
+  }
+  const { width } = SPRITES[name]
+  const colors = COLORS[name][shade]
+  return framePupils.get(rows).map(([px, py, box, skin, inked]) => {
+    const eye = box && [left + (mirrored ? width - box[0] - box[2] : box[0]), top + box[1], box[2], box[3], colors[skin], [...inked].map((l) => colors[l])]
+    return [left + (mirrored ? width - 1 - px : px), top + py, colors[rows[py][px]], eye]
+  })
+}
+
 // A sleeping mon's frame with its eyes shut, cached per frame
 const sleepingFrames = new Map()
 function sleepingFrame(shown, view) {
@@ -961,7 +1014,10 @@ function foePixel(rows) {
     if (!row || px < 0 || px >= sprite.width) return null
     return colors[row[flip ? sprite.width - 1 - px : px]] ?? null
   }
-  if (held?.stage !== 'open') return pixel
+  if (held?.stage !== 'open') {
+    pixel.pupils = pupilsAt(wild.mon, wild.variant, walking ? 'walk' : 'idle', frame, { left, top, mirrored: flip })
+    return pixel
+  }
   const scale = 1 - (held.t + 1) / (THROW_TICKS.open + 1)
   const { x: bx, y: by } = foeMiddle(rows)
   return (cx, py) => {
@@ -1227,14 +1283,19 @@ function frameNow(full = false) {
   const [boxLeft, boxRight] = flip ? [sprite.width - 1 - box.right, sprite.width - 1 - box.left] : [box.left, box.right]
   const sleeper = { left: left + boxLeft, right: left + boxRight, top: top + box.top, bottom: top + box.bottom }
   const bubbleSide = walking ? facing : 'left'
-  const bubble = icon ? bubbleStamps(icon, head, bubbleSide) : []
+  // A shrunk band draws the bubble, the Zs, and the berry over the shrunk scene in its own
+  // pixels, so they stay whole
+  const scene = sceneColumns()
+  const zoom = (!full && bandZoom()) || { scale: 1, columns: scene, rows }
+  const shrunk = zoom.scale < 1
+  const bubble = icon && !shrunk ? bubbleStamps(icon, head, bubbleSide) : []
   const ball = throwStamps(rows, { x: Math.round((head[0] + head[1]) / 2), y: top + box.top })
   const over = [
     ...ball.over,
     ...(onStage ? [...bubble, ...hpStamps(rows)] : []),
     ...heartStamps(),
     ...(isWincing() ? sweatStamps(head, top + box.top, bubbleSide) : []),
-    ...(asleep ? sleepStamps(sleeper) : []),
+    ...(asleep && !shrunk ? sleepStamps(sleeper) : []),
   ]
   const balls = partyStamps(party, tick, { columns, ground: rows * 2 - 1, label: ink.party })
   const under = [...ball.under, ...(onStage ? [] : bubble), ...balls]
@@ -1249,7 +1310,7 @@ function frameNow(full = false) {
       if (h !== null) return h
     }
     // The berry sits in front of the mon, so it stays in sight while it's eaten
-    const f = foodPixel(cx, py)
+    const f = shrunk ? null : foodPixel(cx, py)
     if (f !== null) return f
     const c = effect.hidden ? null : body(cx, py)
     if (c !== null) return c
@@ -1270,14 +1331,39 @@ function frameNow(full = false) {
   // Shake the full-size scene, then shrink it to the band's size on screen. The scene's
   // columns start at the margin's left edge, the strip's at the margin's right.
   const [shakeX, shakeY] = effect.shake
-  const scene = sceneColumns()
-  const zoom = (!full && bandZoom()) || { scale: 1, columns: scene, rows }
   const shaken = (cx, py) => (cx - shakeX < 0 || cx - shakeX >= scene ? null : colorAt(cx - shakeX - margin, py - shakeY))
-  const zoomed = zoomedPixel(shaken, { columns: scene, pixels, scale: zoom.scale })
+  // The eyes kept through the shrink: the mon's, unless a move hides or reshapes it, and the foe's
+  const reshaped = effect.hidden || effect.sx !== 1 || effect.sy !== 1 || effect.skew || effect.flipY
+  const own = shrunk && !reshaped ? pupilsAt(shown, variant, sideOn ? 'walk' : 'idle', frame, { left, top, mirrored }) : []
+  const pupils = [...own, ...(shrunk ? (foe?.pupils ?? []) : [])].map(([px, py, c, eye]) => [px + margin + shakeX, py + shakeY, c, eye && [eye[0] + margin + shakeX, eye[1] + shakeY, ...eye.slice(2)]])
+  const zoomed = zoomedPixel(shaken, { columns: scene, pixels, scale: zoom.scale, pupils })
+  // The head's zoomed columns, from the first its left column covers to the last its right one does
+  const [headLeft, headRight] = head.map((c) => c + margin)
+  const zoomedHead = [zoomedAt(headLeft, zoom.scale), Math.max(zoomedAt(headRight, zoom.scale), zoomedAt(headRight + 1, zoom.scale) - 1)]
+  // It keeps clear of the meters drawn over the small band's right end
+  const bubbleRoom = [0, zoom.columns - (isSmall() ? Math.round(panel * zoom.scale) : 0)]
+  const zoomedBubble = shrunk && icon ? bubbleStamps(icon, zoomedHead, bubbleSide, bubbleRoom, SHRUNK_BUBBLE) : []
+  // The Zs and the berry, in front of the shrunk scene as they are at full size
+  const zoomedX = (c) => zoomedAt(c + margin + shakeX, zoom.scale)
+  const zoomedY = (py) => zoomedAt(py + shakeY, zoom.scale)
+  const zoomedSleeper = { left: zoomedX(sleeper.left), right: zoomedX(sleeper.right), top: zoomedY(sleeper.top), bottom: zoomedY(sleeper.bottom) }
+  const front = shrunk ? [...(asleep ? sleepStamps(zoomedSleeper, SMALL_ZS) : []), ...(food ? [smallBerryStamp(zoom.scale, margin + shakeX)] : [])] : []
+  const stampsAt = (stamps) => (tx, ty) => {
+    for (const s of stamps) {
+      const b = stampPixel(s, tx, ty)
+      if (b !== null) return b
+    }
+    return null
+  }
+  const bubbleAt = stampsAt(zoomedBubble)
+  const frontAt = stampsAt(front)
+  const sceneAt = front.length === 0 ? zoomed : (tx, ty) => frontAt(tx, ty) ?? zoomed(tx, ty)
+  // As at full size, the bubble sits behind the scene, and over it while a foe is on stage
+  const drawn = zoomedBubble.length === 0 ? sceneAt : onStage ? (tx, ty) => bubbleAt(tx, ty) ?? sceneAt(tx, ty) : (tx, ty) => sceneAt(tx, ty) ?? bubbleAt(tx, ty)
   // A small band of an odd number of rows has a half row to spare, left on top so the
   // mon keeps its feet on the band's bottom edge
   const spare = zoom.rows * 2 - Math.round(pixels * zoom.scale)
-  const at = spare > 0 ? (tx, ty) => zoomed(tx, ty - spare) : zoomed
+  const at = spare > 0 ? (tx, ty) => drawn(tx, ty - spare) : drawn
   const glyphs = new Map()
   for (let k = 0; k < effect.chars.length; k += 4) {
     const gx = zoomedAt(effect.chars[k] + shakeX + margin, zoom.scale)
@@ -1292,19 +1378,23 @@ const underPanel = (cx, cy, zoom) => cx >= (isSmall() ? zoom.columns - Math.roun
 // The small band is the full-size scene drawn into a smaller box: an Image in the
 // terminal, scaled by the terminal so no pixel is lost, and an Svg on the desktop. In
 // half blocks, it takes the zoom's votes as a shrunk band does.
-const isSmall = () => SIZES[size] < 1
-const drawsImage = () => bandSurface === 'terminal' && isSmall() && !swapsFreeze && imageRetryAt === null
+const isSmall = () => bandScale() < 1
+const drawsImage = () => bandSurface === 'terminal' && isSmall() && !noImages && imageRetryAt === null
 
 // The small band's zoom while it shows at its own size, laid out as a full-size scene.
 // Null otherwise, as when a short pane shrinks it further, which lays it out like a
 // shrunk medium band so it's never the wider of the two.
 function smallZoom() {
   const zoom = isSmall() ? bandZoom() : null
-  return zoom?.scale === SIZES[size] ? zoom : null
+  return zoom?.scale === bandScale() ? zoom : null
 }
 
-// iTerm2 3.7 and older, before the 2026-09-18 nightly, freezes a swapped Image's source
-function freezesImages(program, version) {
+// VS Code's terminal, Cursor's included, shows kitty's image placeholders as boxes, even
+// when CLAUDE_CODE_FORCE_TERMINAL_IMAGES has the host send them. macOS Terminal has no
+// kitty graphics, and prints each frame's escape as base64 text. iTerm2 3.7 and older,
+// before the 2026-09-18 nightly, freezes a swapped Image's source.
+function lacksImages(program, version) {
+  if (program === 'vscode' || program === 'Apple_Terminal') return true
   if (program !== 'iTerm.app') return false
   const [major, minor, patch = ''] = String(version ?? '').split('.')
   if (Number(major) > 3 || (Number(major) === 3 && Number(minor) > 7)) return false
@@ -2175,7 +2265,7 @@ export function register(on) {
     // A refused env read leaves the band as it is on any other terminal
     const program = await $.env.get('TERM_PROGRAM').catch(() => undefined)
     const version = await $.env.get('TERM_PROGRAM_VERSION').catch(() => undefined)
-    swapsFreeze = freezesImages(program, version)
+    noImages = lacksImages(program, version)
     imageRetryAt = null
     imageWait = IMAGE_WAIT_TICKS[0]
     await beat($, await $.store.get('seenAt')).catch((err) => logOnce($, err))

@@ -269,15 +269,24 @@ Gyarados, and Pidgeot are the tallest at 17.
 
 `/pokemon size small` draws the band at half size, laid out just like the full-size one.
 kitty and Ghostty draw the small band as a real image, so every pixel stays. iTerm2 3.7
-and older draws it in half blocks, because of an iTerm2 bug that freezes the image on its
-first frame. Newer iTerm2 builds, nightlies from 2026-09-18 on included, draw the image
-once you set `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1`, for example in the `env` block of
-`~/.claude/settings.json`.
+and older can't, because of an iTerm2 bug that freezes the image on its first frame.
+Newer iTerm2 builds, nightlies from 2026-09-18 on included, draw the image once you set
+`CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1`, for example in the `env` block of
+`~/.claude/settings.json`. VS Code's terminal, Cursor's included, and macOS Terminal
+can't show the image even with that set. In those terminals the small band is drawn in
+half blocks and shrinks no shorter than a full-size Diglett, since a half-size mon in
+half blocks is too small to read.
 
 When the pane is too short, the whole scene shrinks to fit in half blocks, and so does
 the small band in other terminals. Each shrunk pixel takes the most common color of its
-block, and ties go to the darker color, so outlines and eyes survive. Below 4 rows it
-shows a line of text instead, like `Pikachu Lv 12 ●●●●○ ♥♥♥♥♡`.
+block. Ties go to the color at the middle of the block, so lines stay unbroken, and then
+to the darker color, so outlines survive. Each eye shrinks to one dot of its pupil, its
+darkest color or on a dark face its brightest, with the rest of the eye painted over as
+skin, so a shrunk mon never loses its eyes and both come out alike. An eye drawn as a
+line keeps the middle of the line. The thought bubble, the Zs, and the berry
+aren't shrunk with the scene, as they'd break into specks: a shrunk band draws them from
+smaller art of its own, a tighter bubble around the same icons, 3 px Zs, and a 3 px berry.
+Below 4 rows it shows a line of text instead, like `Pikachu Lv 12 ●●●●○ ♥♥♥♥♡`.
 
 </details>
 

@@ -1,7 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { closedEyes, eyesOf } from '../hooks/eyes.js'
+import { closedEyes, eyesOf, keptEyesOf, pupilsOf } from '../hooks/eyes.js'
 import { SPRITES } from '../hooks/frames.js'
 import { encodePng } from '../hooks/png.js'
+import { zoomedPixel } from '../hooks/zoom.js'
 
 const BAND = {
   plugin: 'pokemon',
@@ -493,7 +494,7 @@ test('/pokemon feed drops a random berry, the mon walks over and eats it, then s
 const HOUR = 3600 * 1000
 
 // Fire session.start with a saved store and a clock set to a given time
-async function startedWith($, on, saved: Record<string, unknown>, now: number) {
+async function startedWith($, on, saved: Record<string, unknown>, now: number, env: Record<string, string> = {}, answer: (e: any) => object = () => ({})) {
   const clock = mock.clock(on, { now })
   const blits: string[] = []
   // Each blit's width in columns, and the blit itself, alongside blits
@@ -501,13 +502,15 @@ async function startedWith($, on, saved: Record<string, unknown>, now: number) {
   const sent: any[] = []
   on('ui.render', () => THEIRS)
   on('ui.blit', ($, e) => {
+    const value = answer(e)
+    if ('deny' in value) return { value }
     blits.push(e.cells ?? e.source.png)
     widths.push(e.columns)
     sent.push(e)
-    return { value: {} }
+    return { value }
   })
   on('session.start', () => ({ cwd: '/work' }))
-  on('env.get', () => ({ value: undefined }))
+  on('env.get', ($, e) => ({ value: env[e.name] }))
   on('command.register', () => ({ value: undefined }))
   on('store.get', ($, e) => ({ value: saved[e.key] }))
   on('store.set', ($, e) => {
@@ -1884,7 +1887,7 @@ test('a terminal whose graphics are not ready yet gets the small band back as an
   expect((await ui.find({ key: 'pokemon' })).type).toBe('Image')
 })
 
-test('iTerm2 builds whose Image swaps freeze draw the small band in half blocks', async ($, on) => {
+test('VS Code, macOS Terminal and iTerm2 builds whose Image swaps freeze draw the small band in half blocks, no shorter than Diglett', async ($, on) => {
   const clock = mock.clock(on)
   const blits: any[] = []
   const env: Record<string, string> = {}
@@ -1907,6 +1910,8 @@ test('iTerm2 builds whose Image swaps freeze draw the small band in half blocks'
     ['iTerm.app', '3.7.20261008-nightly', true],
     ['iTerm.app', '3.8.0', true],
     ['ghostty', '1.2.0', true],
+    ['vscode', '1.105.0', false],
+    ['Apple_Terminal', '466', false],
   ]
   for (const [program, version, image] of cases) {
     env.TERM_PROGRAM = program
@@ -1920,13 +1925,126 @@ test('iTerm2 builds whose Image swaps freeze draw the small band in half blocks'
     const band = await ui.find({ key: 'pokemon' })
     expect({ where, type: band.type }).toEqual({ where, type: image ? 'Image' : 'Raster' })
     expect({ where, swaps: blits.length > 0 && blits.every((e) => (image ? e.source : e.cells)) }).toEqual({ where, swaps: true })
-    if (!image) {
-      expect(band.props.columns).toBe(SMALL)
-      // The spare half row goes on top, so the mon still stands on the band's bottom row
-      const painted = paintedCells(band.props.cells)
-      expect(painted.slice(-SMALL).some(Boolean)).toBe(true)
-    }
+    // Abra's 11 rows halve to 6 in an Image, and stop at a full-size Diglett's 7 in half blocks
+    expect({ where, rows: band.props.rows }).toEqual({ where, rows: image ? 6 : 7 })
     await ui.unmount()
+  }
+})
+
+test('a half block small band shrinks no shorter than a full-size Diglett', async ($, on) => {
+  const { clock } = await startedWith($, on, { size: 'small' }, 0, { TERM_PROGRAM: 'Apple_Terminal' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  // Diglett stays at its full 7 rows, Bulbasaur's 10 stop at 7, and Gyarados's 17 halve to 9
+  for (const [mon, rows] of [['diglett', 7], ['bulbasaur', 7], ['gyarados', 9]] as const) {
+    await $.command.run({ command: 'pokemon', args: mon })
+    await clock.advance(100)
+    const band = await ui.find({ key: 'pokemon' })
+    expect({ mon, type: band.type, rows: band.props.rows }).toEqual({ mon, type: 'Raster', rows })
+  }
+  const result = await $.command.run({ command: 'pokemon', args: 'size small' })
+  expect(result.text).toBe('The band is small.')
+})
+
+// How many pixels paint a color, two per cell with half blocks
+function pixelCount(cells: string, color: number): number {
+  const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
+  let count = 0
+  for (let i = 0; i < words.length; i += 3) {
+    const [cp, fg, bg] = [words[i], words[i + 1], words[i + 2]]
+    const pair = cp === 0x2580 ? [fg, bg] : cp === 0x2584 ? [bg, fg] : cp === 0x20 ? [bg, bg] : []
+    count += pair.filter((c) => c === color).length
+  }
+  return count
+}
+
+// The blit answer of a terminal that draws an Image as its alt, which then gets the small
+// band in half blocks
+const DENY_IMAGES = { deny: 'the Image draws its alt here: the terminal draws no placeholder images' }
+
+test('a half block small band draws a smaller thought bubble around the same icon', async ($, on) => {
+  const { clock } = await startedWith($, on, { mon: 'gyarados', size: 'small' }, 0, {}, (e) => (e.source ? DENY_IMAGES : {}))
+  await $.ui.mount({ ...SPINNER, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, isWorking: true } })
+  await clock.advance(200)
+  const raster = (await ui.find({ key: 'pokemon' })).props
+  // The small outline's 18 pixels and the tail's one
+  expect(pixelCount(raster.cells, BUBBLE_OUTLINE)).toBe(19)
+  expect(paints(raster.cells, DOTS)).toBe(true)
+})
+
+test('a half block small band draws whole Zs and a small whole berry instead of specks', async ($, on) => {
+  const { clock, blits } = await startedWith($, on, { mon: 'gyarados', size: 'small', wander: false }, 0, {}, (e) => (e.source ? DENY_IMAGES : {}))
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.command.run({ command: 'pokemon', args: 'feed' })
+  await clock.advance(1000)
+  const falling = await shown(ui, blits)
+  // The small berry's body is two pixels either side of its highlight
+  expect(BERRY_BODIES.filter((c) => pixelCount(falling, c) === 2)).toHaveLength(1)
+
+  await clock.advance(60 * 1000)
+  await $.command.run({ command: 'pokemon', args: 'sleep' })
+  await clock.advance(2000)
+  // Each small Z is seven pixels, and two or three are in the air at once
+  const zs = pixelCount(await shown(ui, blits), Z_COLOR)
+  expect(zs).toBeGreaterThan(0)
+  expect(zs).toBeLessThanOrEqual(3 * 7)
+})
+
+test('a shrunk mon keeps a pixel of every eye, facing you or walking, line eyes included', () => {
+  const cases = [['charizard', 'idle', 2], ['dragonite', 'idle', 2], ['arcanine', 'idle', 2], ['mewtwo', 'idle', 2], ['snorlax', 'idle', 2], ['snorlax', 'walk', 1], ['abra', 'walk', 1]] as const
+  for (const [mon, view, eyes] of cases) {
+    const sprite = SPRITES[mon]
+    const { palette } = sprite.variants.default
+    const rows = sprite.variants.default[view][0].rows
+    const colorOf = (x: number, y: number) => ((rows[y]?.[x] ?? '.') === '.' ? null : parseInt(palette[rows[y].charCodeAt(x) - 97].slice(1), 16))
+    const pupils = pupilsOf(rows, palette, keptEyesOf(mon, 'default', view, 0))
+    expect(pupils.length).toBe(eyes)
+    const scale = 16 / sprite.height
+    // Wherever the blocks fall as the mon walks, each eye's own zoomed pixel shows its pupil
+    for (let dx = 0; dx < 3; dx++) {
+      const columns = sprite.width + dx
+      const pixelAt = (x: number, y: number) => (x < dx || x >= columns ? null : colorOf(x - dx, y))
+      const shifted = pupils.map(([x, y]) => [x + dx, y, colorOf(x, y)] as const)
+      const at = zoomedPixel(pixelAt, { columns, pixels: sprite.height, scale, pupils: shifted })
+      // The zoomed pixel whose block holds full-size pixel v, cut as the zoom cuts them
+      const cellOf = (v: number, size: number) => {
+        const count = Math.round(size * scale)
+        let t = 0
+        while (t + 1 < count && Math.ceil(((t + 1) * size) / count) <= v) t++
+        return t
+      }
+      for (const [x, y, color] of shifted) expect(at(cellOf(x, columns), cellOf(y, sprite.height))).toBe(color)
+    }
+  }
+})
+
+test("a shrunk Bulbasaur's eyes both show its dark pupil, not one glint and one gray", () => {
+  const sprite = SPRITES.bulbasaur
+  const { palette, idle } = sprite.variants.default
+  const pupils = pupilsOf(idle[0].rows, palette, keptEyesOf('bulbasaur', 'default', 'idle', 0))
+  expect(pupils.map(([x, y]) => idle[0].rows[y][x])).toEqual(['i', 'i'])
+  // At the half block scale, wherever the blocks fall, each eye is one pupil pixel and
+  // none of its glint or red is left beside it
+  const colorOf = (l: string) => parseInt(palette[l.charCodeAt(0) - 97].slice(1), 16)
+  const rows = idle[0].rows
+  const scale = 0.7
+  for (let dx = 0; dx < 4; dx++) {
+    const columns = sprite.width + dx
+    const pixelAt = (x: number, y: number) => {
+      const l = x < dx || x >= columns ? '.' : (rows[y]?.[x - dx] ?? '.')
+      return l === '.' ? null : colorOf(l)
+    }
+    const shifted = pupils.map(([x, y, box, skin, inked]) => [x + dx, y, colorOf('i'), [box[0] + dx, box[1], box[2], box[3], colorOf(skin), [...inked].map(colorOf)]])
+    const at = zoomedPixel(pixelAt, { columns, pixels: sprite.height, scale, pupils: shifted })
+    const shown = { i: 0, other: 0 }
+    for (let ty = 0; ty < Math.round(sprite.height * scale); ty++) {
+      for (let tx = 0; tx < Math.round(columns * scale); tx++) {
+        const c = at(tx, ty)
+        if (c === colorOf('i')) shown.i++
+        else if (['h', 'j', 'k'].some((l) => colorOf(l) === c)) shown.other++
+      }
+    }
+    expect(shown).toEqual({ i: 2, other: 0 })
   }
 })
 

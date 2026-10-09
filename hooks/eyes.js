@@ -16,30 +16,44 @@ const SIDES = [
   [0, -1],
 ]
 
+// A sprite's palette letters by brightness, darkest first
+function paletteOf(palette) {
+  const lumaOf = (letter) => luma(channels(palette[letter.charCodeAt(0) - 97]))
+  const letters = palette.map((_, i) => String.fromCharCode(97 + i)).sort((a, b) => lumaOf(a) - lumaOf(b))
+  return { lumaOf, letters, darkest: letters[0] }
+}
+
+// The skin around an eye box: the most common color bordering it, passing over the
+// outline unless that's all there is. A tie goes to the lighter color, as shading is
+// darker. Null when nothing opaque borders the box.
+function skinOf(rows, [bx, by, w, h], { lumaOf, darkest }) {
+  const inside = (x, y) => x >= bx && x < bx + w && y >= by && y < by + h
+  const opaque = (x, y) => (rows[y]?.[x] ?? '.') !== '.'
+  const around = new Map()
+  for (let y = by; y < by + h; y++) {
+    for (let x = bx; x < bx + w; x++) {
+      for (const [dx, dy] of SIDES) {
+        if (inside(x + dx, y + dy) || !opaque(x + dx, y + dy)) continue
+        const l = rows[y + dy][x + dx]
+        around.set(l, (around.get(l) ?? 0) + 1)
+      }
+    }
+  }
+  if (around.size === 0) return null
+  return [...around].sort((a, b) => (a[0] === darkest) - (b[0] === darkest) || b[1] - a[1] || lumaOf(b[0]) - lumaOf(a[0]))[0][0]
+}
+
 // Rows of palette letters with the eyes in the boxes shut, or the same rows with no boxes
 export function closedEyes(rows, palette, boxes) {
   if (!boxes || boxes.length === 0) return rows
   const grid = rows.map((row) => row.split(''))
   const opaque = (x, y) => (rows[y]?.[x] ?? '.') !== '.'
-  const lumaOf = (letter) => luma(channels(palette[letter.charCodeAt(0) - 97]))
-  const letters = palette.map((_, i) => String.fromCharCode(97 + i)).sort((a, b) => lumaOf(a) - lumaOf(b))
-  const darkest = letters[0]
-  for (const [bx, by, w, h] of boxes) {
-    const inside = (x, y) => x >= bx && x < bx + w && y >= by && y < by + h
-    const around = new Map()
-    for (let y = by; y < by + h; y++) {
-      for (let x = bx; x < bx + w; x++) {
-        for (const [dx, dy] of SIDES) {
-          if (inside(x + dx, y + dy) || !opaque(x + dx, y + dy)) continue
-          const l = rows[y + dy][x + dx]
-          around.set(l, (around.get(l) ?? 0) + 1)
-        }
-      }
-    }
-    if (around.size === 0) continue
-    // The skin is the most common color bordering the box, passing over the outline
-    // unless that's all there is. A tie goes to the lighter color, as shading is darker.
-    const [skin] = [...around].sort((a, b) => (a[0] === darkest) - (b[0] === darkest) || b[1] - a[1] || lumaOf(b[0]) - lumaOf(a[0]))[0]
+  const shades = paletteOf(palette)
+  const { lumaOf, letters, darkest } = shades
+  for (const box of boxes) {
+    const [bx, by, w, h] = box
+    const skin = skinOf(rows, box, shades)
+    if (skin === null) continue
     const shows = lumaOf(skin) - lumaOf(darkest) >= DARKER_LID
     const lid = shows ? darkest : (letters.find((l) => lumaOf(l) - lumaOf(skin) >= LIGHTER_LID) ?? darkest)
     for (let y = by; y < by + h; y++) {
@@ -47,6 +61,47 @@ export function closedEyes(rows, palette, boxes) {
     }
   }
   return grid.map((row) => row.join(''))
+}
+
+// The pupil of each eye as [x, y, box, skin, letters] in the frame: the pixel of its
+// darkest color, or on a face too dark for that the starkest, nearest the box's middle,
+// with the letters the box holds besides the skin. The eye's colors are those standing
+// out from the skin at least half as much as its starkest one, leaving out shading and
+// the skin's own tints, so a glint brighter than the pupil doesn't win. A shrunk band
+// keeps the pupil and paints the rest of the box the skin, so each eye shrinks to the
+// same one dot wherever the blocks fall. An eye drawn as a line is just [x, y] at the
+// middle of the line, and keeps the rest, so it doesn't turn into a dot at one end.
+export function pupilsOf(rows, palette, { boxes, lines = false } = {}) {
+  if (!boxes || boxes.length === 0) return []
+  const shades = paletteOf(palette)
+  const pupils = []
+  for (const box of boxes) {
+    const [bx, by, w, h] = box
+    const skin = skinOf(rows, box, shades)
+    if (skin === null) continue
+    const contrastOf = (l) => Math.abs(shades.lumaOf(l) - shades.lumaOf(skin))
+    const inBox = []
+    for (let y = by; y < by + h; y++) for (let x = bx; x < bx + w; x++) if ((rows[y]?.[x] ?? '.') !== '.') inBox.push(rows[y][x])
+    const starkest = Math.max(0, ...inBox.map(contrastOf))
+    const eye = inBox.filter((l) => contrastOf(l) > 0 && contrastOf(l) * 2 >= starkest)
+    const darkest = eye.reduce((a, l) => (shades.lumaOf(l) < shades.lumaOf(a) ? l : a), eye[0])
+    const pupil = darkest !== undefined && shades.lumaOf(darkest) < shades.lumaOf(skin) ? darkest : eye.find((l) => contrastOf(l) === starkest)
+    const [mx, my] = [bx + (w - 1) / 2, by + (h - 1) / 2]
+    let best = null
+    let bestScore = 0
+    for (let y = by; y < by + h; y++) {
+      for (let x = bx; x < bx + w; x++) {
+        const l = rows[y]?.[x] ?? '.'
+        if (l === '.' || contrastOf(l) === 0) continue
+        const near = 100 - Math.abs(x - mx) - Math.abs(y - my)
+        const score = lines ? near * 1000 + contrastOf(l) : (l === pupil) * 100000 + near
+        if (score > bestScore) [best, bestScore] = [[x, y], score]
+      }
+    }
+    if (!best) continue
+    pupils.push(lines ? best : [...best, box, skin, [...new Set(inBox)].filter((l) => l !== skin).join('')])
+  }
+  return pupils
 }
 
 // Each mon's eye boxes per frame: { idle: [boxes per frame], walk: [...] }, with a
@@ -211,4 +266,19 @@ export const EYES = {
 export function eyesOf(mon, variant, view, frame) {
   const own = EYES[mon]?.[variant] ?? EYES[mon]
   return own?.[view]?.[frame] ?? null
+}
+
+// Eyes drawn as lines, shut already, so EYES leaves them out and sleep leaves them be. A
+// shrunk band keeps them all the same. Boxes as in EYES, the same for both variants.
+const LINE_EYES = {
+  abra: { idle: [[[7, 8, 2, 2], [12, 8, 2, 2]], [[7, 7, 2, 2], [12, 7, 2, 2]]], walk: [[[13, 8, 3, 2]], [[13, 7, 3, 2]]] },
+  gloom: { idle: [[[3, 14, 4, 1], [11, 14, 4, 1]], [[3, 14, 4, 1], [11, 14, 4, 1]]], walk: [[[11, 13, 2, 1]], [[11, 13, 2, 1]]] },
+  snorlax: { idle: [[[9, 11, 3, 1], [15, 11, 3, 1]], [[9, 10, 3, 1], [15, 10, 3, 1]]], walk: [[[16, 10, 2, 2]], [[16, 9, 2, 2]]] },
+}
+
+// The eyes a shrunk band keeps on a frame: the open ones, or else the lines
+export function keptEyesOf(mon, variant, view, frame) {
+  const open = eyesOf(mon, variant, view, frame)
+  if (open?.length) return { boxes: open, lines: false }
+  return { boxes: LINE_EYES[mon]?.[view]?.[frame] ?? null, lines: true }
 }
