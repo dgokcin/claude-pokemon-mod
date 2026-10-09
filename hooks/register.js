@@ -184,6 +184,9 @@ let imageRetryAt = null
 let imageWait = IMAGE_WAIT_TICKS[0]
 // Whether the band as last drawn holds the Image, or else Raster cells
 let drawnImage = false
+// The pixel hearts' PNG last sent or drawn, and whether the band as last drawn holds them
+let sentHearts = null
+let drawnHearts = false
 let sentSvg = null
 // Counts the distinct frames drawn on the desktop. Each one goes under a new key, since
 // the desktop keeps showing an Svg's first frame while its place in the tree holds.
@@ -1469,6 +1472,9 @@ const underPanel = (cx, cy, zoom) => cx >= (isSmall() ? zoom.columns - Math.roun
 // half blocks, it takes the zoom's votes as a shrunk band does.
 const isSmall = () => bandScale() < 1
 const drawsImage = () => bandSurface === 'terminal' && isSmall() && !noImages && imageRetryAt === null
+// The text hearts are pixel hearts on the same terminals, which learn from the hearts'
+// blits whether the terminal draws them, even while the band is large
+const drawsHearts = () => bandSurface === 'terminal' && !emojiOn && needsOn && !noImages && imageRetryAt === null
 
 // The small band's zoom while it shows at its own size, laid out as a full-size scene.
 // Null otherwise, as when a short pane shrinks it further, which lays it out like a
@@ -1683,6 +1689,26 @@ const METER_STYLES = {
     happiness: { icon: '💗', emptyIcon: '♡', color: '#ff7aa8' },
   },
 }
+// A terminal that draws Images gets the text hearts as pixel hearts instead, since some
+// fonts lack ♥ or ♡. Each takes one cell, HEART_CELL pixels wide and twice as tall, and
+// sits where a font like Hack draws ● beside it: the cell's full width, about as tall,
+// from HEART_TOP down. An empty heart is the full one's rim.
+const HEART_ICON = [
+  '..ppp...ppp..',
+  '.ppppp.ppppp.',
+  'ppppppppppppp',
+  'ppppppppppppp',
+  'ppppppppppppp',
+  'ppppppppppppp',
+  '.ppppppppppp.',
+  '..ppppppppp..',
+  '...ppppppp...',
+  '....ppppp....',
+  '.....ppp.....',
+  '......p......',
+]
+const HEART_CELL = 13
+const HEART_TOP = 9
 const START_STAT = 80
 // One icon's worth, so each berry adds exactly one icon
 const FEED_FOOD = 20
@@ -1948,6 +1974,36 @@ function iconsFor(key, name = mon) {
   return style[key].icon.repeat(filled) + (style[key].emptyIcon + ' '.repeat(style.columns - 1)).repeat(STAT_ICONS - filled)
 }
 
+// The happiness meter as pixel hearts, one PNG per number filled, each pixel IMAGE_UP
+// wide and tall like the small band's
+const heartPngs = new Map()
+function heartsImage(filled) {
+  if (heartPngs.has(filled)) return heartPngs.get(filled)
+  const color = Number.parseInt(METER_STYLES.text.happiness.color.slice(1), 16)
+  const width = STAT_ICONS * HEART_CELL * IMAGE_UP
+  const height = 2 * HEART_CELL * IMAGE_UP
+  const inHeart = (rx, ry) => (HEART_ICON[ry]?.[rx] ?? '.') !== '.'
+  const bytes = new Uint8Array(width * height * 4)
+  for (let k = 0; k < STAT_ICONS; k++) {
+    HEART_ICON.forEach((row, ry) => {
+      for (let rx = 0; rx < row.length; rx++) {
+        if (!inHeart(rx, ry)) continue
+        const rim = !inHeart(rx - 1, ry) || !inHeart(rx + 1, ry) || !inHeart(rx, ry - 1) || !inHeart(rx, ry + 1)
+        if (k >= filled && !rim) continue
+        for (let py = (HEART_TOP + ry) * IMAGE_UP; py < (HEART_TOP + ry + 1) * IMAGE_UP; py++) {
+          for (let px = (k * HEART_CELL + rx) * IMAGE_UP; px < (k * HEART_CELL + rx + 1) * IMAGE_UP; px++) {
+            const o = (py * width + px) * 4
+            bytes.set([color >> 16, (color >> 8) & 255, color & 255, 255], o)
+          }
+        }
+      }
+    })
+  }
+  const source = { png: encodePng(width, height, bytes) }
+  heartPngs.set(filled, source)
+  return source
+}
+
 // A nickname lives in the mon's record too, so it follows the mon through evolution
 const nameOf = (name) => stats[name]?.nickname ?? displayName(name)
 
@@ -2136,7 +2192,8 @@ function blitFrame($) {
   if (!zoom) return
   if (imageRetryAt !== null && tick >= imageRetryAt) imageRetryAt = null
   // Going between the Image and cells takes a redraw, so the blits wait for it
-  if (drawsImage() !== drawnImage) return $.ui.invalidate('ui.render')
+  if (drawsImage() !== drawnImage || drawsHearts() !== drawnHearts) return $.ui.invalidate('ui.render')
+  if (drawnHearts) blitHearts($)
   if (drawnImage) return blitImage($, zoom)
   const cells = cellsNow()
   if (cells === sentCells) return
@@ -2172,18 +2229,40 @@ function blitImage($, zoom) {
         return
       }
       sentImage = null
-      if (!/draws its alt/.test(result.deny)) return redrawRefused($, result.deny)
-      if (imageRetryAt !== null) return
-      // A terminal that has drawn Images denies one only for a while, as when its focus
-      // resets, so the wait starts over
-      if (imagesDrawn) imageWait = IMAGE_WAIT_TICKS[0]
-      imagesDrawn = false
-      imageRetryAt = tick + imageWait
-      imageWait = Math.min(IMAGE_WAIT_TICKS[1], imageWait * 2)
-      logOnce($, 'drawing half blocks: ' + result.deny)
-      $.ui.invalidate('ui.render')
+      deniedImage($, result.deny)
     })
     .catch((err) => logOnce($, err))
+}
+
+// Send the pixel hearts as drawn, once per PNG, to learn whether the terminal draws them
+function blitHearts($) {
+  const source = heartsImage(filledIcons('happiness'))
+  if (source.png === sentHearts) return
+  sentHearts = source.png
+  $.ui
+    .blit({ requestId: bandId, key: 'hearts', columns: STAT_ICONS, rows: 1, source })
+    .then((result) => {
+      if (!result?.deny) {
+        imagesDrawn = true
+        return
+      }
+      sentHearts = null
+      deniedImage($, result.deny)
+    })
+    .catch((err) => logOnce($, err))
+}
+
+function deniedImage($, deny) {
+  if (!/draws its alt/.test(deny)) return redrawRefused($, deny)
+  if (imageRetryAt !== null) return
+  // A terminal that has drawn Images denies one only for a while, as when its focus
+  // resets, so the wait starts over
+  if (imagesDrawn) imageWait = IMAGE_WAIT_TICKS[0]
+  imagesDrawn = false
+  imageRetryAt = tick + imageWait
+  imageWait = Math.min(IMAGE_WAIT_TICKS[1], imageWait * 2)
+  logOnce($, 'drawing half blocks and text hearts: ' + deny)
+  $.ui.invalidate('ui.render')
 }
 
 // The desktop has no Raster to repaint, so a changed frame draws the band again. The
@@ -2643,9 +2722,18 @@ export function register(on) {
     if (wasHome) x = homeX()
     clampX()
 
-    const meter = (key, lead = '') => Text({ color: meterStyle()[key].color, children: [lead + iconsFor(key)] })
-    const level = Text({ dimColor: true, children: [levelLine()] })
     const zoom = bandZoom()
+    // Pixel hearts go out with the band's blits, so a band too short for them has none
+    drawnHearts = Boolean(zoom) && drawsHearts()
+    const meter = (key, lead = '') => {
+      const text = Text({ color: meterStyle()[key].color, children: [lead + iconsFor(key)] })
+      if (key !== 'happiness' || !drawnHearts) return text
+      const source = heartsImage(filledIcons(key))
+      // Until a blit says the terminal draws Images, the next tick asks with one
+      sentHearts = imagesDrawn ? source.png : null
+      return elements.Image({ key: 'hearts', source, columns: STAT_ICONS, rows: 1, alt: iconsFor(key) })
+    }
+    const level = Text({ dimColor: true, children: [levelLine()] })
     let corner
     drawnImage = false
     if (zoom) {
