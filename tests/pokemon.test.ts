@@ -1768,7 +1768,7 @@ function terminalEnv(on, env: Record<string, string>) {
   on('env.get', ($, e) => ({ value: env[e.name] }))
 }
 
-test('/pokemon size small halves the band, saves it, and medium brings it back', async ($, on) => {
+test('/pokemon size small halves the band, saves it, and large brings it back', async ($, on) => {
   const saved: Record<string, any> = {}
   const { clock, sent } = await startedWith($, on, saved, 0)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
@@ -1798,13 +1798,13 @@ test('/pokemon size small halves the band, saves it, and medium brings it back',
   expect(await ui.findAll({ type: 'Image' })).toHaveLength(1)
 
   const status = await $.command.run({ command: 'pokemon', args: 'size' })
-  expect(status.text).toBe('The band is small. Sizes: small, medium.')
+  expect(status.text).toBe('The band is small. Sizes: small, large.')
   const unknown = await $.command.run({ command: 'pokemon', args: 'size huge' })
-  expect(unknown.text).toBe('Unknown size "huge". Try one of: small, medium.')
+  expect(unknown.text).toBe('Unknown size "huge". Try one of: small, large.')
   expect(saved.size).toBe('small')
 
-  await $.command.run({ command: 'pokemon', args: 'size medium' })
-  expect(saved.size).toBe('medium')
+  await $.command.run({ command: 'pokemon', args: 'size large' })
+  expect(saved.size).toBe('large')
   await clock.advance(100)
   expect((await ui.find({ key: 'pokemon' })).props.columns).toBe(RASTER)
   expect(await ui.find({ type: 'Image' })).toBeUndefined()
@@ -2079,10 +2079,10 @@ test('a small band keeps animating through an attack, a pet, and a feed', async 
   expect(BERRY_BODIES.some((color) => feed.colors.has(color))).toBe(true)
 })
 
-test('a short pane that shrinks a small band further lays it out no wider than medium', async ($, on) => {
+test('a short pane that shrinks a small band further lays it out no wider than large', async ($, on) => {
   await startedWith($, on, {}, 0)
   const columns: Record<string, number> = {}
-  for (const size of ['medium', 'small']) {
+  for (const size of ['large', 'small']) {
     await $.command.run({ command: 'pokemon', args: 'size ' + size })
     // Abra's 11 rows would halve to 6, so a 5 row pane shrinks either size to the same scale
     const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, maxRows: 5 } })
@@ -2092,15 +2092,15 @@ test('a short pane that shrinks a small band further lays it out no wider than m
     expect(await ui.find({ type: 'Text', text: '●●●●○' })).toBeDefined()
     await ui.unmount()
   }
-  expect(columns.small).toBeLessThanOrEqual(columns.medium)
+  expect(columns.small).toBeLessThanOrEqual(columns.large)
 })
 
-test('a battle that fits a medium band fits a small one in the same pane', async ($, on) => {
+test('a battle that fits a large band fits a small one in the same pane', async ($, on) => {
   const { clock } = await startedWith($, on, { mon: 'charizard', emoji: true, wander: false, debug: true }, 0)
   const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
-  for (const size of ['medium', 'small']) {
+  for (const size of ['large', 'small']) {
     await run('size ' + size)
-    // The narrowest band a medium Charizard battles a Gyarados in, with emoji meters
+    // The narrowest band a large Charizard battles a Gyarados in, with emoji meters
     const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: 82 } })
     expect({ size, reply: await run('wild gyarados') }).toEqual({ size, reply: 'A wild Gyarados is on its way.' })
     await clock.advance(10000)
@@ -2124,13 +2124,13 @@ function rowsPainted(cells: string, columns: number, colors: number[]): number {
   return rows.size
 }
 
-test('a small band draws a short foe no shorter than a medium Diglett', async ($, on) => {
+test('a small band draws a short foe no shorter than a large Diglett', async ($, on) => {
   const { clock, blits, widths } = await startedWith($, on, { mon: 'snorlax', wander: false, debug: true }, 0, {}, (e) => (e.source ? DENY_IMAGES : {}))
   const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
   // Diglett's colors from its head to its mound, all but the black and gray Snorlax paints
   const DIGLETT = [0x403010, 0x987838, 0x704820, 0xc8c8c8, 0x707070, 0x680828, 0xd04068, 0xe87098, 0x982048, 0xa8a8a8]
   const tall: Record<string, number> = {}
-  for (const size of ['medium', 'small']) {
+  for (const size of ['large', 'small']) {
     await run('size ' + size)
     const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: 120 } })
     expect(await run('wild diglett')).toBe('A wild Diglett is on its way.')
@@ -2142,9 +2142,9 @@ test('a small band draws a short foe no shorter than a medium Diglett', async ($
     await ui.unmount()
   }
   // At half scale beside Snorlax, a 12 px Diglett would paint 6 rows. It's grown so it
-  // paints as many as at medium, give or take a row the shrink rounds off.
-  expect(tall.small).toBeGreaterThanOrEqual(tall.medium - 1)
-  expect(tall.medium).toBe(12)
+  // paints as many as at large, give or take a row the shrink rounds off.
+  expect(tall.small).toBeGreaterThanOrEqual(tall.large - 1)
+  expect(tall.large).toBe(12)
 })
 
 test('a small band shrinks a foe taller than the home mon to its height, so the band does not grow', async ($, on) => {

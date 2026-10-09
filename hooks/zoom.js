@@ -12,7 +12,7 @@ const EPSILON = 1e-9
 
 // The scale each /pokemon size draws the band at. A half keeps every block 2x2, so the
 // votes stay even across the mon.
-export const SIZES = { small: 0.5, medium: 1 }
+export const SIZES = { small: 0.5, large: 1 }
 
 // The band at the chosen size when it fits or the room is unknown. A band that doesn't
 // fit shrinks to the room, and null means the room is too short even for that.

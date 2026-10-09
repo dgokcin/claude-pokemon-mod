@@ -20,6 +20,17 @@ claude plugin install pokemon@claude-pokemon
 
 Then pick your partner with `/pokemon <mon>`.
 
+> [!TIP]
+> It works best in iTerm2 or another terminal that draws images, like kitty or Ghostty, where the small band keeps every pixel. Turn images on in the `env` block of `~/.claude/settings.json`:
+>
+> ```json
+> {
+>   "env": {
+>     "CLAUDE_CODE_FORCE_TERMINAL_IMAGES": "1"
+>   }
+> }
+> ```
+
 ## Why you'll keep it on
 
 - 🔎 **It watches Claude work.** A pencil for edits, a magnifier for reads, `>_` for shell commands, a TM disc for skills.
@@ -89,7 +100,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon sync` | Toggle syncing the mon across sessions (off by default, saved across sessions). On, every open session switches to the mon picked last in any of them, fetched mons included. Off, each session keeps its own |
 | `/pokemon autoevolve` | Toggle level evolutions starting on their own once idle (on by default). Off, the mon waits for `/pokemon evolve` |
 | `/pokemon emoji` | Toggle emoji meters, 🍓 and 💗 instead of ● and ♥ (off by default, saved across sessions) |
-| `/pokemon size small`, `/pokemon size medium` | Draw the band at half size or full size (medium by default, saved across sessions). A short pane still shrinks it further. See [How it works](#how-it-works) for crisp small mons in iTerm2 |
+| `/pokemon size small`, `/pokemon size large` | Draw the band at half size or full size (large by default, saved across sessions). A short pane still shrinks it further. See [How it works](#how-it-works) for crisp small mons in iTerm2 |
 | `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
 | `/pokemon box` | List every mon you've raised, highest level first |
 | `/pokemon new <mon>` | Fetch a mon from any generation in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) (gen 1 to 5) and show it. It's saved in the mod's store, so it stays through plugin updates and shows up in every session. Moves come from its types, using gen 1 animations |
@@ -277,7 +288,7 @@ can't show the image even with that set. In those terminals the small band is dr
 half blocks and shrinks no shorter than a full-size Diglett, since a half-size mon in
 half blocks is too small to read. In a small band a wild mon taller than yours shrinks to your
 mon's height, so it doesn't make the band taller and shrink yours with it, and a short
-one grows to look as tall as a medium Diglett, up to your mon's height.
+one grows to look as tall as a large Diglett, up to your mon's height.
 
 When the pane is too short, the whole scene shrinks to fit in half blocks, and so does
 the small band in other terminals. Each shrunk pixel takes the most common color of its

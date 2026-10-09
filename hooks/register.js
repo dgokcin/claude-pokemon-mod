@@ -161,7 +161,7 @@ let stats = {}
 let needsOn = true
 let emojiOn = false
 // The band's size from /pokemon size, a key of SIZES
-let size = 'medium'
+let size = 'large'
 let autoEvolve = true
 // With /pokemon sync on, every open session follows the last mon picked in any of them
 let syncOn = false
@@ -277,12 +277,12 @@ function resizedSprite(name, height) {
   return { ...sprite, width, height, variants }
 }
 
-// A wild mon in a small band stands no shorter on screen than a medium Diglett
+// A wild mon in a small band stands no shorter on screen than a large Diglett
 const FOE_MIN_PIXELS = SPRITES.diglett.height
 
 // The foe as drawn. In a small band a foe taller than the home mon shrinks to its height,
 // so it doesn't grow the band and shrink the home mon with it, and a short one grows to
-// look as tall as a medium Diglett, up to the home mon's height. Each size is resized once
+// look as tall as a large Diglett, up to the home mon's height. Each size is resized once
 // and kept under its own name, unlisted. It goes by the size picked and the home mon's
 // scale alone, as the band's scale depends on the foe.
 function foeAs(name) {
@@ -1472,7 +1472,7 @@ const drawsImage = () => bandSurface === 'terminal' && isSmall() && !noImages &&
 
 // The small band's zoom while it shows at its own size, laid out as a full-size scene.
 // Null otherwise, as when a short pane shrinks it further, which lays it out like a
-// shrunk medium band so it's never the wider of the two.
+// shrunk large band so it's never the wider of the two.
 function smallZoom() {
   const zoom = isSmall() ? bandZoom() : null
   return zoom?.scale === bandScale() ? zoom : null
