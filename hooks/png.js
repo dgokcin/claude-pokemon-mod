@@ -15,12 +15,18 @@ function crc32(bytes, start, end) {
   return (c ^ 0xffffffff) >>> 0
 }
 
+// The sums take their remainder once per block, short enough that b can't pass 2^31
 function adler32(bytes) {
   let a = 1
   let b = 0
-  for (let i = 0; i < bytes.length; i++) {
-    a = (a + bytes[i]) % 65521
-    b = (b + a) % 65521
+  for (let i = 0; i < bytes.length; ) {
+    const end = Math.min(bytes.length, i + 2048)
+    for (; i < end; i++) {
+      a += bytes[i]
+      b += a
+    }
+    a %= 65521
+    b %= 65521
   }
   return ((b << 16) | a) >>> 0
 }
@@ -34,6 +40,11 @@ const DIST_EXTRA = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 
 const WINDOW = 32768
 const MAX_MATCH = 258
 const MAX_CHAIN = 32
+
+// Match tables shared by every call. Only head needs clearing, since a call reads prev
+// only at positions it has inserted.
+const HEAD = new Int32Array(65536)
+const PREV = new Int32Array(WINDOW)
 
 class Bits {
   constructor(size) {
@@ -101,8 +112,8 @@ function deflate(data) {
   bits.push(0x01)
   bits.put(1, 1)
   bits.put(1, 2)
-  const head = new Int32Array(65536).fill(-1)
-  const prev = new Int32Array(WINDOW)
+  const head = HEAD.fill(-1)
+  const prev = PREV
   const hash = (i) => ((data[i] << 16) ^ (data[i + 1] << 8) ^ data[i + 2]) * 2654435761 >>> 16
   const insert = (i) => {
     if (i + 2 >= data.length) return
@@ -163,9 +174,17 @@ export function encodePng(width, height, rgba) {
   const indices = new Uint8Array(width * height)
   const words = new Uint32Array(rgba.buffer, rgba.byteOffset, width * height)
   let paletted = true
+  // A run of one color looks it up once
+  let lastWord = -1
+  let index = 0
   for (let p = 0; p < words.length; p++) {
     const word = rgba[p * 4 + 3] === 0 ? 0 : words[p]
-    let index = colors.get(word)
+    if (word === lastWord) {
+      indices[p] = index
+      continue
+    }
+    lastWord = word
+    index = colors.get(word)
     if (index === undefined) {
       if (colors.size === 256) {
         paletted = false
