@@ -7,12 +7,13 @@ import { SPRITES } from './frames.js'
 import { MAX_LEVEL, careOf, levelAt, turnXp, xpAt } from './levels.js'
 import { MOVES, movesOf } from './moves.js'
 import { displayName } from './names.js'
+import { encodePng } from './png.js'
 import { BALL, BALL_COLORS, FLASH, LEANS, LIGHT_COLORS, OPEN, joinParty, leaveParty, partyStamps, prunedParty } from './party.js'
 import {
   ATTACK_GAP_MS, ATTACK_JITTER_MS, THROW_TICKS, WILD_STAY_MS, WILD_TURNS, WORN_OUT_MS, battleColumns, chargedWild, damageOf,
   foeBlinks, foeJolt, foeSpotX, foeX, fleeingWild, hpBar, isHere, isOnStage, newWild, stepWild, thrownWild, throwStage,
 } from './wild.js'
-import { zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
+import { SIZES, zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 
 // One pixel Pokémon lives in a strip at the right of the band above the prompt.
 // While Claude works it paces, with a thought bubble while Claude thinks. It
@@ -37,6 +38,9 @@ import { zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 const TICK_MS = 50
 // CSS pixels per sprite pixel on the desktop
 const PIXEL_PX = 4
+// Image pixels per sprite pixel. The terminal scales the Image to its box, so sending
+// each pixel as a block keeps its edges sharp.
+const IMAGE_UP = 4
 const MOVE_TICKS = 3
 const HOP_TICKS = 12
 const SLEEP_AFTER_MS = 5 * 60 * 1000
@@ -116,11 +120,11 @@ let bandId = null
 let bandSurface = 'terminal'
 let columns = STRIP_COLUMNS
 // The columns behind the level and meters at the strip's right, 0 when they sit beside
-// a shrunk band instead. The scene runs on under them, so a bubble, hearts, and Zs
+// a band shrunk to fit instead. The scene runs on under them, so a bubble, hearts, and Zs
 // can float over the meters, but the mon stays in the strip.
 let panel = 0
 // Empty columns drawn left of the strip, so a bubble always fits on the left of the head.
-// They take only band width that's free, and none in a shrunk band.
+// They take only band width that's free, and none in a band shrunk to fit.
 let margin = 0
 let tick = 0
 let x = STRIP_COLUMNS
@@ -153,6 +157,8 @@ let nowMs = 0
 let stats = {}
 let needsOn = true
 let emojiOn = false
+// The band's size from /pokemon size, a key of SIZES
+let size = 'medium'
 let autoEvolve = true
 // With /pokemon sync on, every open session follows the last mon picked in any of them
 let syncOn = false
@@ -162,6 +168,13 @@ let evolving = null
 let evolveDue = null
 let joyHopAt = null
 let sentCells = null
+let sentImage = null
+// Set once a blit swaps the Image's source, so the terminal draws Images and a redraw
+// needn't ask again
+let imagesDrawn = false
+// Set when the small band can't be an Image here: an iTerm2 whose Image swaps freeze, or
+// a terminal that draws an Image's alt, as one without kitty graphics does
+let imagesDenied = false
 let sentSvg = null
 // Counts the distinct frames drawn on the desktop. Each one goes under a new key, since
 // the desktop keeps showing an Svg's first frame while its place in the tree holds.
@@ -213,7 +226,7 @@ const bandRows = () => {
   return rowsOf(mon)
 }
 // The band's size on screen, shrunk to fit a short pane, or null when only the badge fits
-const bandZoom = () => zoomFor({ columns: sceneColumns(), rows: bandRows(), maxRows })
+const bandZoom = () => zoomFor({ columns: sceneColumns(), rows: bandRows(), maxRows, size: SIZES[size] })
 // The strip and the panel, in the strip's own columns, and the whole scene with the margin
 const stripColumns = () => columns + panel
 const sceneColumns = () => margin + columns + panel
@@ -1143,9 +1156,9 @@ async function wildCommand($, rest) {
   return { text: 'A wild ' + displayName(pick.mon) + ' is on its way.' }
 }
 
-// The current frame, zoomed to the band: a color or null per pixel, two pixel rows per
-// cell, and the effects' glyphs by cell
-function frameNow() {
+// The current frame, zoomed to the band or at full size: a color or null per pixel, two
+// pixel rows per cell, and the effects' glyphs by cell
+function frameNow(full = false) {
   const playing = attack !== null && !isBackingUp()
   const age = attack ? tick - attack.start : 0
   const pose = playing ? attackPose(attack, age) : attack ? BACKING_POSE : NO_POSE
@@ -1242,9 +1255,13 @@ function frameNow() {
   // columns start at the margin's left edge, the strip's at the margin's right.
   const [shakeX, shakeY] = effect.shake
   const scene = sceneColumns()
-  const zoom = bandZoom() ?? { scale: 1, columns: scene, rows }
+  const zoom = (!full && bandZoom()) || { scale: 1, columns: scene, rows }
   const shaken = (cx, py) => (cx - shakeX < 0 || cx - shakeX >= scene ? null : colorAt(cx - shakeX - margin, py - shakeY))
-  const at = zoomedPixel(shaken, { columns: scene, pixels, scale: zoom.scale })
+  const zoomed = zoomedPixel(shaken, { columns: scene, pixels, scale: zoom.scale })
+  // A small band of an odd number of rows has a half row to spare, left on top so the
+  // mon keeps its feet on the band's bottom edge
+  const spare = zoom.rows * 2 - Math.round(pixels * zoom.scale)
+  const at = spare > 0 ? (tx, ty) => zoomed(tx, ty - spare) : zoomed
   const glyphs = new Map()
   for (let k = 0; k < effect.chars.length; k += 4) {
     const gx = zoomedAt(effect.chars[k] + shakeX + margin, zoom.scale)
@@ -1254,7 +1271,51 @@ function frameNow() {
 }
 
 // The cells left blank under the level and meters, which are drawn over them
-const underPanel = (cx, cy, zoom) => cx >= margin + columns && cy >= zoom.rows - panelRows()
+const underPanel = (cx, cy, zoom) => cx >= (isSmall() ? zoom.columns - Math.round(panel * zoom.scale) : margin + columns) && cy >= zoom.rows - panelRows()
+
+// The small band is the full-size scene drawn into a smaller box: an Image in the
+// terminal, scaled by the terminal so no pixel is lost, and an Svg on the desktop. A
+// short pane's shrink keeps the votes. The effects' glyphs need cells, so an Image goes
+// without them.
+const isSmall = () => SIZES[size] < 1
+const drawsImage = () => bandSurface === 'terminal' && isSmall() && !imagesDenied
+
+// iTerm2 3.7 and older, before the 2026-09-18 nightly, freezes a swapped Image's source
+function freezesImages(program, version) {
+  if (program !== 'iTerm.app') return false
+  const [major, minor, patch = ''] = String(version ?? '').split('.')
+  if (Number(major) > 3 || (Number(major) === 3 && Number(minor) > 7)) return false
+  const nightly = /^(\d{8})-nightly$/.exec(patch)
+  return !(nightly && Number(nightly[1]) >= 20260918)
+}
+
+// The full-size frame, padded on the left and top to fill the zoomed box at its scale, so
+// every pixel keeps its shape in it
+function fullFrame(zoom) {
+  const { at } = frameNow(true)
+  const scene = sceneColumns()
+  const width = Math.max(scene, Math.round(zoom.columns / zoom.scale))
+  const height = Math.max(bandRows() * 2, Math.round((zoom.rows * 2) / zoom.scale))
+  const [dx, dy] = [width - scene, height - bandRows() * 2]
+  return { at: (cx, py) => at(cx - dx, py - dy), width, height }
+}
+
+// The full-size frame as a PNG, each pixel IMAGE_UP wide and tall
+function imageNow(zoom) {
+  const { at, width, height } = fullFrame(zoom)
+  const span = width * IMAGE_UP * 4
+  const bytes = new Uint8Array(span * height * IMAGE_UP)
+  for (let py = 0; py < height; py++) {
+    const line = py * IMAGE_UP * span
+    for (let cx = 0; cx < width; cx++) {
+      const c = at(cx, py)
+      if (c === null || underPanel(zoomedAt(cx, zoom.scale), zoomedAt(py, zoom.scale) >> 1, zoom)) continue
+      for (let k = 0; k < IMAGE_UP; k++) bytes.set([c >> 16, (c >> 8) & 255, c & 255, 255], line + (cx * IMAGE_UP + k) * 4)
+    }
+    for (let k = 1; k < IMAGE_UP; k++) bytes.copyWithin(line + k * span, line, line + span)
+  }
+  return { png: encodePng(width * IMAGE_UP, height * IMAGE_UP, bytes) }
+}
 
 // Pack the current frame into Raster cells, two pixels per cell with half blocks
 function cellsNow() {
@@ -1286,14 +1347,16 @@ const hexOf = (color) => '#' + color.toString(16).padStart(6, '0')
 // unit square, runs of one color in a row merged into one path per color. A glyph
 // takes its whole cell, two pixels tall, over the cell's top color or else its bottom.
 function svgNow() {
-  const { at, glyphs, zoom } = frameNow()
-  const width = zoom.columns
-  const height = zoom.rows * 2
+  // A small band draws every full-size pixel, and the Svg's size scales them down
+  const full = isSmall() ? fullFrame(bandZoom()) : null
+  const { at, glyphs, zoom } = full ? { at: full.at, glyphs: new Map() } : frameNow()
+  const width = full ? full.width : zoom.columns
+  const height = full ? full.height : zoom.rows * 2
   const runs = new Map()
   const fill = (color, d) => runs.set(color, (runs.get(color) ?? '') + d)
   const pixelAt = (cx, py) => {
     const cy = py >> 1
-    return underPanel(cx, cy, zoom) || glyphs.has(cx + ',' + cy) ? null : at(cx, py)
+    return !full && (underPanel(cx, cy, zoom) || glyphs.has(cx + ',' + cy)) ? null : at(cx, py)
   }
   for (let py = 0; py < height; py++) {
     for (let cx = 0; cx < width; ) {
@@ -1806,7 +1869,7 @@ function hopForJoy() {
   }
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'emoji', 'sync', 'autoevolve', 'pet', 'feed', 'sleep', 'attack', 'catch', 'run', 'moves', 'evolve', 'stop', 'stats', 'box', 'dex', 'nickname', 'release', 'new', 'list']
+const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'emoji', 'size', 'sync', 'autoevolve', 'pet', 'feed', 'sleep', 'attack', 'catch', 'run', 'moves', 'evolve', 'stop', 'stats', 'box', 'dex', 'nickname', 'release', 'new', 'list']
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
@@ -1844,6 +1907,7 @@ let refusedAt = -Infinity
 function blitFrame($) {
   const zoom = bandZoom()
   if (!zoom) return
+  if (drawsImage()) return blitImage($, zoom)
   const cells = cellsNow()
   if (cells === sentCells) return
   sentCells = cells
@@ -1852,9 +1916,36 @@ function blitFrame($) {
     .then((result) => {
       if (!result?.deny) return
       sentCells = null
-      if (tick - refusedAt < REDRAW_AFTER_REFUSAL_TICKS) return
-      refusedAt = tick
-      logOnce($, 'frame refused: ' + result.deny)
+      redrawRefused($, result.deny)
+    })
+    .catch((err) => logOnce($, err))
+}
+
+function redrawRefused($, deny) {
+  if (tick - refusedAt < REDRAW_AFTER_REFUSAL_TICKS) return
+  refusedAt = tick
+  logOnce($, 'frame refused: ' + deny)
+  $.ui.invalidate('ui.render')
+}
+
+// Swap the small band's Image to the frame now, the same way
+function blitImage($, zoom) {
+  const source = imageNow(zoom)
+  if (source.png === sentImage) return
+  sentImage = source.png
+  $.ui
+    .blit({ requestId: bandId, key: 'pokemon', columns: zoom.columns, rows: zoom.rows, source })
+    .then((result) => {
+      if (!result?.deny) {
+        imagesDrawn = true
+        return
+      }
+      sentImage = null
+      if (!/draws its alt/.test(result.deny)) return redrawRefused($, result.deny)
+      // The terminal draws no Images, so the band goes back to half blocks for good
+      if (imagesDenied) return
+      imagesDenied = true
+      logOnce($, 'drawing half blocks: ' + result.deny)
       $.ui.invalidate('ui.render')
     })
     .catch((err) => logOnce($, err))
@@ -2018,11 +2109,14 @@ export function register(on) {
     wander = (await $.store.get('wander')) !== false
     needsOn = (await $.store.get('needs')) !== false
     emojiOn = (await $.store.get('emoji')) === true
+    const savedSize = await $.store.get('size')
+    if (Object.hasOwn(SIZES, savedSize)) size = savedSize
     autoEvolve = (await $.store.get('autoEvolve')) !== false
     const savedStats = await $.store.get('stats')
     if (savedStats && typeof savedStats === 'object') stats = savedStats
     nowMs = await $.clock.now()
     ink = await themeInk($)
+    imagesDenied = freezesImages(await $.env.get('TERM_PROGRAM'), await $.env.get('TERM_PROGRAM_VERSION'))
     await beat($, await $.store.get('seenAt')).catch((err) => logOnce($, err))
     // Shown again, a parked mon's meters pick up where they stopped
     if (stats[mon]?.parked) {
@@ -2153,6 +2247,15 @@ export function register(on) {
       $.ui.invalidate('ui.render')
       const icons = iconsFor('food').trimEnd() + ' ' + iconsFor('happiness').trimEnd()
       return { text: (emojiOn ? 'The meters show emoji: ' : 'The meters show text icons: ') + icons }
+    } else if (asked === 'size' || asked.startsWith('size ')) {
+      const wanted = asked.slice('size'.length).trim()
+      const sizes = Object.keys(SIZES).join(', ')
+      if (!wanted) return { text: 'The band is ' + size + '. Sizes: ' + sizes + '.' }
+      if (!Object.hasOwn(SIZES, wanted)) return { text: 'Unknown size "' + wanted + '". Try one of: ' + sizes + '.' }
+      size = wanted
+      await $.store.set('size', size)
+      $.ui.invalidate('ui.render')
+      return { text: 'The band is ' + size + '.' }
     } else if (asked === 'sync') {
       syncOn = !syncOn
       await $.store.set('sync', syncOn)
@@ -2282,13 +2385,21 @@ export function register(on) {
     // The panel goes over the scene's right end when the band shows at full size and
     // has room for it, and beside a shrunk band otherwise. The desktop draws text in its
     // own font, so its meters can't line up with the pixels and always sit beside them.
+    // A small band lays out as a full-size one and shows it at its scale, so its panel
+    // and margin take more of the scene's columns per band column.
     const panelColumns = meterColumns() + 1
-    const fullSize = bandRows() <= maxRows
+    const fullSize = !isSmall() && bandRows() <= maxRows
+    const small = isSmall() ? bandZoom() : null
     panel = !desktop && fullSize && e.props.bodyColumns >= SPRITES[mon].width + panelColumns ? panelColumns : 0
+    if (small && !desktop && e.props.bodyColumns >= SPRITES[mon].width * small.scale + panelColumns) panel = Math.ceil(panelColumns / small.scale)
     lastBodyColumns = e.props.bodyColumns
     columns = stripTarget(e.props.bodyColumns)
     drawnColumns = columns
     margin = fullSize ? Math.max(0, Math.min(BUBBLE_SPAN, e.props.bodyColumns - panel - columns)) : 0
+    if (small) {
+      const room = Math.floor((e.props.bodyColumns - (panel > 0 ? 0 : panelColumns)) / small.scale) - columns - panel - 1
+      margin = Math.max(0, Math.min(BUBBLE_SPAN, room))
+    }
     if (wasHome) x = homeX()
     clampX()
 
@@ -2304,13 +2415,18 @@ export function register(on) {
         sentSvg = svg
         const image = elements.Svg({ source: svg, alt: isOnStage(wild) ? nameOf(mon) + ' vs. wild ' + displayName(wild.mon) : nameOf(mon), width: zoom.columns * PIXEL_PX, height: zoom.rows * 2 * PIXEL_PX })
         sprite = Box({ key: 'pokemon-' + svgFrame, children: [image] })
+      } else if (drawsImage()) {
+        const source = imageNow(zoom)
+        // Until a blit says the terminal draws Images, the next tick asks with one
+        sentImage = imagesDrawn ? source.png : null
+        sprite = elements.Image({ key: 'pokemon', source, columns: zoom.columns, rows: zoom.rows, alt: ' ' })
       } else {
         sentCells = cellsNow()
         sprite = elements.Raster({ key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells: sentCells })
       }
       const meterLines = needsOn ? [level, meter('food'), meter('happiness')] : [level]
       if (panel > 0) {
-        const meters = Box({ position: 'absolute', right: 0, bottom: 0, width: panel, paddingLeft: 1, flexDirection: 'column', children: meterLines })
+        const meters = Box({ position: 'absolute', right: 0, bottom: 0, width: panelColumns, paddingLeft: 1, flexDirection: 'column', children: meterLines })
         corner = [Box({ position: 'relative', children: [sprite, meters] })]
       } else {
         const meters = Box({ flexDirection: 'column', justifyContent: 'flex-end', paddingLeft: 1, children: meterLines })

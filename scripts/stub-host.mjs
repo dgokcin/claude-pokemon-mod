@@ -1,7 +1,8 @@
 // A stand-in host for the preview scripts: hooks by event, a store, a clock driven by
 // hand, the theme, toasts, and the frame on screen. It drives the real band renderer in
 // hooks/register.js, and contactSheet paints the frames it shows into a PNG the way the
-// half blocks look.
+// half blocks look. Like a terminal without kitty graphics, it draws an Image's alt, so a
+// small band falls back to half blocks on its first tick.
 
 import { execFileSync } from 'node:child_process'
 import { rmSync, writeFileSync } from 'node:fs'
@@ -57,12 +58,17 @@ export async function stubHost({ saved = {}, light = false, seed = 1, bodyColumn
     },
     clock: { now: async () => 0, every: (ms, fn) => void (tickFn = fn) },
     agent: { list: async () => [] },
+    env: { get: async () => undefined },
     ui: {
       invalidate: () => void (invalid = true),
       toast: (text) => void toasts.push(text),
       log: (text) => console.error(text),
-      blit: async (args) => void Object.assign(screen, { cells: args.cells, columns: args.columns }),
-      resolve: () => ({ Box: (props) => ({ props }), Raster: (props) => ({ props }), Text: (props) => ({ props }) }),
+      blit: async (args) => {
+        if (args.source) return { deny: 'the Image draws its alt here' }
+        Object.assign(screen, { cells: args.cells, columns: args.columns })
+        return {}
+      },
+      resolve: () => ({ Box: (props) => ({ props }), Image: (props) => ({ props }), Raster: (props) => ({ props }), Text: (props) => ({ props }) }),
     },
   }
 
@@ -80,11 +86,13 @@ export async function stubHost({ saved = {}, light = false, seed = 1, bodyColumn
       requestId: 'band',
       props: { isWorking: false, hasSurvey: false, bodyColumns, maxRows: 40 },
     }))
-    if (raster) Object.assign(screen, { cells: raster.cells, columns: raster.columns })
+    if (raster?.cells) Object.assign(screen, { cells: raster.cells, columns: raster.columns })
   }
 
   async function tick() {
     tickFn()
+    // Lets a refused blit ask for its redraw
+    await new Promise(setImmediate)
     if (invalid) await render()
   }
 
