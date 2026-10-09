@@ -161,7 +161,7 @@ test('paces while Claude works', async ($, on) => {
   const blits: string[] = []
   on('ui.render', () => THEIRS)
   on('ui.blit', ($, e) => {
-    blits.push(e.cells ?? e.source.png)
+    if (e.key === 'pokemon') blits.push(e.cells ?? e.source.png)
     return { value: {} }
   })
   on('session.start', () => ({ cwd: '/work' }))
@@ -233,7 +233,7 @@ test('with wandering off, walks back to the right edge after a turn and idles th
   const blits: string[] = []
   on('ui.render', () => THEIRS)
   on('ui.blit', ($, e) => {
-    blits.push(e.cells)
+    if (e.key === 'pokemon') blits.push(e.cells)
     return { value: {} }
   })
   on('session.start', () => ({ cwd: '/work' }))
@@ -273,7 +273,7 @@ async function started($, on) {
   const blits: string[] = []
   on('ui.render', () => THEIRS)
   on('ui.blit', ($, e) => {
-    blits.push(e.cells ?? e.source.png)
+    if (e.key === 'pokemon') blits.push(e.cells ?? e.source.png)
     return { value: {} }
   })
   on('session.start', () => ({ cwd: '/work' }))
@@ -503,7 +503,7 @@ async function startedWith($, on, saved: Record<string, unknown>, now: number, e
   on('ui.render', () => THEIRS)
   on('ui.blit', ($, e) => {
     const value = answer(e)
-    if ('deny' in value) return { value }
+    if ('deny' in value || e.key !== 'pokemon') return { value }
     blits.push(e.cells ?? e.source.png)
     widths.push(e.columns)
     sent.push(e)
@@ -569,12 +569,45 @@ test('a sleeping mon lies on the same ground as an idle one', async ($, on) => {
 })
 
 test('draws food circles and happiness hearts at the right edge as text', async ($, on) => {
-  await startedWith($, on, {}, 0)
+  await startedWith($, on, {}, 0, { TERM_PROGRAM: 'Apple_Terminal' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   // A new mon starts at 80%: four filled icons and one empty in each meter
   expect(await ui.find({ type: 'Text', text: '●●●●○' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '♥♥♥♥♡' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /🍓|💗/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Image' })).toBeUndefined()
+})
+
+test('a terminal that draws Images shows the hearts as pixel hearts', async ($, on) => {
+  const { clock } = await startedWith($, on, {}, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  // One cell per heart, each 13 pixels wide and 26 tall, 4 image pixels to a pixel
+  const hearts = await ui.find({ type: 'Image', key: 'hearts' })
+  expect(hearts.props.columns).toBe(5)
+  expect(hearts.props.rows).toBe(1)
+  expect(hearts.props.alt).toBe('♥♥♥♥♡')
+  expect(pngSize(hearts.props.source.png)).toEqual({ width: 5 * 13 * 4, height: 26 * 4 })
+  expect(imageColors(hearts.props.source.png)).toEqual(new Set([0xff5f9e, 0xffe0ec]))
+  expect(await ui.find({ type: 'Text', text: '♥♥♥♥♡' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '●●●●○' })).toBeDefined()
+  await clock.advance(100)
+  expect((await ui.find({ key: 'hearts' })).type).toBe('Image')
+})
+
+test('a terminal that draws an Image as its alt gets the hearts as text', async ($, on) => {
+  const { clock } = await startedWith($, on, {}, 0, {}, (e) => (e.cells ? {} : DENY_IMAGES))
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(100)
+  expect(await ui.find({ type: 'Image', key: 'hearts' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '♥♥♥♥♡' })).toBeDefined()
+})
+
+test('emoji meters keep their hearts as emoji where the terminal draws Images', async ($, on) => {
+  const { clock } = await startedWith($, on, { emoji: true }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(100)
+  expect(await ui.find({ type: 'Image', key: 'hearts' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '💗💗💗💗♡ ' })).toBeDefined()
 })
 
 test('/pokemon emoji swaps the meters for emoji in a wider panel, saves it, and swaps them back', async ($, on) => {
@@ -1780,7 +1813,7 @@ test('/pokemon size small halves the band, saves it, and large brings it back', 
   expect(saved.size).toBe('small')
   await clock.advance(100)
   // The terminal scales the Image, so it holds every full-size pixel, 4 wide and tall
-  const image = await ui.find({ type: 'Image' })
+  const image = await ui.find({ type: 'Image', key: 'pokemon' })
   expect(image.key).toBe('pokemon')
   expect(image.props.rows).toBe(Math.ceil(full.rows / 2))
   expect(image.props.columns).toBe(SMALL)
@@ -1795,7 +1828,7 @@ test('/pokemon size small halves the band, saves it, and large brings it back', 
   expect(swaps.length).toBeGreaterThan(0)
   expect(swaps.every((e) => e.key === 'pokemon' && e.source && e.columns === SMALL && e.rows === image.props.rows)).toBe(true)
   expect(swaps.some((e, i) => i > 0 && e.source.png === swaps[i - 1].source.png)).toBe(false)
-  expect(await ui.findAll({ type: 'Image' })).toHaveLength(1)
+  expect(await ui.findAll({ type: 'Image', key: 'pokemon' })).toHaveLength(1)
 
   const status = await $.command.run({ command: 'pokemon', args: 'size' })
   expect(status.text).toBe('The band is small. Sizes: small, large.')
@@ -1807,7 +1840,7 @@ test('/pokemon size small halves the band, saves it, and large brings it back', 
   expect(saved.size).toBe('large')
   await clock.advance(100)
   expect((await ui.find({ key: 'pokemon' })).props.columns).toBe(RASTER)
-  expect(await ui.find({ type: 'Image' })).toBeUndefined()
+  expect(await ui.find({ type: 'Image', key: 'pokemon' })).toBeUndefined()
 })
 
 // Start a session with the small size saved, each blit answered by answer
@@ -1893,7 +1926,7 @@ test('VS Code, macOS Terminal and iTerm2 builds whose Image swaps freeze draw th
   const env: Record<string, string> = {}
   on('ui.render', () => THEIRS)
   on('ui.blit', ($, e) => {
-    blits.push(e)
+    if (e.key === 'pokemon') blits.push(e)
     return { value: {} }
   })
   on('session.start', () => ({ cwd: '/work' }))
