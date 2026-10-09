@@ -2116,7 +2116,10 @@ export function register(on) {
     if (savedStats && typeof savedStats === 'object') stats = savedStats
     nowMs = await $.clock.now()
     ink = await themeInk($)
-    imagesDenied = freezesImages(await $.env.get('TERM_PROGRAM'), await $.env.get('TERM_PROGRAM_VERSION'))
+    // A refused env read leaves the band as it is on any other terminal
+    const program = await $.env.get('TERM_PROGRAM').catch(() => undefined)
+    const version = await $.env.get('TERM_PROGRAM_VERSION').catch(() => undefined)
+    imagesDenied = freezesImages(program, version)
     await beat($, await $.store.get('seenAt')).catch((err) => logOnce($, err))
     // Shown again, a parked mon's meters pick up where they stopped
     if (stats[mon]?.parked) {
