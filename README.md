@@ -188,11 +188,14 @@ minutes from when it first shows it before the clock runs, so a mon you come bac
 after a weekend is hungry but still yours to feed. Feeding or petting it before then
 stops the clock.
 
-A fainted mon lies slumped with X eyes in faded colors. It doesn't move, earn XP, sleep,
-or evolve, wild mons stay away, and a foe on stage flees. `/pokemon revive` takes it to a
-Pokémon Center. Nurse Joy walks in and heals it over 5 minutes of open time while it glows
-pink, then hops twice and walks back out. It stands up at 50% food and 30% happiness. You can switch to
-another mon meanwhile, and the fainted one stays fainted in your box.
+A fainted mon lies still with X eyes in faded colors while dizzy stars circle over its
+head. It doesn't move, earn XP, sleep, or evolve, wild mons stay away, and a foe on stage
+flees. `/pokemon revive` takes it to a Pokémon Center: it turns red and goes into its
+ball, and the band shows Nurse Joy, as she looks in FireRed and LeafGreen, behind her
+counter with the ball in the healing machine, flashing to its jingle. After 5 minutes of
+open time she bows, and the mon bursts back out of its ball at 50% food and 30%
+happiness. You can switch to another mon meanwhile, and the fainted one stays fainted
+in your box.
 
 Left fainted for 24 hours of open session time, it runs away. Its record stays in your
 box, marked "ran away", with its level, XP, and nickname, and the band shows your
@@ -391,6 +394,7 @@ node scripts/preview-sleep.mjs <mon>...          # awake and asleep frames in /t
 node scripts/preview-wild.mjs <mon> <foe>        # a battle in /tmp/<mon>-vs-<foe>.png
 node scripts/preview-wild.mjs <mon> <foe> --move ember   # one move at the foe
 node scripts/preview-wild.mjs <mon> <foe> --throw catch  # a ball that holds, or --throw fail
+node scripts/preview-heal.mjs <mon>              # a revive with Nurse Joy in /tmp/<mon>-heal.png
 node scripts/check-data.mjs                      # moves, evolutions, and sprites agree
 npx @biomejs/biome@2.5.15 ci --error-on-warnings .   # lint, same as CI
 claude plugin validate .
@@ -413,7 +417,7 @@ claude --plugin-dir .                            # live-reloading session
 | `hooks/zoom.js` | Shrinks the band to its size and to fit a short pane |
 | `hooks/png.js` | Encodes the small band's frames as PNGs for terminals that draw images |
 | `hooks/eyes.js` | Each mon's eyes on every frame, shut while it sleeps |
-| `hooks/faint.js` | A fainted mon's frame: X eyes, slumped, in faded colors |
+| `hooks/faint.js` | A fainted mon's frame, X eyes in faded colors, and the dizzy stars over it |
 | `hooks/joy.js` | Nurse Joy and her sparkles while a fainted mon heals |
 | `hooks/frames.js` | Generated pixel frames. Don't edit by hand |
 | `sprites/<mon>/*.gif` | Source GIFs, 32x32 |
