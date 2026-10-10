@@ -38,7 +38,7 @@ Then pick your partner with `/pokemon <mon>`.
 - ❗ **It tells you when Claude needs you.** A red "!" for questions, plan approvals, and permission prompts.
 - 💦 **It flinches when a tool fails.** A shake and a sweat drop, so you notice.
 - 📈 **It levels up as you ship.** Every answered turn earns XP, and mons evolve at their levels from the games.
-- 🫐 **It needs you too.** Feed it and pet it, or it gets hungry and lonely.
+- 🫐 **It needs you too.** Feed it and pet it, or it gets hungry and lonely. Leave it long enough and it faints, and then it runs away.
 - ⚡ **It fights.** 135 moves from gen 1, each with its own pixel animation.
 - 🌿 **Wild Pokémon show up.** Your work wears them down, and `/pokemon catch` fills your Pokédex.
 - 🎨 **All 151 gen 1 Pokémon**, each in default and shiny.
@@ -68,6 +68,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon <mon>` | Pick a mon, like `/pokemon charmander` |
 | `/pokemon pet` | Pet it |
 | `/pokemon feed` | Toss it a berry |
+| `/pokemon revive` | Take a fainted mon to a Pokémon Center |
 | `/pokemon attack [move]` | Use a random move, or a named one like `thunderbolt` |
 | `/pokemon evolve` | Evolve with a stone or a trade |
 | `/pokemon stats` | Level, XP, evolution, and meters |
@@ -95,8 +96,10 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon evolve` | Evolve with a stone or a trade. Also evolves a mon at its level with autoevolve off, and restarts an evolution you cancelled |
 | `/pokemon evolve <mon>` | Pick what Eevee becomes, like `/pokemon evolve jolteon` |
 | `/pokemon stop` | Cancel an evolution |
+| `/pokemon revive`, `/pokemon revive <mon>` | Take a fainted mon to a Pokémon Center. Nurse Joy heals it in 5 minutes, and it stands up at 50% food and 30% happiness |
+| `/pokemon nuzlocke` | Toggle nuzlocke (off by default, saved across sessions). On, a mon that faints is gone for good |
 | `/pokemon sleep` | Tuck the mon in, so its meters drain slower until Claude starts working in a session showing it. Run it again to wake it |
-| `/pokemon needs` | Toggle food and happiness (on by default) |
+| `/pokemon needs` | Toggle food and happiness (on by default). Off, the faint and runaway clocks stop too |
 | `/pokemon sync` | Toggle syncing the mon across sessions (off by default, saved across sessions). On, every open session switches to the mon picked last in any of them, fetched mons included. Off, each session keeps its own |
 | `/pokemon autoevolve` | Toggle level evolutions starting on their own once idle (on by default). Off, the mon waits for `/pokemon evolve` |
 | `/pokemon emoji` | Toggle emoji meters, 🍓 and 💗 instead of ● and ♥ (off by default, saved across sessions) |
@@ -109,7 +112,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon release <mon>` | Release a mon from your box. It starts over at its first level with fresh meters |
 | `/pokemon catch` | Throw a Poké Ball at the wild mon. The odds rise as its HP falls |
 | `/pokemon run` | Send the wild mon away |
-| `/pokemon dex` | Count the wild mons you've seen and caught, and list them in Pokédex order. ✦ marks a shiny catch |
+| `/pokemon dex` | Count the wild mons you've seen and caught, and list them in Pokédex order. ✦ marks a shiny catch, † a species lost in a nuzlocke, and the mons you lost are listed last |
 | `/pokemon dex <mon>` | Show one mon's Pokédex number, how rare it is, and whether you've seen or caught it |
 | Ctrl+X Ctrl+A | Collapse or expand the band (Claude Code's own binding) |
 
@@ -143,6 +146,7 @@ Then pick your partner with `/pokemon <mon>`.
 | 5 minutes with no activity | Falls asleep with pixel Zs | `prompt.edit`, `prompt.submit`, turns |
 | Food or happiness under 30% | Thinks of a berry (hungry) or a heart (lonely). Walks slower when hungry | |
 | Happiness at 80% or more | Hops for joy every 20 to 40 s | |
+| Both meters empty for 3 hours of open time | Faints, and runs away after 24 more unless you revive it | `$.clock`, the shared `stats` store key |
 
 Some organizations run a policy plugin that blocks `classic.*` events from user plugins.
 Under one, the "!" still shows for questions, plan approval, and the idle minute, but not
@@ -172,6 +176,43 @@ sessions showing the same one share them. Asleep with `/pokemon sleep`, food dra
 half speed and happiness at a quarter. A new mon starts at 80%. The meters scale the XP a
 turn earns, from half when both are empty to one and a half when both are full.
 `/pokemon needs` turns them off, and XP then ignores them.
+
+</details>
+
+<details>
+<summary>Fainting, running away, and nuzlocke</summary>
+
+A mon left with both meters empty for 3 hours of open session time faints. Time with
+Claude Code closed or the laptop asleep never counts, and each session gives the mon 10
+minutes from when it first shows it before the clock runs, so a mon you come back to
+after a weekend is hungry but still yours to feed. Feeding or petting it before then
+stops the clock.
+
+A fainted mon lies slumped with X eyes in faded colors. It doesn't move, earn XP, sleep,
+or evolve, wild mons stay away, and a foe on stage flees. `/pokemon revive` takes it to a
+Pokémon Center. Nurse Joy walks in and heals it over 5 minutes of open time while it glows
+pink, then hops twice and walks back out. It stands up at 50% food and 30% happiness. You can switch to
+another mon meanwhile, and the fainted one stays fainted in your box.
+
+Left fainted for 24 hours of open session time, it runs away. Its record stays in your
+box, marked "ran away", with its level, XP, and nickname, and the band shows your
+highest level mon instead, or a line saying it ran away. The first wild encounter at
+least 30 minutes later is that mon, at its own level and variant, and after that it's
+one encounter in four until you catch it. It's a tier tougher and breaks out of the ball
+more often, even worn out. Catching it brings it back with 50% food and 30% happiness.
+
+`/pokemon nuzlocke` makes fainting final. A mon that faints is lost: its level, XP, and
+meters are gone, it leaves your box, and the Pokédex marks its species with †. `/pokemon
+dex` lists the mons you lost with their level and the date. The species can only be
+raised again by catching a new one in the wild, which starts at its first level. A mon
+fainted already when you turn nuzlocke on is lost at the next check, unless it's being
+healed. Turning nuzlocke off brings no one back.
+
+| State | Starts after | Ends with |
+| --- | --- | --- |
+| Fainted | 3 h of open time at empty meters, past a session's first 10 min | `/pokemon revive`, 5 min |
+| Ran away | 24 h of open time fainted | Catching it in the wild, first encounter 30 min on, then one in four |
+| Lost (nuzlocke) | The moment it would faint | Catching a new one, from its first level |
 
 </details>
 
@@ -300,7 +341,8 @@ line keeps the middle of the line. The thought bubble, the Zs, and the berry
 aren't shrunk with the scene, as they'd break into specks: a shrunk band draws them from
 smaller art of its own: a smaller round bubble with 3 px icons and a pixel of room around
 them, 3 px Zs, and a 3 px berry.
-Below 4 rows it shows a line of text instead, like `Pikachu Lv 12 ●●●●○ ♥♥♥♥♡`.
+Below 4 rows it shows a line of text instead, like `Pikachu Lv 12 ●●●●○ ♥♥♥♥♡`, or
+`Abra Lv 35 fainted ○○○○○ ♡♡♡♡♡` for a fainted mon.
 
 </details>
 
@@ -371,6 +413,8 @@ claude --plugin-dir .                            # live-reloading session
 | `hooks/zoom.js` | Shrinks the band to its size and to fit a short pane |
 | `hooks/png.js` | Encodes the small band's frames as PNGs for terminals that draw images |
 | `hooks/eyes.js` | Each mon's eyes on every frame, shut while it sleeps |
+| `hooks/faint.js` | A fainted mon's frame: X eyes, slumped, in faded colors |
+| `hooks/joy.js` | Nurse Joy and her sparkles while a fainted mon heals |
 | `hooks/frames.js` | Generated pixel frames. Don't edit by hand |
 | `sprites/<mon>/*.gif` | Source GIFs, 32x32 |
 | `scripts/` | Frame builder, attack, sleep, and battle previewers on a stand-in host, data check |

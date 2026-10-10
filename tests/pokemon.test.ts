@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { closedEyes, eyesOf, keptEyesOf, pupilsOf } from '../hooks/eyes.js'
+import { faintedPalette } from '../hooks/faint.js'
 import { SPRITES } from '../hooks/frames.js'
+import { JOY_COLORS } from '../hooks/joy.js'
 import { encodePng } from '../hooks/png.js'
 import { zoomedPixel } from '../hooks/zoom.js'
 
@@ -2223,7 +2225,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('env.get', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|size|sync|autoevolve|pet|feed|sleep|attack|catch|run|moves|evolve|stop|stats|box|dex|nickname|release|new|list]')
+  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|size|sync|autoevolve|nuzlocke|pet|feed|sleep|revive|attack|catch|run|moves|evolve|stop|stats|box|dex|nickname|release|new|list]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
@@ -3195,4 +3197,238 @@ test('a subagent\'s tool calls don\'t check the encounter gate', async ($, on) =
   const { read } = await working($, on, saved)
   await read('sub1')
   expect(saved.wildAt).toEqual({ at: HOUR - MINUTE, by: 'other' })
+})
+
+const EMPTY = { value: 0, at: 0 }
+const FAINTED = 'Abra has fainted. /pokemon revive takes it to a Pokémon Center.'
+const run = async ($, args: string) => (await $.command.run({ command: 'pokemon', args })).text
+
+// The mock clock runs at most 10000 waits per advance, so minutes of ticks and beats go
+// in steps of three minutes
+async function advanceMinutes(clock, minutes: number) {
+  for (let left = minutes; left > 0; left -= 3) await clock.advance(Math.min(left, 3) * MINUTE)
+}
+
+test('a mon faints after three hours of open time at empty meters, and closed time and a session\'s first ten minutes don\'t count', { timeoutMs: 60000 }, async ($, on) => {
+  const toasts = toastsOf(on)
+  // A minute short of three hours at empty meters, then four hours with Claude Code closed
+  const saved: Record<string, any> = { stats: { abra: { food: EMPTY, happiness: EMPTY, starving: { ms: 3 * HOUR - MINUTE, at: 0 } } }, seenAt: 0 }
+  const { clock } = await startedWith($, on, saved, 4 * HOUR)
+  await advanceMinutes(clock, 9)
+  expect(await run($, '')).not.toContain('fainted')
+  expect(saved.stats.abra.starving.ms).toBe(3 * HOUR - MINUTE)
+  await advanceMinutes(clock, 3)
+  expect(await run($, '')).toMatch(/^Showing default Abra Lv\. 5, fainted, /)
+  expect(toasts).toContain('Abra fainted! /pokemon revive takes it to a Pokémon Center.')
+  // It faints a minute past the grace, so the runaway clock has counted the rest
+  expect(saved.stats.abra.fainted).toEqual({ ms: expect.any(Number), at: expect.any(Number) })
+  expect(saved.stats.abra.fainted.ms).toBeLessThanOrEqual(2 * MINUTE)
+  expect(saved.stats.abra.starving).toBeUndefined()
+})
+
+test('feeding a mon at empty meters resets its faint clock', async ($, on) => {
+  const saved: Record<string, any> = { stats: { abra: { food: EMPTY, happiness: EMPTY, starving: { ms: 2 * HOUR, at: 0 } } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  await run($, 'feed')
+  await clock.advance(150 * 40 + 2000)
+  expect(saved.stats.abra.starving).toEqual({ ms: 2 * HOUR, at: expect.any(Number) })
+  await clock.advance(10 * 1000)
+  expect(saved.stats.abra.starving).toBeUndefined()
+  expect(await run($, '')).toContain('food 20%, happiness 5%')
+})
+
+test('a fainted mon lies still in its fainted colors, earns no XP, and pet, feed, attack, sleep, evolve, catch, and wild wait for a revive', async ($, on) => {
+  on('turn.complete', () => ({ text: '' }))
+  const saved: Record<string, any> = { debug: true, stats: { abra: { xp: 900, food: EMPTY, happiness: EMPTY, fainted: { ms: 0, at: 0 } } } }
+  const { clock, blits } = await startedWith($, on, saved, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(100)
+  for (const args of ['pet', 'feed', 'attack', 'attack confusion', 'sleep', 'evolve', 'catch', 'wild pidgey']) expect(await run($, args)).toBe(FAINTED)
+  expect(await run($, 'attack list')).toMatch(/^Abra knows /)
+  expect(await run($, 'stats')).toContain(' ' + FAINTED + ' ')
+  await $.turn.complete(ANSWERED)
+  expect(saved.stats.abra.xp).toBe(900)
+  const cells = await shown(ui, blits)
+  const fainted = faintedPalette(SPRITES.abra.variants.default.palette).map((hex) => parseInt(hex.slice(1), 16))
+  expect(fainted.some((c) => paints(cells, c))).toBe(true)
+  // It holds still, so every frame sent is the one on screen
+  const sent = blits.length
+  await clock.advance(5000)
+  expect(blits.slice(sent).every((frame) => frame === cells)).toBe(true)
+})
+
+test('a wild mon flees when the shown mon faints, here or in another session', async ($, on) => {
+  const saved: Record<string, any> = {}
+  const { clock, toasts } = await inBattle($, on, saved)
+  saved.stats = { abra: { food: EMPTY, happiness: EMPTY, fainted: { ms: 0, at: 0 } } }
+  await clock.advance(2000)
+  expect(toasts).toContain('Abra fainted! /pokemon revive takes it to a Pokémon Center.')
+  expect(toasts).toContain('Wild Pidgey fled!')
+})
+
+test('/pokemon revive heals a fainted mon in five minutes, standing it up at half food and some happiness', { timeoutMs: 60000 }, async ($, on) => {
+  const toasts = toastsOf(on)
+  const saved: Record<string, any> = { stats: { abra: { food: EMPTY, happiness: EMPTY, fainted: { ms: 0, at: 0 } }, pikachu: { xp: 1000, parked: true } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  const resting = 'Abra is resting at the Pokémon Center. It\'s back in 5 min.'
+  expect(await run($, 'revive pikachu')).toBe('Pikachu hasn\'t fainted.')
+  expect(await run($, 'revive')).toBe('You take Abra to a Pokémon Center. It\'ll be back on its feet in 5 minutes.')
+  expect(saved.stats.abra.healing).toEqual({ from: 0, until: 5 * MINUTE })
+  expect(await run($, 'revive')).toBe(resting)
+  expect(await run($, 'feed')).toBe(resting)
+  expect(await run($, '')).toContain('Abra Lv. 5, healing, ')
+  await clock.advance(5 * MINUTE + 1000)
+  expect(toasts).toContain('Abra is healed and back on its feet!')
+  expect(await run($, '')).toContain('food 50%, happiness 30%')
+  expect(saved.stats.abra.fainted).toBeUndefined()
+  expect(saved.stats.abra.healing).toBeUndefined()
+  expect(await run($, 'revive')).toBe('Abra hasn\'t fainted.')
+})
+
+test('Nurse Joy comes to heal a fainted mon and is gone once it\'s back on its feet', { timeoutMs: 60000 }, async ($, on) => {
+  const saved: Record<string, any> = { wander: false, stats: { abra: { food: EMPTY, happiness: EMPTY, fainted: { ms: 0, at: 0 } } } }
+  const { clock, blits } = await startedWith($, on, saved, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(100)
+  expect(paints(await shown(ui, blits), JOY_COLORS.P)).toBe(false)
+  await run($, 'revive')
+  await clock.advance(5000)
+  expect(paints(await shown(ui, blits), JOY_COLORS.P)).toBe(true)
+  await clock.advance(5 * MINUTE)
+  expect(paints(await shown(ui, blits), JOY_COLORS.P)).toBe(false)
+})
+
+test('the strip grows to fit Nurse Joy beside a mon too wide to leave her room, and shrinks back after', { timeoutMs: 60000 }, async ($, on) => {
+  const saved: Record<string, any> = { mon: 'snorlax', stats: { snorlax: { food: EMPTY, happiness: EMPTY, fainted: { ms: 0, at: 0 } } } }
+  const { clock, blits } = await startedWith($, on, saved, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(100)
+  const before = (await ui.find({ key: 'pokemon' })).props.columns
+  await run($, 'revive')
+  await clock.advance(5000)
+  expect((await ui.find({ key: 'pokemon' })).props.columns).toBeGreaterThan(before)
+  expect(paints(await shown(ui, blits), JOY_COLORS.P)).toBe(true)
+  await clock.advance(5 * MINUTE)
+  expect((await ui.find({ key: 'pokemon' })).props.columns).toBe(before)
+})
+
+test('/pokemon needs off stops the faint clock, and turning it back on doesn\'t revive a fainted mon', { timeoutMs: 60000 }, async ($, on) => {
+  const saved: Record<string, any> = {
+    needs: false,
+    stats: { abra: { food: EMPTY, happiness: EMPTY, starving: { ms: 3 * HOUR - MINUTE, at: HOUR } }, pidgey: { fainted: { ms: 0, at: 0 }, parked: true } },
+  }
+  const { clock } = await startedWith($, on, saved, HOUR)
+  await advanceMinutes(clock, 12)
+  expect(await run($, '')).not.toContain('fainted')
+  expect(saved.stats.abra.starving.ms).toBe(3 * HOUR - MINUTE)
+  await run($, 'pidgey')
+  expect(await run($, 'needs')).toBe('Needs are on. Keep Pidgey fed and happy. It\'s still fainted, so /pokemon revive takes it to a Pokémon Center.')
+  expect(await run($, '')).toContain('Pidgey Lv. 5, fainted, ')
+})
+
+test('a mon left fainted for a day of open time runs away, and the band shows the next mon in the box', { timeoutMs: 60000 }, async ($, on) => {
+  const toasts = toastsOf(on)
+  const abra = { xp: 35 ** 3, nickname: 'Spoon', food: EMPTY, happiness: EMPTY, fainted: { ms: 24 * HOUR - MINUTE, at: 0 } }
+  const saved: Record<string, any> = { stats: { abra, pikachu: { xp: 10 ** 3, parked: true } }, seenAt: 0 }
+  const { clock } = await startedWith($, on, saved, 4 * HOUR)
+  await advanceMinutes(clock, 12)
+  expect(toasts).toContain('Spoon ran away! It may turn up in the wild. Pikachu takes its place.')
+  expect(saved.mon).toBe('pikachu')
+  expect(saved.stats.abra).toEqual({
+    xp: 35 ** 3, nickname: 'Spoon', food: expect.any(Object), happiness: expect.any(Object), ranAway: { at: expect.any(Number), variant: 'default' }, parked: true,
+  })
+  expect(await run($, 'abra')).toBe('Spoon ran away. It may turn up in the wild.')
+  expect(await run($, 'box')).toBe('2 mons in your box:\nSpoon (Abra), Lv. 35 (ran away)\nPikachu, Lv. 10 ●●●●○ ♥♥♥♥♡ (active)')
+})
+
+test('with no other mon in the box, the band says the mon ran away', async ($, on) => {
+  await startedWith($, on, { stats: { abra: { xp: 35 ** 3, ranAway: { at: 0, variant: 'default' } } } }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ key: 'pokemon' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'Abra ran away. It may turn up in the wild.' })).toBeDefined()
+  expect(await run($, 'feed')).toBe('Abra ran away. It may turn up in the wild. /pokemon <mon> picks another.')
+})
+
+test('a mon that ran away in another session leaves this band too', async ($, on) => {
+  const saved: Record<string, any> = { stats: { abra: { xp: 900 }, pikachu: { xp: 1000, parked: true } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  saved.stats = { ...saved.stats, abra: { xp: 900, ranAway: { at: 0, variant: 'default' }, parked: true } }
+  await clock.advance(2000)
+  expect(await run($, '')).toMatch(/^Showing default Pikachu /)
+})
+
+test('a mon that ran away is the first wild mon half an hour on, and catching it brings its record back', { timeoutMs: 120000 }, async ($, on) => {
+  const abra = { xp: 35 ** 3, nickname: 'Spoon', parked: true, ranAway: { at: HOUR - 31 * MINUTE, variant: 'default' } }
+  const saved: Record<string, any> = { mon: 'pikachu', wildAt: { at: HOUR - MINUTE, by: 'other' }, stats: { pikachu: { xp: 10 ** 3 }, abra } }
+  const { clock, toasts, read } = await working($, on, saved)
+  await read()
+  await clock.advance(30000)
+  await read()
+  await clock.advance(10000)
+  expect(toasts).toContain('A wild Abra (Lv. 35) appeared! It looks a lot like Spoon.')
+  expect(saved.stats.abra.ranAway.met).toBe(true)
+  const worn = 'Wild Abra is worn out! Throw a ball with /pokemon catch.'
+  for (let k = 0; k < 12 && !toasts.includes(worn); k++) {
+    await read()
+    await clock.advance(9000)
+  }
+  expect(toasts).toContain(worn)
+  // Even worn out, it breaks free half the time
+  const back = 'Gotcha! Spoon came back to you.'
+  for (let k = 0; k < 16 && !toasts.includes(back); k++) {
+    await run($, 'catch')
+    await clock.advance(5000)
+  }
+  expect(toasts).toContain(back)
+  expect(saved.stats.abra).toEqual({ xp: 35 ** 3, nickname: 'Spoon', parked: true, food: { value: 50, at: expect.any(Number) }, happiness: { value: 30, at: expect.any(Number) } })
+  expect(saved.dex.abra.caught).toEqual(expect.any(Number))
+})
+
+test('/pokemon nuzlocke makes a faint final: the mon is lost, marked † in the dex, and its species locked', async ($, on) => {
+  const toasts = toastsOf(on)
+  const abra = { xp: 35 ** 3, nickname: 'Spoon', food: EMPTY, happiness: EMPTY, fainted: { ms: 0, at: 0 } }
+  const saved: Record<string, any> = { stats: { abra }, dex: { abra: { seen: 1, caught: 2 } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await run($, 'nuzlocke')).toBe(
+    'Nuzlocke is on. A mon that faints is gone for good, with no revive and no coming back. Keep them fed and happy. Spoon has fainted already, so it\'s gone for good in a moment.',
+  )
+  expect(saved.nuzlocke).toBe(true)
+  await clock.advance(11000)
+  expect(toasts).toContain('Spoon fainted for good. Rest well.')
+  expect(saved.stats.abra).toEqual({ dead: { at: expect.any(Number) } })
+  expect(saved.graveyard).toEqual([{ mon: 'abra', level: 35, nickname: 'Spoon', at: expect.any(Number) }])
+  expect(await ui.find({ type: 'Text', text: 'Abra fainted for good. Rest well.' })).toBeDefined()
+  expect(await run($, 'abra')).toBe('Abra is gone. Catch a new one in the wild to raise it again.')
+  expect(await run($, 'revive')).toBe('Abra fainted for good. Rest well. /pokemon <mon> picks another.')
+  expect(await run($, 'dex')).toBe('Pokédex: seen 1, caught 1 of 151.\n#063 Abra ◓ †\nRest well: Spoon (Abra), Lv. 35, on 1970-01-01.')
+  expect(await run($, 'release abra')).toBe('Abra isn\'t in your box.')
+  expect(await run($, 'nuzlocke')).toBe('Nuzlocke is off. A mon that faints can be revived again. The ones you lost stay gone.')
+  expect(await run($, 'abra')).toBe('Abra is gone. Catch a new one in the wild to raise it again.')
+})
+
+test('with nuzlocke on, a mon is lost where it would faint, and the band shows the next one', { timeoutMs: 60000 }, async ($, on) => {
+  const toasts = toastsOf(on)
+  const abra = { food: EMPTY, happiness: EMPTY, starving: { ms: 3 * HOUR - MINUTE, at: 0 } }
+  const saved: Record<string, any> = { nuzlocke: true, stats: { abra, pikachu: { xp: 10 ** 3, parked: true } }, seenAt: 0 }
+  const { clock } = await startedWith($, on, saved, 4 * HOUR)
+  await advanceMinutes(clock, 12)
+  expect(toasts).toContain('Abra fainted for good. Rest well. Pikachu takes its place.')
+  expect(saved.stats.abra).toEqual({ dead: { at: expect.any(Number) } })
+  expect(saved.mon).toBe('pikachu')
+  expect(await run($, 'box')).toBe('1 mon in your box:\nPikachu, Lv. 10 ●●●●○ ♥♥♥♥♡ (active)\nOnly Pikachu so far. /pokemon <mon> picks another.')
+})
+
+test('a species lost in a nuzlocke comes back only by catching a new one, at its first level', async ($, on) => {
+  const saved: Record<string, any> = { nuzlocke: true, stats: { pidgey: { dead: { at: 0 } } }, graveyard: [{ mon: 'pidgey', level: 30, at: 0 }], dex: { pidgey: { seen: 0, caught: 0 } } }
+  const { clock, toasts } = await inBattle($, on, saved)
+  expect(await run($, 'pidgey')).toBe('Pidgey is gone. Catch a new one in the wild to raise it again.')
+  expect(await run($, 'dex')).toBe('Pokédex: seen 1, caught 1 of 151.\n#016 Pidgey ◓ †\nRest well: Pidgey, Lv. 30, on 1970-01-01.')
+  await wearOut($, clock, toasts)
+  await run($, 'catch')
+  await clock.advance(6000)
+  expect(toasts).toContain('Gotcha! Pidgey was caught! It joined your box.')
+  expect(saved.stats.pidgey).toEqual({ xp: 5 ** 3, parked: true })
+  expect(await run($, 'dex')).toBe('Pokédex: seen 1, caught 1 of 151.\n#016 Pidgey ◓\nRest well: Pidgey, Lv. 30, on 1970-01-01.')
+  expect(await run($, 'pidgey')).toBe('Now showing default Pidgey.')
 })
