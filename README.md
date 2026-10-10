@@ -190,8 +190,8 @@ stops the clock.
 
 A fainted mon lies slumped with X eyes in faded colors. It doesn't move, earn XP, sleep,
 or evolve, wild mons stay away, and a foe on stage flees. `/pokemon revive` takes it to a
-Pokémon Center: Nurse Joy walks in, heals it over 5 minutes of open time while it glows
-pink, and waves goodbye. It stands up at 50% food and 30% happiness. You can switch to
+Pokémon Center. Nurse Joy walks in and heals it over 5 minutes of open time while it glows
+pink, then hops twice and walks back out. It stands up at 50% food and 30% happiness. You can switch to
 another mon meanwhile, and the fainted one stays fainted in your box.
 
 Left fainted for 24 hours of open session time, it runs away. Its record stays in your
