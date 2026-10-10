@@ -52,7 +52,8 @@ export const chargedWild = (wild) =>
   wild?.phase === 'battle' || wild?.phase === 'throw' ? { ...wild, charge: Math.min(MAX_CHARGE, wild.charge + 1) } : wild
 
 // A worn out foe is a sure catch. Otherwise the odds grow from 0 at full HP to its tier's best.
-const catchChance = (wild) => (wild.hp === 0 ? 1 : TIERS[wild.tier].catch * (1 - wild.hp / wild.maxHp))
+// A foe with a catchScale, like a mon that ran away from you, is that much harder to hold.
+const catchChance = (wild) => (wild.hp === 0 ? 1 : TIERS[wild.tier].catch * (1 - wild.hp / wild.maxHp)) * (wild.catchScale ?? 1)
 
 // The times the ball rocks before it clicks shut, or before the foe breaks out
 const shakesFor = (chance, caught) => (caught ? 3 : Math.min(3, Math.floor(chance * 4)))

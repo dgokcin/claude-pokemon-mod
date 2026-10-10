@@ -1,8 +1,10 @@
 import { aimsAhead, attackFrame, attackPose, prepareAttack } from './attacks.js'
 import { CUSTOM_PREFIX, fetchMon, monsOfGen } from './custom.js'
-import { DEX, dexKey, dexNumber, isCaught, mergedDexEntry, pickWild, tierOf } from './dex.js'
+import { DEX, TIERS, dexKey, dexNumber, isCaught, mergedDexEntry, pickWild, tierOf } from './dex.js'
 import { evolutionsOf, levelEvolutionOf, startLevel } from './evolutions.js'
 import { closedEyes, eyesOf, keptEyesOf, pupilsOf } from './eyes.js'
+import { faintedPalette, faintedRows } from './faint.js'
+import { HEAL_PINK, healGlow, JOY_ROWS, joySpan, joyStamps, sparkleStamps } from './joy.js'
 import { SPRITES } from './frames.js'
 import { MAX_LEVEL, careOf, levelAt, turnXp, xpAt } from './levels.js'
 import { MOVES, movesOf } from './moves.js'
@@ -32,6 +34,8 @@ import { SIZES, zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 // Now and then a wild mon walks in from the left, and the strip widens to fit both.
 // Each open session shows its own mon, starting with the one last picked anywhere. XP,
 // meters, nickname, and sleep belong to the mon, so sessions showing the same mon share them.
+// Left with empty meters for hours it faints until /pokemon revive heals it, and left fainted it runs away.
+// With /pokemon nuzlocke on, a mon that faints is gone for good.
 // The mon, hearts, berries, bubbles, balls, and Zs are pixels in one Raster, two per cell.
 // The desktop app has no Raster, so there the same pixels are one Svg.
 
@@ -167,6 +171,13 @@ let autoEvolve = true
 let syncOn = false
 // The saved pick this session last read or wrote, so a sync follows only a newer pick
 let seenPick = null
+// With /pokemon nuzlocke on, a mon that faints is gone for good
+let nuzlockeOn = false
+// When each mon was first shown in this session, for the grace before its faint clock runs
+const firstShown = new Map()
+// Set while this session checks the shown mon's faint clock or finishes its heal
+let checkingNeglect = false
+let finishingHeal = false
 let evolving = null
 let evolveDue = null
 let joyHopAt = null
@@ -302,8 +313,10 @@ function foeAs(name) {
 const foeName = () => foeAs(wild.mon)
 
 const rowsOf = (name) => HEAD_ROWS + spriteRows(name)
-// While a mon evolves or transforms, the band is tall enough for both shapes
+// While a mon evolves or transforms, the band is tall enough for both shapes, and while
+// it heals, for Nurse Joy
 const bandRows = () => {
+  if (isHealing(mon)) return Math.max(rowsOf(mon), JOY_ROWS)
   if (evolving) return Math.max(rowsOf(evolving.from), rowsOf(evolving.into))
   if (attack?.move.effect === 'transform') return Math.max(rowsOf(mon), rowsOf(attack.swap))
   if (isOnStage(wild)) return Math.max(rowsOf(mon), rowsOf(foeName()))
@@ -341,7 +354,18 @@ const isTuckedIn = () => stats[mon]?.asleep === true
 // Five quiet minutes make it drowsy, in this session only
 const isDrowsy = () => (tick - lastActive) * TICK_MS >= SLEEP_AFTER_MS
 // Tucked in or drowsy, it walks home first and falls asleep once it gets there
-const isAsleep = () => !working && (isTuckedIn() || isDrowsy()) && isHome()
+const isAsleep = () => !working && (isTuckedIn() || isDrowsy()) && isHome() && !isDown()
+
+// A mon that ran away keeps its record, marked ranAway, and a dead one keeps only its
+// dead mark, so the species stays locked until a new one is caught. A fainted one keeps
+// fainted until it's healed, with healing set while it's at the Pokémon Center.
+const isDead = (name) => Boolean(stats[name]?.dead)
+const hasRunAway = (name) => Boolean(stats[name]?.ranAway) && !isDead(name)
+const isGone = (name) => isDead(name) || hasRunAway(name)
+const isFainted = (name) => Boolean(stats[name]?.fainted) && !isGone(name)
+const isHealing = (name) => isFainted(name) && typeof stats[name].healing?.until === 'number'
+// The shown mon is fainted or gone, so it stays still and nothing it does runs
+const isDown = () => isFainted(mon) || isGone(mon)
 
 // How far right of the sprite's left edge a berry lies when it sits under the middle of
 // the body, which can be off the middle of the frame. An eating mon stands unmirrored.
@@ -365,7 +389,7 @@ function idleTarget() {
 }
 
 function isWalking() {
-  if (attack || isAlerted() || isFlinching()) return false
+  if (attack || isAlerted() || isFlinching() || isDown()) return false
   return food ? idleTarget() !== x : (working && !wild) || idleTarget() !== x
 }
 
@@ -506,7 +530,7 @@ function toolIcon() {
 
 // What the bubble beside the head shows, if anything
 function bubbleIcon() {
-  if (attack) return null
+  if (attack || isDown()) return null
   if (isAlerted()) return ALERT_ICON
   if (tick < yumUntil) return { rows: STAR, small: SMALL_STAR, colors: { s: ink.star } }
   if (skillInUse()) return toolIcon()
@@ -593,7 +617,7 @@ function sleepStamps(body, { glyphs, drift: reach } = { glyphs: [SMALL_Z, BIG_Z]
 // A tool call that failed makes the mon wince: it shakes in place, then holds still
 // with a sweat drop. Another failure starts it over, and a move or evolution ignores it.
 function flinch() {
-  if (attack) return
+  if (attack || isDown()) return
   markActive()
   flinchStart = tick
 }
@@ -772,7 +796,7 @@ function stepAttack() {
 
 // A due evolution waits until the mon is idle, awake, not calling you over, done with
 // any move or berry, and rid of any wild mon
-const isFree = () => !working && !attack && !food && !wild && !isAsleep() && !isAlerted()
+const isFree = () => !working && !attack && !food && !wild && !isAsleep() && !isAlerted() && !isDown()
 
 // Petting, feeding, sleeping, attacking, releasing, and switching mons wait while it evolves
 const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack', 'release', 'catch', 'new']
@@ -780,6 +804,9 @@ const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack', 'release', 'catch
 // so nothing changes the record the berry or pet is about to fill
 const SHOWS_ONLY = ['', 'list', 'stats', 'box', 'moves', 'dex']
 const waitsForCare = (asked) => (food !== null || isPetted()) && !SHOWS_ONLY.includes(asked.split(' ')[0]) && asked !== 'attack list'
+// What a fainted mon can't do, and what a mon that's gone can't do either
+const DOWN_WAITS = ['pet', 'feed', 'attack', 'catch', 'evolve', 'sleep']
+const GONE_WAITS = [...DOWN_WAITS, ...VARIANTS, 'nickname']
 const waitsForEvolution = (asked) => evolving !== null && (MONS.includes(asked) || WAITS_FOR_EVOLUTION.includes(asked.split(' ')[0]))
 
 // Play the evolve effect with the evolved mon swapped in, in a band grown to fit both
@@ -938,6 +965,44 @@ function sleepingFrame(shown, view) {
   return sleepingFrames.get(rows)
 }
 
+// A fainted mon's first idle frame with X eyes, slumped, cached per frame. Eyes drawn as
+// lines get their X too.
+const faintedFrames = new Map()
+function faintedFrame(shown) {
+  const sheet = SPRITES[shown].variants[variant]
+  const rows = sheet.idle[0].rows
+  if (!faintedFrames.has(rows)) {
+    const open = eyesOf(shown, variant, 'idle', 0)
+    const boxes = open?.length ? open : keptEyesOf(shown, variant, 'idle', 0).boxes
+    faintedFrames.set(rows, faintedRows(rows, sheet.palette, boxes))
+  }
+  return faintedFrames.get(rows)
+}
+
+// The fainted palette as letter to 0xRRGGBB, per mon and variant
+const FAINTED_COLORS = {}
+function faintedColors(shown) {
+  FAINTED_COLORS[shown] ??= {}
+  FAINTED_COLORS[shown][variant] ??= Object.fromEntries(
+    faintedPalette(SPRITES[shown].variants[variant].palette).map((hex, i) => [String.fromCharCode(97 + i), parseInt(hex.slice(1), 16)]),
+  )
+  return FAINTED_COLORS[shown][variant]
+}
+
+// At the Pokémon Center Nurse Joy comes to the fainted mon, and it glows pink with the
+// healing machine's jingle while sparkles rise off it, as in joy.js
+const mixed = (c, to, k) => {
+  const at = (shift) => Math.round(((c >> shift) & 255) * (1 - k) + ((to >> shift) & 255) * k)
+  return (at(16) << 16) | (at(8) << 8) | at(0)
+}
+
+// Joy stands left of the mon, so a band with no room there gets only the glow and sparkles
+function nurseStamps(heal, ground, monLeft) {
+  const opts = { ground, monLeft, columns: stripColumns() }
+  const standing = joyStamps({ startTick: tick - 10000, endTick: tick + 10000 }, tick, opts)[0]
+  return standing && standing.x >= -margin ? joyStamps(heal, tick, opts) : []
+}
+
 const NO_POSE = { view: 'front', stride: false, swap: false, asleep: false }
 // Backing up for a move: side on and striding, facing the target
 const BACKING_POSE = { ...NO_POSE, view: 'side', stride: true }
@@ -1037,11 +1102,14 @@ function ghostPixel(ghosts, pixel, box, width, flip, baseX, baseTop) {
 
 const idleBox = (name, v) => boxOf(SPRITES[name].variants[v].idle[0].rows, COLORS[name][v])
 
+// The home mon's columns from its opaque left edge to the strip's right
+const homeSpan = () => SPRITES[mon].width + Math.max(0, HOME_GAP - IDLE_RIGHT_GAP[mon][variant]) - idleBox(mon, variant).left
+
 // The strip columns a battle with this foe takes, beside the home mon at the strip's right
-function battleNeeds(foe, foeVariant) {
-  const homeSpan = SPRITES[mon].width + Math.max(0, HOME_GAP - IDLE_RIGHT_GAP[mon][variant]) - idleBox(mon, variant).left
-  return battleColumns(homeSpan, idleBox(foe, foeVariant))
-}
+const battleNeeds = (foe, foeVariant) => battleColumns(homeSpan(), idleBox(foe, foeVariant))
+
+// The strip columns a heal takes, with Joy standing left of the home mon
+const healNeeds = () => homeSpan() + joySpan()
 
 // The scene columns left of the panel in a band bodyColumns wide. The small band shows
 // the scene at its scale, so each band column holds more than one of the scene's.
@@ -1053,10 +1121,12 @@ function sceneRoom(bodyColumns) {
 const battleFits = (foe, foeVariant) => battleNeeds(foeAs(foe), foeVariant) <= sceneRoom(lastBodyColumns)
 
 // The strip's width in a band bodyColumns wide, grown on the left while a foe is on stage
+// or Joy is at the mon's side
 function stripTarget(bodyColumns) {
   const room = sceneRoom(bodyColumns)
   const strip = Math.max(SPRITES[mon].width, Math.min(STRIP_COLUMNS, room))
-  return isOnStage(wild) ? Math.max(strip, Math.min(battleNeeds(foeName(), wild.variant), room)) : strip
+  if (isOnStage(wild)) return Math.max(strip, Math.min(battleNeeds(foeName(), wild.variant), room))
+  return isHealing(mon) ? Math.max(strip, Math.min(healNeeds(), room)) : strip
 }
 
 // The foe's spot facing the home mon, and the column just out of sight past the scene's left edge
@@ -1195,16 +1265,18 @@ async function markDex($, key, patch) {
   await $.store.set('dex', dex)
 }
 
-// Move the visit on a tick. Asleep, the home mon can't fight, so the foe leaves.
+// Move the visit on a tick. Asleep or fainted, the home mon can't fight, so the foe leaves.
 function stepWildPhase($) {
   if (!wild) return
-  if (wild.phase !== 'fleeing' && (isTuckedIn() || isAsleep())) return fleeWild($)
+  if (wild.phase !== 'fleeing' && (isTuckedIn() || isAsleep() || isDown())) return fleeWild($)
   const result = stepWild(wild, { tick, atHome: isHome() && !attack, at: wildAt(), stayTicks: WILD_STAY_MS / TICK_MS })
   if (result.event === 'timeout') fleeWild($)
   else wild = result.wild
   if (result.event === 'arrived') {
-    $.ui.toast('A ' + wildName() + ' (Lv. ' + wild.level + ') appeared!')
+    const yours = wild.runaway ? ' It looks a lot like ' + (stats[wild.mon]?.nickname ?? 'your ' + displayName(wild.mon)) + '.' : ''
+    $.ui.toast('A ' + wildName() + ' (Lv. ' + wild.level + ') appeared!' + yours)
     markDex($, wild.key, { seen: nowMs }).catch((err) => logOnce($, err))
+    if (wild.runaway) metRunaway($, wild.mon).catch((err) => logOnce($, err))
   } else if (result.event === 'caught') {
     caughtFoe($, wild).catch((err) => logOnce($, err))
   } else if (result.event === 'brokefree') {
@@ -1217,13 +1289,23 @@ function stepWildPhase($) {
 const BROKE_FREE = ['Oh no! It broke free!', 'Aww! It appeared to be caught!', 'Aww! It appeared to be caught!', 'Argh! So close!']
 
 // Mark the catch in the Pokédex, and put the species in the box at its first level with
-// fresh meters, parked unless it's the mon on show. A species already there stays as it is.
+// fresh meters, parked unless it's the mon on show. A species already there stays as it is,
+// unless it ran away, when its record comes back, or died, when a fresh one takes its place.
 async function caughtFoe($, caught) {
   const species = caught.mon
   const name = displayName(species)
   nowMs = await $.clock.now()
   await markDex($, caught.key, { caught: nowMs, ...(caught.variant === 'shiny' ? { shiny: true } : {}) })
   await freshen($, [species])
+  if (hasRunAway(species)) {
+    const { ranAway, fainted, healing, starving, ...record } = stats[species]
+    stats[species] = { ...record, ...revivedMeters(), ...(species === mon ? {} : { parked: true }) }
+    await saveRecords($, [species])
+    $.ui.toast('Gotcha! ' + nameOf(species) + ' came back to you.')
+    $.ui.invalidate('ui.render')
+    return
+  }
+  if (isDead(species)) delete stats[species]
   if (stats[species]) {
     $.ui.toast('Gotcha! ' + name + ' was caught! ' + name + ' is already in your box, so it\'s marked in your Pokédex.')
     return
@@ -1287,24 +1369,58 @@ async function maybeSpawn($) {
   lastSpawnCheck = tick
   const pick = claimedPick
   claimedPick = null
-  if (!turnRunning || wild || isTuckedIn() || isAsleep()) return
+  if (!turnRunning || wild || isTuckedIn() || isAsleep() || isDown()) return
   const now = await $.clock.now()
   const gate = await $.store.get('wildAt')
   if (pick) {
-    if (gate?.by === sessionToken && !wild && battleFits(pick.mon, pick.variant)) wild = newWild(pick, Math.floor(Math.random() * 0x7fffffff))
+    if (gate?.by === sessionToken && !wild && !isDown() && battleFits(pick.mon, pick.variant)) wild = newWild(pick, Math.floor(Math.random() * 0x7fffffff))
     return
   }
   if (typeof gate?.at !== 'number') return $.store.set('wildAt', { at: now + FIRST_WILD_MS, by: sessionToken })
   if (now < gate.at) return
-  const next = pickWild(Math.random)
+  const next = (await runawayPick($, now)) ?? pickWild(Math.random)
   if (!battleFits(next.mon, next.variant)) return
   const wait = WILD_EVERY_MS[0] + Math.random() * (WILD_EVERY_MS[1] - WILD_EVERY_MS[0])
   await $.store.set('wildAt', { at: now + Math.round(wait), by: sessionToken })
   claimedPick = next
 }
 
+// A mon that ran away turns up again at its own level and variant, a tier harder and
+// harder still to hold in a ball
+const TIER_ORDER = Object.keys(TIERS)
+const RUNAWAY_CATCH = 0.5
+const RUNAWAY_BACK_MS = 30 * 60 * 1000
+const RUNAWAY_ODDS = 0.25
+function runawayFoe(name) {
+  const tier = TIER_ORDER[Math.min(TIER_ORDER.length - 1, TIER_ORDER.indexOf(tierOf(name)) + 1)]
+  const variant = VARIANTS.includes(stats[name].ranAway.variant) ? stats[name].ranAway.variant : 'default'
+  return { mon: name, variant, key: dexKey(name), tier, level: levelOf(name), runaway: true, catchScale: RUNAWAY_CATCH }
+}
+
+// The first encounter at least RUNAWAY_BACK_MS after a mon ran away is that mon, and after
+// that it's one in RUNAWAY_ODDS until it's caught. Null for a wild mon as usual.
+async function runawayPick($, now) {
+  const saved = await $.store.get('stats')
+  if (!saved || typeof saved !== 'object') return null
+  const back = Object.keys(saved).filter((name) => MONS.includes(name) && saved[name]?.ranAway && !saved[name].dead && now - saved[name].ranAway.at >= RUNAWAY_BACK_MS)
+  if (back.length === 0) return null
+  await freshen($, back)
+  const unmet = back.find((name) => hasRunAway(name) && !stats[name].ranAway.met)
+  if (unmet) return runawayFoe(unmet)
+  const met = back.filter(hasRunAway)
+  return met.length > 0 && Math.random() < RUNAWAY_ODDS ? runawayFoe(met[Math.floor(Math.random() * met.length)]) : null
+}
+
+// Once a mon that ran away has shown up, it's met, and later encounters are it only by chance
+async function metRunaway($, name) {
+  await freshen($, [name])
+  if (!hasRunAway(name) || stats[name].ranAway.met) return
+  stats[name] = { ...stats[name], ranAway: { ...stats[name].ranAway, met: true } }
+  await saveRecords($, [name])
+}
+
 // The hidden debug spawn, /pokemon wild [<mon>] [shiny]. Null when debug is off, so it
-// reads as an unknown option.
+// reads as an unknown option. A mon that ran away comes as itself.
 async function wildCommand($, rest) {
   if ((await $.store.get('debug')) !== true) return null
   const words = rest.split(/\s+/).filter(Boolean)
@@ -1312,7 +1428,10 @@ async function wildCommand($, rest) {
   if (name && !MONS.includes(name)) return { text: 'Unknown mon "' + name + '". See /pokemon list for every mon.' }
   if (wild) return { text: 'A wild ' + displayName(wild.mon) + ' is already here.' }
   if (isTuckedIn()) return { text: nameOf(mon) + ' is asleep.' }
-  const pick = name ? { mon: name, variant: 'default', key: dexKey(name), tier: tierOf(name), level: startLevel(name) } : pickWild(Math.random)
+  if (isDown()) return downReply()
+  if (name) await freshen($, [name])
+  const own = name && hasRunAway(name) ? runawayFoe(name) : null
+  const pick = own ?? (name ? { mon: name, variant: 'default', key: dexKey(name), tier: tierOf(name), level: startLevel(name) } : pickWild(Math.random))
   if (words.includes('shiny')) pick.variant = 'shiny'
   if (!battleFits(pick.mon, pick.variant)) return { text: 'The band is too narrow for a wild ' + displayName(pick.mon) + '. Widen the pane and try again.' }
   wild = newWild(pick, Math.floor(Math.random() * 0x7fffffff))
@@ -1334,17 +1453,22 @@ function frameNow(full = false) {
   const sideOn = attack ? pose.view === 'side' : walking
   const anim = sideOn ? sheet.walk : sheet.idle
   const asleep = isAsleep() || pose.asleep
+  // A fainted mon lies still in one slumped frame, in its fainted palette
+  const down = isDown()
+  const healing = down && isHealing(mon)
+  const heal = healing ? healTicks() : null
   let frame = frameAt(anim, tick * TICK_MS)
-  if (asleep) frame = sleepingFrame(shown, sideOn ? 'walk' : 'idle')
+  if (down) frame = faintedFrame(shown)
+  else if (asleep) frame = sleepingFrame(shown, sideOn ? 'walk' : 'idle')
   else if (attack && sideOn) frame = anim[pose.stride ? Math.floor(age / STRIDE_TICKS) % anim.length : 0].rows
-  const colors = COLORS[shown][variant]
+  const colors = down ? faintedColors(shown) : COLORS[shown][variant]
   // Facing out, the sprite stays unmirrored like the idle mon, so it doesn't jump when the move ends
   const flip = attack ? sideOn && attack.side === 'left' : walking && facing === 'left'
   const rows = bandRows()
   // A swapped-in mon stands on the same ground and stays inside the strip. An evolving
   // mon at home keeps to the right edge in either shape.
   // A sleeping mon holds one frame, lowered so its feet rest where the idle ones do
-  const drop = asleep ? gapOf(frame) - gapUnder(sheet.idle) : sideOn ? WALK_DROP[shown][variant] : 0
+  const drop = asleep || down ? gapOf(frame) - gapUnder(sheet.idle) : sideOn ? WALK_DROP[shown][variant] : 0
   const baseTop = rows * 2 - SPRITES[shown].height + drop
   const baseX = Math.max(0, Math.min(evolving && isHome() ? homeXOf(shown) : x, columns - sprite.width))
   const pixelOf = (mirror) => (px, py) => {
@@ -1354,11 +1478,14 @@ function frameNow(full = false) {
     return colors[row[mirror ? sprite.width - 1 - px : px]] ?? null
   }
   const pixel = pixelOf(flip)
-  const effect = playing ? attackFrame(attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel)) : NO_EFFECT
+  const glow = healing ? healGlow(heal, tick) : 0
+  const effect = playing
+    ? attackFrame(attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel))
+    : glow > 0 ? { ...NO_EFFECT, shade: (cx, py, c) => mixed(c, HEAL_PINK, glow) } : NO_EFFECT
   const overlay = overlayOf(effect.dots, rows)
   const underlay = overlayOf(effect.under, rows)
   const jolt = flinchJolt(baseX, sprite.width)
-  const hopUp = !attack && !isShaking() && isHopping() && Math.floor((tick - hopStart) / 3) % 2 === 0
+  const hopUp = !attack && !down && !isShaking() && isHopping() && Math.floor((tick - hopStart) / 3) % 2 === 0
   const top = baseTop + effect.dy - (hopUp ? 2 : 0)
   const left = baseX + effect.dx + jolt
   const mirrored = flip !== effect.flipX
@@ -1388,9 +1515,11 @@ function frameNow(full = false) {
     ...heartStamps(),
     ...(isWincing() ? sweatStamps(head, top + box.top, bubbleSide) : []),
     ...(asleep && !shrunk ? sleepStamps(sleeper) : []),
+    ...(healing && !shrunk ? sparkleStamps(heal, tick, sleeper, { light: ink === INKS.light }) : []),
   ]
   const balls = partyStamps(party, tick, { columns, ground: rows * 2 - 1, label: ink.party })
-  const under = [...ball.under, ...(onStage ? [] : bubble), ...balls]
+  const nurse = healing ? nurseStamps(heal, rows * 2 - 1, sleeper.left) : []
+  const under = [...nurse, ...ball.under, ...(onStage ? [] : bubble), ...balls]
   const pixels = rows * 2
   const width = stripColumns()
   const colorAt = (cx, py) => {
@@ -1426,7 +1555,8 @@ function frameNow(full = false) {
   const shaken = (cx, py) => (cx - shakeX < 0 || cx - shakeX >= scene ? null : colorAt(cx - shakeX - margin, py - shakeY))
   // The eyes kept through the shrink: the mon's, unless a move hides or reshapes it, and the foe's
   const reshaped = effect.hidden || effect.sx !== 1 || effect.sy !== 1 || effect.skew || effect.flipY
-  const own = shrunk && !reshaped ? pupilsAt(shown, variant, sideOn ? 'walk' : 'idle', frame, { left, top, mirrored }) : []
+  // A fainted frame is slumped, so its eyes no longer sit where the frame's eye boxes say
+  const own = shrunk && !reshaped && !down ? pupilsAt(shown, variant, sideOn ? 'walk' : 'idle', frame, { left, top, mirrored }) : []
   const pupils = [...own, ...(shrunk ? (foe?.pupils ?? []) : [])].map(([px, py, c, eye]) => [px + margin + shakeX, py + shakeY, c, eye && [eye[0] + margin + shakeX, eye[1] + shakeY, ...eye.slice(2)]])
   const zoomed = zoomedPixel(shaken, { columns: scene, pixels, scale: zoom.scale, pupils })
   // The head's zoomed columns, from the first its left column covers to the last its right one does
@@ -1439,7 +1569,9 @@ function frameNow(full = false) {
   const zoomedX = (c) => zoomedAt(c + margin + shakeX, zoom.scale)
   const zoomedY = (py) => zoomedAt(py + shakeY, zoom.scale)
   const zoomedSleeper = { left: zoomedX(sleeper.left), right: zoomedX(sleeper.right), top: zoomedY(sleeper.top), bottom: zoomedY(sleeper.bottom) }
-  const front = shrunk ? [...(asleep ? sleepStamps(zoomedSleeper, SMALL_ZS) : []), ...(food ? [smallBerryStamp(zoom.scale, margin + shakeX)] : [])] : []
+  const front = shrunk
+    ? [...(asleep ? sleepStamps(zoomedSleeper, SMALL_ZS) : []), ...(healing ? sparkleStamps(heal, tick, zoomedSleeper, { light: ink === INKS.light }) : []), ...(food ? [smallBerryStamp(zoom.scale, margin + shakeX)] : [])]
+    : []
   const stampsAt = (stamps) => (tx, ty) => {
     for (const s of stamps) {
       const b = stampPixel(s, tx, ty)
@@ -1637,6 +1769,7 @@ function step() {
   hearts = hearts.filter((heart) => tick - heart.born <= (heart.y + heart.rows.length) * HEART_RISE_TICKS)
   party = prunedParty(party, tick)
   stepIdleAlert()
+  if (isDown()) return
   if (attack) return stepAttack()
   // Calling you over, it stays awake and stands still, even with a berry to eat
   if (isAlerted()) return markActive()
@@ -1766,7 +1899,7 @@ async function payOwed($, gains) {
 // starving when it comes back. XP is the shown mon's alone already. A mon parked while
 // another session still shows it goes back to draining at that session's next sync.
 function park(name) {
-  if (!stats[name] || stats[name].parked) return
+  if (!stats[name] || stats[name].parked || isDead(name)) return
   const record = { ...stats[name], parked: true }
   for (const key of Object.keys(STATS)) if (record[key]) record[key] = { value: statNow(name, key), at: nowMs }
   stats[name] = record
@@ -1910,6 +2043,9 @@ async function followPick($) {
   if (evolving || attack || evolved?.[mon] === pick) return false
   seenPick = pick
   if (pick === mon || !MONS.includes(pick)) return false
+  // A mon gone from the box can't be shown, so this session keeps its own
+  await freshen($, [pick])
+  if (isGone(pick)) return false
   await switchTo($, pick, { save: false })
   sentCells = null
   $.ui.invalidate('ui.render')
@@ -1921,6 +2057,7 @@ async function followPick($) {
 // in stepWake.
 async function syncSessions($) {
   syncOn = (await $.store.get('sync')) === true
+  nuzlockeOn = (await $.store.get('nuzlocke')) === true
   if (syncOn && (await followPick($))) return
   const writes = statWrites
   const saved = await $.store.get('stats')
@@ -1941,16 +2078,24 @@ async function syncSessions($) {
     }
     return
   }
+  // Run away or lost in another session, it leaves this band too
+  if (!isGone(mon) && (saved[mon].ranAway || saved[mon].dead)) {
+    stats[mon] = saved[mon]
+    await leaveBand($, { save: false })
+    return
+  }
   // A session that switched away from the shown mon parked it. It's still on show here, so
   // its record goes back unparked and drains on from where the park left it.
   const { parked, ...theirs } = saved[mon]
-  if (parked) {
+  if (parked && !isGone(mon)) {
     await freshen($, [mon])
     await saveRecords($, [mon])
   } else if (JSON.stringify(theirs) === JSON.stringify(stats[mon])) {
     return
   } else {
+    const wasFainted = isFainted(mon)
     stats[mon] = theirs
+    if (!wasFainted && isFainted(mon)) $.ui.toast(nameOf(mon) + ' fainted! /pokemon revive takes it to a Pokémon Center.')
   }
   $.ui.invalidate('ui.render')
 }
@@ -2022,6 +2167,7 @@ const levelLine = () => (levelOf(mon) < MAX_LEVEL ? 'Lv ' : 'Lv') + levelOf(mon)
 async function gainXp($, durationMs) {
   nowMs = await $.clock.now()
   await freshen($, [mon])
+  if (isDown()) return
   const was = levelOf(mon)
   const care = needsOn ? careOf(statNow(mon, 'food'), statNow(mon, 'happiness')) : 1
   stats[mon] = { ...stats[mon], xp: xpOf(mon) + turnXp({ level: was, durationMs, care }) }
@@ -2039,12 +2185,13 @@ async function gainXp($, durationMs) {
 // The mon its level lets it become, while it isn't evolving already
 function readyToEvolve() {
   const evolution = levelEvolutionOf(mon)
-  return evolution && levelOf(mon) >= evolution.level && !evolving ? evolution.into : null
+  return evolution && levelOf(mon) >= evolution.level && !evolving && !isDown() ? evolution.into : null
 }
 
 // Like "Pikachu, Lv. 12, 1820 XP (377 to Lv. 13). Can become Raichu with a Thunder Stone.
 // Food 50%, happiness 67%. 12 pets, 5 feeds."
 async function statsText($) {
+  if (isGone(mon)) return goneLine(mon) + ' /pokemon <mon> picks another.'
   const level = levelOf(mon)
   const next = level < MAX_LEVEL ? ' (' + (xpAt(level + 1) - xpOf(mon)) + ' to Lv. ' + (level + 1) + ')' : ''
   const evolutions = evolutionsOf(mon)
@@ -2057,19 +2204,21 @@ async function statsText($) {
     : ' Needs are off.'
   const pets = Number((await $.store.get('pets')) ?? 0)
   const feeds = Number((await $.store.get('feeds')) ?? 0)
-  return fullNameOf(mon) + ', Lv. ' + level + ', ' + xpOf(mon) + ' XP' + next + '.' + becomes + meters + ' ' + pets + ' pets, ' + feeds + ' feeds.'
+  const state = isFainted(mon) ? ' ' + downReply().text : ''
+  return fullNameOf(mon) + ', Lv. ' + level + ', ' + xpOf(mon) + ' XP' + next + '.' + becomes + meters + state + ' ' + pets + ' pets, ' + feeds + ' feeds.'
 }
 
 // Every mon with a saved record, highest level first, one a line, like
 // "Charizard ◓, Lv. 36 ●●●○○ ♥♥♥♡♡ (active)", where ◓ marks a species caught in the wild
 function boxText(dex = {}) {
-  const raised = Object.keys(stats).filter((name) => MONS.includes(name) && stats[name] && typeof stats[name] === 'object')
+  const raised = Object.keys(stats).filter((name) => MONS.includes(name) && stats[name] && typeof stats[name] === 'object' && !isDead(name))
   if (raised.length === 0) return 'Your box is empty. Pet or feed ' + displayName(mon) + ', or finish a turn, to start raising it.'
   raised.sort((a, b) => levelOf(b) - levelOf(a) || displayName(a).localeCompare(displayName(b)) || a.localeCompare(b))
   const lines = raised.map((name) => {
-    const meters = needsOn ? ' ' + iconsFor('food', name).trimEnd() + ' ' + iconsFor('happiness', name).trimEnd() : ''
+    const meters = needsOn && !hasRunAway(name) ? ' ' + iconsFor('food', name).trimEnd() + ' ' + iconsFor('happiness', name).trimEnd() : ''
     const caught = isCaught(dex[dexKey(name)]) ? ' ◓' : ''
-    return fullNameOf(name) + caught + ', Lv. ' + levelOf(name) + meters + (name === mon ? ' (active)' : '')
+    const tags = [name === mon && !hasRunAway(name) ? 'active' : null, conditionOf(name)].filter(Boolean)
+    return fullNameOf(name) + caught + ', Lv. ' + levelOf(name) + meters + (tags.length > 0 ? ' (' + tags.join(', ') + ')' : '')
   })
   const count = raised.length + (raised.length === 1 ? ' mon' : ' mons')
   const alone = raised.length === 1 && raised[0] === mon ? '\nOnly ' + nameOf(mon) + ' so far. /pokemon <mon> picks another.' : ''
@@ -2078,10 +2227,26 @@ function boxText(dex = {}) {
 
 const dexLabel = (key) => '#' + String(dexNumber(key)).padStart(3, '0') + ' ' + displayName(key)
 
+// † marks a species lost for good until a new one is caught, and a mon that ran away says so
+const LOST_MARK = ' †'
+function dexMark(key) {
+  const own = Object.keys(stats).filter((name) => dexKey(name) === key)
+  if (own.some(isDead)) return LOST_MARK
+  return own.some(hasRunAway) ? ' (ran away)' : ''
+}
+
+// The graveyard as saved, a list of { mon, level, nickname?, at }, like
+// "Rest well: Spoon (Abra), Lv. 35, on 2026-10-10."
+function graveyardText(graveyard) {
+  if (!Array.isArray(graveyard) || graveyard.length === 0) return ''
+  const lines = graveyard.map((g) => (g.nickname ? g.nickname + ' (' + displayName(g.mon) + ')' : displayName(g.mon)) + ', Lv. ' + g.level + ', on ' + new Date(g.at).toISOString().slice(0, 10))
+  return '\nRest well: ' + lines.join('; ') + '.'
+}
+
 // The Pokédex as saved, { [dexKey]: { seen, caught?, shiny? } }, where shiny marks a shiny
 // catch. The whole dex is a count, the caught mons in dex order, and the ones only seen.
 // One mon is its number, tier, and status.
-function dexText(dex, wanted) {
+function dexText(dex, wanted, graveyard) {
   const entries = DEX.filter((key) => dex[key] && typeof dex[key] === 'object')
   if (wanted) {
     if (!MONS.includes(wanted)) return 'Unknown mon "' + wanted + '". See /pokemon list for every mon.'
@@ -2089,16 +2254,19 @@ function dexText(dex, wanted) {
     if (!DEX.includes(key)) return displayName(wanted) + " isn't in the Pokédex. Only gen 1 mons appear in the wild."
     const entry = entries.includes(key) ? dex[key] : null
     const status = isCaught(entry) ? 'Caught ◓' + (entry.shiny ? ' ✦' : '') + '.' : entry ? 'Seen, not caught yet.' : 'Not seen yet.'
-    return dexLabel(key) + ', ' + tierOf(key) + '. ' + status
+    const mark = dexMark(key)
+    const lost = mark === LOST_MARK ? ' Gone for good †. Catch a new one to raise it again.' : mark ? ' Ran away. It may turn up in the wild.' : ''
+    return dexLabel(key) + ', ' + tierOf(key) + '. ' + status + lost
   }
   const caught = entries.filter((key) => isCaught(dex[key]))
   const seen = entries.filter((key) => !isCaught(dex[key]))
   const shiny = caught.filter((key) => dex[key].shiny).length
   const head = 'Pokédex: seen ' + entries.length + ', caught ' + caught.length + ' of ' + DEX.length + (shiny ? ' (' + shiny + ' shiny)' : '') + '.'
-  if (entries.length === 0) return head + ' No wild mons met yet.'
-  const lines = caught.map((key) => dexLabel(key) + ' ◓' + (dex[key].shiny ? ' ✦' : ''))
-  if (seen.length > 0) lines.push('Seen: ' + seen.map(displayName).join(', '))
-  return head + '\n' + lines.join('\n')
+  const rest = graveyardText(graveyard)
+  if (entries.length === 0) return head + ' No wild mons met yet.' + rest
+  const lines = caught.map((key) => dexLabel(key) + ' ◓' + (dex[key].shiny ? ' ✦' : '') + dexMark(key))
+  if (seen.length > 0) lines.push('Seen: ' + seen.map((key) => displayName(key) + dexMark(key)).join(', '))
+  return head + '\n' + lines.join('\n') + rest
 }
 
 // Drop a mon's record from the box, so it starts over at its first level with fresh
@@ -2106,7 +2274,7 @@ function dexText(dex, wanted) {
 function releaseCommand(wanted) {
   if (!wanted) return { text: 'Name the mon to release, like /pokemon release ' + mon + '. /pokemon box lists yours.' }
   if (!MONS.includes(wanted)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
-  if (!stats[wanted]) return { text: displayName(wanted) + ' isn\'t in your box.' }
+  if (!stats[wanted] || isDead(wanted)) return { text: displayName(wanted) + ' isn\'t in your box.' }
   const name = nameOf(wanted)
   delete stats[wanted]
   if (wanted !== mon) return { text: 'You release ' + name + '. Bye-bye, ' + name + '!' }
@@ -2152,7 +2320,7 @@ function hopForJoy() {
   }
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'emoji', 'size', 'sync', 'autoevolve', 'pet', 'feed', 'sleep', 'attack', 'catch', 'run', 'moves', 'evolve', 'stop', 'stats', 'box', 'dex', 'nickname', 'release', 'new', 'list']
+const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'emoji', 'size', 'sync', 'autoevolve', 'nuzlocke', 'pet', 'feed', 'sleep', 'revive', 'attack', 'catch', 'run', 'moves', 'evolve', 'stop', 'stats', 'box', 'dex', 'nickname', 'release', 'new', 'list']
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
@@ -2296,7 +2464,13 @@ async function slowMeters($, offMs) {
     }
     stats[name] = record
   }
-  await saveRecords($, draining)
+  // A heal takes open time too, so its end moves on by all of the time off
+  const healing = Object.keys(stats).filter((name) => typeof stats[name].healing?.until === 'number')
+  for (const name of healing) {
+    const { from, until } = stats[name].healing
+    stats[name] = { ...stats[name], healing: { from: (from ?? until - HEAL_MS) + offMs, until: until + offMs } }
+  }
+  await saveRecords($, [...new Set([...draining, ...healing])])
 }
 
 // At session start, since is the last mark any session left. While running, it's this
@@ -2312,6 +2486,214 @@ async function beat($, since) {
 async function resyncMeters($) {
   nowMs = await $.clock.now()
   $.ui.invalidate('ui.render')
+}
+
+// A mon faints once food and happiness have both sat empty for FAINT_AFTER_MS of open
+// session time, kept in its record as starving = { ms, at }. Each check adds the time since
+// the last one by any session, when that's under COUNTED_GAP_MS, so time with every session
+// closed or the laptop asleep never counts. A session holds the clock for FAINT_GRACE_MS
+// after it first shows the mon. Left fainted for RUNAWAY_AFTER_MS, counted the same way in
+// fainted = { ms, at }, it runs away. With needs off, both clocks stop.
+const FAINT_AFTER_MS = 3 * 3600 * 1000
+const RUNAWAY_AFTER_MS = 24 * 3600 * 1000
+const FAINT_GRACE_MS = 10 * 60 * 1000
+const COUNTED_GAP_MS = OFF_AFTER_MS
+const HEAL_MS = 5 * 60 * 1000
+const REVIVED = { food: 50, happiness: 30 }
+
+const revivedMeters = () => ({ food: { value: REVIVED.food, at: nowMs }, happiness: { value: REVIVED.happiness, at: nowMs } })
+
+const conditionOf = (name) => (hasRunAway(name) ? 'ran away' : isHealing(name) ? 'healing' : isFainted(name) ? 'fainted' : null)
+
+const goneLine = (name) => (isDead(name) ? displayName(name) + ' fainted for good. Rest well.' : nameOf(name) + ' ran away. It may turn up in the wild.')
+
+// What a command the shown mon can't do while it's down says instead
+function downReply() {
+  const name = nameOf(mon)
+  if (isGone(mon)) return { text: goneLine(mon) + ' /pokemon <mon> picks another.' }
+  if (isHealing(mon)) {
+    const minutes = Math.max(1, Math.ceil((stats[mon].healing.until - nowMs) / 60000))
+    return { text: name + ' is resting at the Pokémon Center. It\'s back in ' + minutes + ' min.' }
+  }
+  return { text: name + ' has fainted. /pokemon revive takes it to a Pokémon Center.' }
+}
+
+// The heal in this session's ticks, from its saved times, so a session started midway
+// joins it where it's at
+function healTicks() {
+  const { from, until } = stats[mon].healing
+  const start = Math.min(from ?? until - HEAL_MS, until)
+  return { startTick: tick - Math.max(0, Math.round((nowMs - start) / TICK_MS)), endTick: tick + Math.round((until - nowMs) / TICK_MS) }
+}
+
+// The mon on show ran away or died, so the band shows the next one in the box: the
+// highest level one still standing, else a fainted one. With none, the band is a line of
+// text. Returns the mon it shows next, if any.
+async function leaveBand($, { save = true } = {}) {
+  const gone = mon
+  const next = Object.keys(stats)
+    .filter((name) => name !== gone && MONS.includes(name) && stats[name] && typeof stats[name] === 'object' && !isGone(name))
+    .sort((a, b) => isFainted(a) - isFainted(b) || levelOf(b) - levelOf(a) || a.localeCompare(b))[0]
+  attack = null
+  food = null
+  evolving = null
+  evolveDue = null
+  if (wild) fleeWild($, true)
+  if (next) await switchTo($, next, { save })
+  sentCells = null
+  $.ui.invalidate('ui.render')
+  return next ?? null
+}
+
+async function faintMon($) {
+  const { starving, asleep, ...record } = stats[mon]
+  stats[mon] = { ...record, food: { value: 0, at: nowMs }, happiness: { value: 0, at: nowMs }, fainted: { ms: 0, at: nowMs } }
+  await saveRecords($, [mon])
+  $.ui.toast(nameOf(mon) + ' fainted! /pokemon revive takes it to a Pokémon Center.')
+  $.ui.invalidate('ui.render')
+}
+
+// The record stays, marked with when it left and the variant it was shown in, for its
+// comeback in the wild
+async function runAway($) {
+  const name = nameOf(mon)
+  const { fainted, healing, starving, asleep, ...record } = stats[mon]
+  stats[mon] = { ...record, ranAway: { at: nowMs, variant } }
+  await saveRecords($, [mon])
+  const next = await leaveBand($)
+  $.ui.toast(name + ' ran away! It may turn up in the wild.' + (next ? ' ' + nameOf(next) + ' takes its place.' : ''))
+}
+
+// Under nuzlocke a fainted mon is lost. Its record goes for a dead mark that locks the
+// species until a new one is caught, and the graveyard keeps who it was.
+async function loseMon($, name) {
+  const shownName = nameOf(name)
+  const grave = { mon: name, level: levelOf(name), at: nowMs, ...(stats[name]?.nickname ? { nickname: stats[name].nickname } : {}) }
+  const graveyard = await $.store.get('graveyard')
+  await $.store.set('graveyard', [...(Array.isArray(graveyard) ? graveyard : []), grave])
+  stats[name] = { dead: { at: nowMs } }
+  await saveRecords($, [name])
+  const next = name === mon ? await leaveBand($) : null
+  $.ui.toast(shownName + ' fainted for good. Rest well.' + (next ? ' ' + nameOf(next) + ' takes its place.' : ''))
+}
+
+// With nuzlocke on, every fainted mon in the box is lost, except one already being healed
+async function loseFainted($) {
+  const saved = await $.store.get('stats')
+  if (!saved || typeof saved !== 'object') return
+  const names = Object.keys(saved).filter((name) => saved[name]?.fainted && !saved[name].healing && !saved[name].dead && !saved[name].ranAway)
+  if (names.length === 0) return
+  await freshen($, names)
+  for (const name of names) if (isFainted(name) && !isHealing(name)) await loseMon($, name)
+}
+
+// Move the shown mon's faint clock or runaway clock on, as often as the beat
+async function checkNeglect($) {
+  if (checkingNeglect) return
+  checkingNeglect = true
+  try {
+    nowMs = await $.clock.now()
+    if (nuzlockeOn) await loseFainted($)
+    await freshen($, [mon])
+    const record = stats[mon]
+    if (!needsOn || !record || isGone(mon) || isHealing(mon)) return
+    const now = nowMs
+    const counts = now - (firstShown.get(mon) ?? now) >= FAINT_GRACE_MS
+    const added = (clock) => (counts && clock && now - clock.at <= COUNTED_GAP_MS ? Math.max(0, now - clock.at) : 0)
+    if (isFainted(mon)) {
+      const ms = (record.fainted.ms ?? 0) + added(record.fainted)
+      if (ms >= RUNAWAY_AFTER_MS) return await runAway($)
+      stats[mon] = { ...record, fainted: { ms, at: now } }
+      return await saveRecords($, [mon])
+    }
+    if (statNow(mon, 'food') > 0 || statNow(mon, 'happiness') > 0) {
+      if (!record.starving) return
+      const { starving, ...rest } = record
+      stats[mon] = rest
+      return await saveRecords($, [mon])
+    }
+    const ms = (record.starving?.ms ?? 0) + added(record.starving)
+    if (ms >= FAINT_AFTER_MS) return await (nuzlockeOn ? loseMon($, mon) : faintMon($))
+    stats[mon] = { ...record, starving: { ms, at: now } }
+    await saveRecords($, [mon])
+  } finally {
+    checkingNeglect = false
+  }
+}
+
+// A heal that's over stands the mon up with some food and happiness, and a fresh faint clock
+function settleHeal(name) {
+  if (!isHealing(name) || nowMs < stats[name].healing.until) return false
+  const { fainted, healing, starving, ...record } = stats[name]
+  stats[name] = { ...record, ...revivedMeters() }
+  return true
+}
+
+async function finishHeal($) {
+  finishingHeal = true
+  try {
+    nowMs = await $.clock.now()
+    await freshen($, [mon])
+    const healed = settleHeal(mon)
+    if (healed) await saveRecords($, [mon])
+    if (healed || !isFainted(mon)) {
+      markActive()
+      hopStart = tick
+      $.ui.toast(nameOf(mon) + ' is healed and back on its feet!')
+      $.ui.invalidate('ui.render')
+    }
+  } finally {
+    finishingHeal = false
+  }
+}
+
+// Stop whatever the shown mon was doing once it's down, here or in another session
+function stepDown($) {
+  if (!isDown()) return
+  if (isHealing(mon) && !finishingHeal && nowMs >= stats[mon].healing.until) finishHeal($).catch((err) => logOnce($, err))
+  attack = null
+  evolving = null
+  evolveDue = null
+  food = null
+}
+
+// /pokemon revive [<mon>] takes a fainted mon to a Pokémon Center for HEAL_MS
+async function reviveCommand($, wanted) {
+  const name = wanted || mon
+  if (!MONS.includes(name)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
+  await freshen($, [name])
+  if (name === mon && isDown()) {
+    if (isGone(mon) || isHealing(mon)) return downReply()
+  } else if (isDead(name)) {
+    return { text: displayName(name) + ' is gone.' }
+  } else if (hasRunAway(name)) {
+    return { text: goneLine(name) }
+  }
+  const shown = nameOf(name)
+  if (!isFainted(name)) return { text: shown + ' hasn\'t fainted.' }
+  if (isHealing(name)) return { text: shown + ' is already at the Pokémon Center.' }
+  if (nuzlockeOn) return { text: 'Nuzlocke is on, so ' + shown + ' can\'t be revived.' }
+  stats[name] = { ...stats[name], healing: { from: nowMs, until: nowMs + HEAL_MS } }
+  await saveRecords($, [name])
+  // Joy comes to the mon at home, where the strip grows to fit her
+  if (name === mon) x = homeX()
+  $.ui.invalidate('ui.render')
+  return { text: 'You take ' + shown + ' to a Pokémon Center. It\'ll be back on its feet in ' + HEAL_MS / 60000 + ' minutes.' }
+}
+
+// Joins items as "A", "A and B", or "A, B, and C"
+const andList = (items) => (items.length < 3 ? items.join(' and ') : items.slice(0, -1).join(', ') + ', and ' + items.at(-1))
+
+async function nuzlockeCommand($) {
+  nuzlockeOn = !nuzlockeOn
+  await $.store.set('nuzlocke', nuzlockeOn)
+  if (!nuzlockeOn) return { text: 'Nuzlocke is off. A mon that faints can be revived again. The ones you lost stay gone.' }
+  const saved = await $.store.get('stats')
+  if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
+  const doomed = Object.keys(stats).filter((name) => MONS.includes(name) && isFainted(name) && !isHealing(name))
+  const fate = doomed.length === 1 ? ' has fainted already, so it\'s gone for good in a moment.' : ' have fainted already, so they\'re gone for good in a moment.'
+  const warning = doomed.length > 0 ? ' ' + andList(doomed.map(nameOf)) + fate : ''
+  return { text: 'Nuzlocke is on. A mon that faints is gone for good, with no revive and no coming back. Keep them fed and happy.' + warning }
 }
 
 // A broken frame goes to the debug log, each distinct message once
@@ -2346,6 +2728,8 @@ async function switchTo($, asked, { save = true } = {}) {
   const left = mon
   nowMs = await $.clock.now()
   await freshen($, [left, asked])
+  settleHeal(asked)
+  if (!firstShown.has(asked)) firstShown.set(asked, nowMs)
   if (asked !== left && (stats[left] || stats[asked])) {
     park(left)
     unpark(asked)
@@ -2417,6 +2801,7 @@ export function register(on) {
     if (MONS.includes(savedMon)) mon = savedMon
     seenPick = savedMon ?? null
     syncOn = (await $.store.get('sync')) === true
+    nuzlockeOn = (await $.store.get('nuzlocke')) === true
     forgetOldKeys($).catch((err) => logOnce($, err))
     const savedVariant = await $.store.get('variant')
     if (VARIANTS.includes(savedVariant)) variant = savedVariant
@@ -2429,6 +2814,7 @@ export function register(on) {
     const savedStats = await $.store.get('stats')
     if (savedStats && typeof savedStats === 'object') stats = savedStats
     nowMs = await $.clock.now()
+    firstShown.set(mon, nowMs)
     ink = await themeInk($)
     // A refused env read leaves the band as it is on any other terminal
     const program = await $.env.get('TERM_PROGRAM').catch(() => undefined)
@@ -2438,12 +2824,16 @@ export function register(on) {
     imageWait = IMAGE_WAIT_TICKS[0]
     await beat($, await $.store.get('seenAt')).catch((err) => logOnce($, err))
     // Shown again, a parked mon's meters pick up where they stopped
-    if (stats[mon]?.parked) {
+    if (stats[mon]?.parked && !isGone(mon)) {
       unpark(mon)
       await saveStats($, [mon]).catch((err) => logOnce($, err))
     }
+    // The mon last picked ran away or was lost, so the session starts with the next one
+    if (isGone(mon)) await leaveBand($).catch((err) => logOnce($, err))
+    await checkNeglect($).catch((err) => logOnce($, err))
     $.clock.every(TICK_MS, () => {
       try {
+        stepDown($)
         step()
         stepEvolution($)
         stepWildPhase($)
@@ -2462,7 +2852,7 @@ export function register(on) {
         if (tick % STAT_REDRAW_TICKS === 0) resyncMeters($).catch((err) => logOnce($, err))
         if (tick % SYNC_TICKS === 0) syncSessions($).catch((err) => logOnce($, err))
         if (tick % PARTY_SYNC_TICKS === 0) syncParty($).catch((err) => logOnce($, err))
-        if (tick % BEAT_TICKS === 0) beat($, lastBeat).catch((err) => logOnce($, err))
+        if (tick % BEAT_TICKS === 0) beat($, lastBeat).then(() => checkNeglect($)).catch((err) => logOnce($, err))
         if (bandId !== null && bandSurface === 'terminal') blitFrame($)
         if (bandId !== null && bandSurface === 'desktop' && tick % DESKTOP_FRAME_TICKS === 0) redrawSvg($)
       } catch (err) {
@@ -2493,7 +2883,17 @@ export function register(on) {
     nowMs = await $.clock.now()
     if (waitsForEvolution(asked)) return { text: nameOf(mon) + ' is evolving! /pokemon stop cancels it.' }
     if (waitsForCare(asked)) return { text: nameOf(mon) + (food ? ' is busy eating.' : ' is enjoying the pets.') + ' Try again in a moment.' }
+    const verb = asked.split(' ')[0]
+    const blocked = DOWN_WAITS.includes(verb) || (isGone(mon) && GONE_WAITS.includes(verb))
+    if (asked !== 'attack list' && isDown() && blocked) {
+      // Healed or caught back in another session since the last sync, it carries on
+      await freshen($, [mon])
+      if (isDown()) return downReply()
+    }
     if (MONS.includes(asked)) {
+      await freshen($, [asked])
+      if (isDead(asked)) return { text: displayName(asked) + ' is gone. Catch a new one in the wild to raise it again.' }
+      if (hasRunAway(asked)) return { text: goneLine(asked) }
       await switchTo($, asked)
     } else if (asked === 'new' || asked.startsWith('new ')) {
       return newCommand($, asked.slice('new'.length).trim())
@@ -2559,7 +2959,8 @@ export function register(on) {
       await $.store.set('needs', needsOn)
       $.ui.invalidate('ui.render')
       const name = nameOf(mon)
-      return { text: needsOn ? 'Needs are on. Keep ' + name + ' fed and happy.' : 'Needs are off. ' + name + ' won\'t get hungry or lonely.' }
+      const still = isFainted(mon) ? ' It\'s still fainted, so /pokemon revive takes it to a Pokémon Center.' : ''
+      return { text: (needsOn ? 'Needs are on. Keep ' + name + ' fed and happy.' : 'Needs are off. ' + name + ' won\'t get hungry or lonely.') + still }
     } else if (asked === 'emoji') {
       emojiOn = !emojiOn
       await $.store.set('emoji', emojiOn)
@@ -2594,6 +2995,10 @@ export function register(on) {
       // Already at its level, it evolves once idle
       evolveDue = readyToEvolve()
       return { text: name + ' evolves on its own once idle at its evolution level.' }
+    } else if (asked === 'revive' || asked.startsWith('revive ')) {
+      return reviveCommand($, asked.slice('revive'.length).trim())
+    } else if (asked === 'nuzlocke') {
+      return nuzlockeCommand($)
     } else if (asked === 'evolve' || asked.startsWith('evolve ')) {
       return evolveCommand($, asked.slice('evolve'.length).trim())
     } else if (asked === 'stop') {
@@ -2604,11 +3009,15 @@ export function register(on) {
       // List every record as last saved by any session
       const saved = await $.store.get('stats')
       if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
+      const healed = Object.keys(stats).filter((name) => name !== mon && settleHeal(name))
+      if (healed.length > 0) await saveRecords($, healed)
       const dex = await $.store.get('dex')
       return { text: boxText(dex && typeof dex === 'object' ? dex : {}) }
     } else if (asked === 'dex' || asked.startsWith('dex ')) {
+      const saved = await $.store.get('stats')
+      if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
       const dex = await $.store.get('dex')
-      return { text: dexText(dex && typeof dex === 'object' ? dex : {}, asked.slice('dex'.length).trim()) }
+      return { text: dexText(dex && typeof dex === 'object' ? dex : {}, asked.slice('dex'.length).trim(), await $.store.get('graveyard')) }
     } else if (asked === 'release' || asked.startsWith('release ')) {
       const wanted = asked.slice('release'.length).trim()
       if (MONS.includes(wanted)) await freshen($, [wanted])
@@ -2629,7 +3038,9 @@ export function register(on) {
     } else if (asked) {
       return { text: 'Unknown option "' + asked + '". Try one of: ' + OPTIONS.join(', ') + '. See /pokemon list for every mon.' }
     } else {
-      const mode = (isTuckedIn() ? ', asleep' : '') + (wander ? ', wandering' : '') + (isHere(wild) ? ', a ' + wildName() + ' is here' : '')
+      if (isGone(mon)) return { text: goneLine(mon) + ' /pokemon <mon> picks another. Options: ' + OPTIONS.join(', ') + '.' }
+      const condition = conditionOf(mon)
+      const mode = (condition ? ', ' + condition : '') + (isTuckedIn() ? ', asleep' : '') + (wander ? ', wandering' : '') + (isHere(wild) ? ', a ' + wildName() + ' is here' : '')
       const levels = 'food ' + Math.round(statNow(mon, 'food')) + '%, happiness ' + Math.round(statNow(mon, 'happiness')) + '%'
       const shown = nameOf(mon) + ' Lv. ' + levelOf(mon)
       return { text: 'Showing ' + variant + ' ' + shown + mode + ' (' + (needsOn ? levels : 'needs off') + '). Options: ' + OPTIONS.join(', ') + '.' }
@@ -2736,13 +3147,19 @@ export function register(on) {
     const level = Text({ dimColor: true, children: [levelLine()] })
     let corner
     drawnImage = false
-    if (zoom) {
+    if (isGone(mon)) {
+      // Ran away or lost with no other mon in the box, the band is just a line saying so
+      bandId = null
+      drawnHearts = false
+      corner = [Text({ dimColor: true, children: [goneLine(mon)] })]
+    } else if (zoom) {
       let sprite
       if (desktop) {
         const svg = svgNow()
         if (svg !== sentSvg) svgFrame += 1
         sentSvg = svg
-        const image = elements.Svg({ source: svg, alt: isOnStage(wild) ? nameOf(mon) + ' vs. wild ' + displayName(wild.mon) : nameOf(mon), width: zoom.columns * PIXEL_PX, height: zoom.rows * 2 * PIXEL_PX })
+        const alt = isOnStage(wild) ? nameOf(mon) + ' vs. wild ' + displayName(wild.mon) : nameOf(mon) + (conditionOf(mon) ? ', ' + conditionOf(mon) : '')
+        const image = elements.Svg({ source: svg, alt, width: zoom.columns * PIXEL_PX, height: zoom.rows * 2 * PIXEL_PX })
         sprite = Box({ key: 'pokemon-' + svgFrame, children: [image] })
       } else if (drawsImage()) {
         const source = imageNow(zoom)
@@ -2767,7 +3184,7 @@ export function register(on) {
     } else {
       // Too short even for a shrunk mon: its name, level, and meters on one line, and no blits
       bandId = null
-      const name = Text({ children: [nameOf(mon) + ' ' + levelLine()] })
+      const name = Text({ children: [nameOf(mon) + ' ' + levelLine() + (conditionOf(mon) ? ' ' + conditionOf(mon) : '')] })
       const meters = needsOn ? [meter('food', ' '), meter('happiness', ' ')] : []
       corner = [Box({ flexDirection: 'row', children: [name, ...meters] })]
     }
