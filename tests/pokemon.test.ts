@@ -1,8 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { closedEyes, eyesOf, keptEyesOf, pupilsOf } from '../hooks/eyes.js'
-import { faintedPalette } from '../hooks/faint.js'
+import { DIZZY_COLORS, faintedPalette, faintedRows } from '../hooks/faint.js'
 import { SPRITES } from '../hooks/frames.js'
-import { JOY_COLORS } from '../hooks/joy.js'
+import { atCenter, CENTER_ROWS, centerPhase, centerSpan, centerStamps, JOY_COLORS, recallFlash, recallTint } from '../hooks/joy.js'
 import { encodePng } from '../hooks/png.js'
 import { zoomedPixel } from '../hooks/zoom.js'
 
@@ -48,6 +48,12 @@ function paintedCells(cells: string): boolean[] {
 function paints(cells: string, color: number): boolean {
   const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
   return Array.from(words).some((w, i) => i % 3 !== 0 && w === color)
+}
+
+// Each cell painting one of colors, as cell index and color, joined to compare frames
+function cellsIn(cells: string, colors: number[]): string {
+  const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
+  return Array.from(words).flatMap((w, i) => (i % 3 !== 0 && colors.includes(w) ? [Math.floor(i / 3) + ':' + w] : [])).join(',')
 }
 
 test('draws Abra by default as a half-block raster in the terminal band', async ($, on) => {
@@ -3251,10 +3257,29 @@ test('a fainted mon lies still in its fainted colors, earns no XP, and pet, feed
   const cells = await shown(ui, blits)
   const fainted = faintedPalette(SPRITES.abra.variants.default.palette).map((hex) => parseInt(hex.slice(1), 16))
   expect(fainted.some((c) => paints(cells, c))).toBe(true)
-  // It holds still, so every frame sent is the one on screen
+  // It holds still while dizzy stars circle over it, so only the stars move
   const sent = blits.length
   await clock.advance(5000)
-  expect(blits.slice(sent).every((frame) => frame === cells)).toBe(true)
+  const later = blits.slice(sent)
+  expect(later.some((frame) => paints(frame, DIZZY_COLORS.y))).toBe(true)
+  expect(later.some((frame) => frame !== cells)).toBe(true)
+  expect(later.every((frame) => cellsIn(frame, fainted) === cellsIn(cells, fainted))).toBe(true)
+})
+
+test('a fainted mon keeps every row of its sprite, and the band grows to fit the stars over its head', async ($, on) => {
+  const rows = SPRITES.snorlax.variants.default.idle[0].rows
+  const fainted = faintedRows(rows, SPRITES.snorlax.variants.default.palette, keptEyesOf('snorlax', 'default', 'idle', 0).boxes)
+  const opaque = (frame: string[]) => frame.map((row) => /[^.]/.test(row))
+  expect(opaque(fainted)).toEqual(opaque(rows))
+  expect(fainted).not.toEqual(rows)
+  const saved: Record<string, any> = { mon: 'snorlax' }
+  const { clock } = await startedWith($, on, saved, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(100)
+  const standing = (await ui.find({ key: 'pokemon' })).props.rows
+  saved.stats = { snorlax: { food: EMPTY, happiness: EMPTY, fainted: { ms: 0, at: 0 } } }
+  await clock.advance(2000)
+  expect((await ui.find({ key: 'pokemon' })).props.rows).toBeGreaterThan(standing)
 })
 
 test('a wild mon flees when the shown mon faints, here or in another session', async ($, on) => {
@@ -3285,6 +3310,34 @@ test('/pokemon revive heals a fainted mon in five minutes, standing it up at hal
   expect(await run($, 'revive')).toBe('Abra hasn\'t fainted.')
 })
 
+test('a revive takes the mon into its ball, shows Nurse Joy at her counter while the machine flashes, and ends with her bow', () => {
+  const heal = { startTick: 0, endTick: 2000 }
+  const where = { ground: 23, right: 39 }
+  const phases = Array.from({ length: heal.endTick + 10 }, (_, t) => centerPhase(heal, t)?.phase ?? null)
+  expect([...new Set(phases)]).toEqual(['recall', 'heal', 'bow', null])
+  // It turns red, then goes in with a flash before the counter shows
+  const recall = phases.lastIndexOf('recall')
+  expect(recallTint(heal, 1)).toBeGreaterThan(0)
+  expect(recallTint(heal, recall)).toBe(1)
+  expect(recallFlash(heal, recall)).not.toBeNull()
+  expect(centerStamps(heal, recall, where)).toEqual([])
+  // At the counter, everything stands on the ground inside the strip, and the ball lights up with the chimes
+  const shown = phases.indexOf('heal') + 40
+  const stamps = centerStamps(heal, shown, where)
+  expect(atCenter(heal, shown)).toBe(true)
+  expect(Math.max(...stamps.map((s) => s.y + s.rows.length - 1))).toBe(where.ground)
+  expect(Math.max(...stamps.map((s) => s.x + s.rows[0].length - 1))).toBe(where.right)
+  expect(Math.min(...stamps.map((s) => s.x))).toBe(where.right - centerSpan() + 1)
+  const ball = (t: number) => centerStamps(heal, t, where)[0].colors.R
+  expect(new Set(Array.from({ length: 64 }, (_, k) => ball(shown + k))).size).toBe(2)
+  // She bows with her eyes closed, a pixel lower
+  const joy = (t: number) => centerStamps(heal, t, where)[1]
+  const bowing = joy(phases.indexOf('bow') + 12)
+  expect(bowing.rows[0]).toMatch(/^\.+$/)
+  expect(bowing.rows).not.toEqual(joy(shown).rows)
+  expect(centerStamps(heal, heal.endTick, where)).toEqual([])
+})
+
 test('Nurse Joy comes to heal a fainted mon and is gone once it\'s back on its feet', { timeoutMs: 60000 }, async ($, on) => {
   const saved: Record<string, any> = { wander: false, stats: { abra: { food: EMPTY, happiness: EMPTY, fainted: { ms: 0, at: 0 } } } }
   const { clock, blits } = await startedWith($, on, saved, 0)
@@ -3298,18 +3351,25 @@ test('Nurse Joy comes to heal a fainted mon and is gone once it\'s back on its f
   expect(paints(await shown(ui, blits), JOY_COLORS.P)).toBe(false)
 })
 
-test('the strip grows to fit Nurse Joy beside a mon too wide to leave her room, and shrinks back after', { timeoutMs: 60000 }, async ($, on) => {
+test('a big mon goes to the Pokémon Center whole, with the band tall enough for the counter, and comes back out', { timeoutMs: 60000 }, async ($, on) => {
   const saved: Record<string, any> = { mon: 'snorlax', stats: { snorlax: { food: EMPTY, happiness: EMPTY, fainted: { ms: 0, at: 0 } } } }
   const { clock, blits } = await startedWith($, on, saved, 0)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await clock.advance(100)
-  const before = (await ui.find({ key: 'pokemon' })).props.columns
+  // Its colors but black, which Joy's eyes and the ball share
+  const own = SPRITES.snorlax.variants.default.palette.map((hex) => parseInt(hex.slice(1), 16)).filter((c) => c !== 0)
+  const before = (await ui.find({ key: 'pokemon' })).props.rows
   await run($, 'revive')
   await clock.advance(5000)
-  expect((await ui.find({ key: 'pokemon' })).props.columns).toBeGreaterThan(before)
-  expect(paints(await shown(ui, blits), JOY_COLORS.P)).toBe(true)
+  const cells = await shown(ui, blits)
+  expect(paints(cells, JOY_COLORS.P)).toBe(true)
+  expect(own.some((c) => paints(cells, c))).toBe(false)
+  expect((await ui.find({ key: 'pokemon' })).props.rows).toBeGreaterThanOrEqual(Math.min(before, CENTER_ROWS))
   await clock.advance(5 * MINUTE)
-  expect((await ui.find({ key: 'pokemon' })).props.columns).toBe(before)
+  const back = await shown(ui, blits)
+  expect(own.some((c) => paints(back, c))).toBe(true)
+  // Back on its feet, it no longer needs room for the stars
+  expect((await ui.find({ key: 'pokemon' })).props.rows).toBeLessThan(before)
 })
 
 test('/pokemon needs off stops the faint clock, and turning it back on doesn\'t revive a fainted mon', { timeoutMs: 60000 }, async ($, on) => {

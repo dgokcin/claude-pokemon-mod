@@ -3,8 +3,8 @@ import { CUSTOM_PREFIX, fetchMon, monsOfGen } from './custom.js'
 import { DEX, TIERS, dexKey, dexNumber, isCaught, mergedDexEntry, pickWild, tierOf } from './dex.js'
 import { evolutionsOf, levelEvolutionOf, startLevel } from './evolutions.js'
 import { closedEyes, eyesOf, keptEyesOf, pupilsOf } from './eyes.js'
-import { faintedPalette, faintedRows } from './faint.js'
-import { HEAL_PINK, healGlow, JOY_ROWS, joySpan, joyStamps, sparkleStamps } from './joy.js'
+import { DIZZY_ROOM, dizzyStamps, faintedPalette, faintedRows } from './faint.js'
+import { atCenter, CENTER_ROWS, centerSpan, centerStamps, RECALL_RED, recallFlash, recallTint, sparkleStamps } from './joy.js'
 import { SPRITES } from './frames.js'
 import { MAX_LEVEL, careOf, levelAt, turnXp, xpAt } from './levels.js'
 import { MOVES, movesOf } from './moves.js'
@@ -313,10 +313,11 @@ function foeAs(name) {
 const foeName = () => foeAs(wild.mon)
 
 const rowsOf = (name) => HEAD_ROWS + spriteRows(name)
-// While a mon evolves or transforms, the band is tall enough for both shapes, and while
-// it heals, for Nurse Joy
+// While a mon evolves or transforms, the band is tall enough for both shapes, while it
+// heals, for the Pokémon Center, and while it's fainted, for the stars over its head
 const bandRows = () => {
-  if (isHealing(mon)) return Math.max(rowsOf(mon), JOY_ROWS)
+  if (isHealing(mon)) return Math.max(rowsOf(mon), CENTER_ROWS)
+  if (isFainted(mon)) return Math.max(rowsOf(mon), dizzyRows(mon))
   if (evolving) return Math.max(rowsOf(evolving.from), rowsOf(evolving.into))
   if (attack?.move.effect === 'transform') return Math.max(rowsOf(mon), rowsOf(attack.swap))
   if (isOnStage(wild)) return Math.max(rowsOf(mon), rowsOf(foeName()))
@@ -965,8 +966,8 @@ function sleepingFrame(shown, view) {
   return sleepingFrames.get(rows)
 }
 
-// A fainted mon's first idle frame with X eyes, slumped, cached per frame. Eyes drawn as
-// lines get their X too.
+// A fainted mon's first idle frame with X eyes, cached per frame. Eyes drawn as lines get
+// their X too.
 const faintedFrames = new Map()
 function faintedFrame(shown) {
   const sheet = SPRITES[shown].variants[variant]
@@ -979,6 +980,13 @@ function faintedFrame(shown) {
   return faintedFrames.get(rows)
 }
 
+// The band rows a fainted mon takes, its feet where the idle ones rest and the stars
+// over its head
+function dizzyRows(name) {
+  const box = boxOf(faintedFrame(name), faintedColors(name))
+  return Math.ceil((DIZZY_ROOM + box.bottom - box.top + 1 + gapUnder(SPRITES[name].variants[variant].idle)) / 2)
+}
+
 // The fainted palette as letter to 0xRRGGBB, per mon and variant
 const FAINTED_COLORS = {}
 function faintedColors(shown) {
@@ -989,18 +997,24 @@ function faintedColors(shown) {
   return FAINTED_COLORS[shown][variant]
 }
 
-// At the Pokémon Center Nurse Joy comes to the fainted mon, and it glows pink with the
-// healing machine's jingle while sparkles rise off it, as in joy.js
+// Going to the Pokémon Center, the fainted mon turns red on its way into its ball, as in joy.js
 const mixed = (c, to, k) => {
   const at = (shift) => Math.round(((c >> shift) & 255) * (1 - k) + ((to >> shift) & 255) * k)
   return (at(16) << 16) | (at(8) << 8) | at(0)
 }
 
-// Joy stands left of the mon, so a band with no room there gets only the glow and sparkles
-function nurseStamps(heal, ground, monLeft) {
-  const opts = { ground, monLeft, columns: stripColumns() }
-  const standing = joyStamps({ startTick: tick - 10000, endTick: tick + 10000 }, tick, opts)[0]
-  return standing && standing.x >= -margin ? joyStamps(heal, tick, opts) : []
+// It goes into its ball in a flash, and back from the Pokémon Center its ball bursts open
+// in one where it stands
+let releasedAt = null
+const RELEASE_BEAT = 3
+function flashStamps(heal, body) {
+  const k = releasedAt === null ? -1 : Math.floor((tick - releasedAt) / RELEASE_BEAT)
+  const art = heal ? recallFlash(heal, tick) : k >= 0 && k < FLASH.length ? FLASH[k] : null
+  if (!art) return []
+  const half = Math.floor(art.length / 2)
+  const x = Math.round((body.left + body.right) / 2) - half
+  const y = Math.round((body.top + body.bottom) / 2) - half
+  return [stamp(x, Math.max(0, y), art, LIGHT_COLORS)]
 }
 
 const NO_POSE = { view: 'front', stride: false, swap: false, asleep: false }
@@ -1108,8 +1122,8 @@ const homeSpan = () => SPRITES[mon].width + Math.max(0, HOME_GAP - IDLE_RIGHT_GA
 // The strip columns a battle with this foe takes, beside the home mon at the strip's right
 const battleNeeds = (foe, foeVariant) => battleColumns(homeSpan(), idleBox(foe, foeVariant))
 
-// The strip columns a heal takes, with Joy standing left of the home mon
-const healNeeds = () => homeSpan() + joySpan()
+// The strip columns a heal takes, with the Pokémon Center in place of the home mon
+const healNeeds = () => centerSpan()
 
 // The scene columns left of the panel in a band bodyColumns wide. The small band shows
 // the scene at its scale, so each band column holds more than one of the scene's.
@@ -1121,7 +1135,7 @@ function sceneRoom(bodyColumns) {
 const battleFits = (foe, foeVariant) => battleNeeds(foeAs(foe), foeVariant) <= sceneRoom(lastBodyColumns)
 
 // The strip's width in a band bodyColumns wide, grown on the left while a foe is on stage
-// or Joy is at the mon's side
+// or the mon heals at the Pokémon Center
 function stripTarget(bodyColumns) {
   const room = sceneRoom(bodyColumns)
   const strip = Math.max(SPRITES[mon].width, Math.min(STRIP_COLUMNS, room))
@@ -1453,24 +1467,29 @@ function frameNow(full = false) {
   const sideOn = attack ? pose.view === 'side' : walking
   const anim = sideOn ? sheet.walk : sheet.idle
   const asleep = isAsleep() || pose.asleep
-  // A fainted mon lies still in one slumped frame, in its fainted palette
+  // A swapped-in mon stands on the same ground and stays inside the strip. An evolving
+  // mon at home keeps to the right edge in either shape.
+  const baseX = Math.max(0, Math.min(evolving && isHome() ? homeXOf(shown) : x, columns - sprite.width))
+  // A fainted mon lies still in one frame with X eyes, in its fainted palette. Healing,
+  // it's in its ball at the Pokémon Center, and once the heal is over it's back on its feet.
   const down = isDown()
   const healing = down && isHealing(mon)
   const heal = healing ? healTicks() : null
+  const red = healing ? recallTint(heal, tick) : 0
+  const away = healing && (atCenter(heal, tick) || red >= 1)
+  const knockedOut = down && !(healing && tick >= heal.endTick)
   let frame = frameAt(anim, tick * TICK_MS)
-  if (down) frame = faintedFrame(shown)
+  if (knockedOut) frame = faintedFrame(shown)
   else if (asleep) frame = sleepingFrame(shown, sideOn ? 'walk' : 'idle')
   else if (attack && sideOn) frame = anim[pose.stride ? Math.floor(age / STRIDE_TICKS) % anim.length : 0].rows
-  const colors = down ? faintedColors(shown) : COLORS[shown][variant]
+  const colors = knockedOut ? faintedColors(shown) : COLORS[shown][variant]
   // Facing out, the sprite stays unmirrored like the idle mon, so it doesn't jump when the move ends
   const flip = attack ? sideOn && attack.side === 'left' : walking && facing === 'left'
   const rows = bandRows()
-  // A swapped-in mon stands on the same ground and stays inside the strip. An evolving
-  // mon at home keeps to the right edge in either shape.
   // A sleeping mon holds one frame, lowered so its feet rest where the idle ones do
-  const drop = asleep || down ? gapOf(frame) - gapUnder(sheet.idle) : sideOn ? WALK_DROP[shown][variant] : 0
+  const drop = asleep || knockedOut ? gapOf(frame) - gapUnder(sheet.idle) : sideOn ? WALK_DROP[shown][variant] : 0
   const baseTop = rows * 2 - SPRITES[shown].height + drop
-  const baseX = Math.max(0, Math.min(evolving && isHome() ? homeXOf(shown) : x, columns - sprite.width))
+  const box = boxOf(frame, colors)
   const pixelOf = (mirror) => (px, py) => {
     if (px < 0 || px >= sprite.width || py < 0) return null
     const row = frame[py]
@@ -1478,10 +1497,10 @@ function frameNow(full = false) {
     return colors[row[mirror ? sprite.width - 1 - px : px]] ?? null
   }
   const pixel = pixelOf(flip)
-  const glow = healing ? healGlow(heal, tick) : 0
-  const effect = playing
-    ? attackFrame(attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel))
-    : glow > 0 ? { ...NO_EFFECT, shade: (cx, py, c) => mixed(c, HEAL_PINK, glow) } : NO_EFFECT
+  let effect = NO_EFFECT
+  if (playing) effect = attackFrame(attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel))
+  else if (away) effect = { ...NO_EFFECT, hidden: true }
+  else if (red > 0) effect = { ...NO_EFFECT, shade: (cx, py, c) => mixed(c, RECALL_RED, red * 0.8) }
   const overlay = overlayOf(effect.dots, rows)
   const underlay = overlayOf(effect.under, rows)
   const jolt = flinchJolt(baseX, sprite.width)
@@ -1489,7 +1508,6 @@ function frameNow(full = false) {
   const top = baseTop + effect.dy - (hopUp ? 2 : 0)
   const left = baseX + effect.dx + jolt
   const mirrored = flip !== effect.flipX
-  const box = boxOf(frame, colors)
   const body = bodyPixel(effect, pixelOf(mirrored), box, sprite.width, mirrored, left, top)
   const ghost = ghostPixel(effect.ghosts, pixel, box, sprite.width, flip, baseX, baseTop)
   const head = headColumns(pixel, sprite.width, left)
@@ -1502,6 +1520,10 @@ function frameNow(full = false) {
   const [boxLeft, boxRight] = flip ? [sprite.width - 1 - box.right, sprite.width - 1 - box.left] : [box.left, box.right]
   const sleeper = { left: left + boxLeft, right: left + boxRight, top: top + box.top, bottom: top + box.bottom }
   const bubbleSide = walking ? facing : 'left'
+  // The Pokémon Center stands on the ground at the right of the mon's columns, clear of the panel
+  const center = { ground: rows * 2 - 1, right: columns - 1 }
+  // Stars circle over a fainted mon until it goes to the Pokémon Center
+  const dizzy = knockedOut && !healing
   // A shrunk band draws the bubble, the Zs, and the berry over the shrunk scene in its own
   // pixels, so they stay whole
   const scene = sceneColumns()
@@ -1515,11 +1537,13 @@ function frameNow(full = false) {
     ...heartStamps(),
     ...(isWincing() ? sweatStamps(head, top + box.top, bubbleSide) : []),
     ...(asleep && !shrunk ? sleepStamps(sleeper) : []),
-    ...(healing && !shrunk ? sparkleStamps(heal, tick, sleeper, { light: ink === INKS.light }) : []),
+    ...(dizzy && !shrunk ? dizzyStamps(tick, sleeper, { light: ink === INKS.light }) : []),
+    ...flashStamps(heal, sleeper),
+    ...(away && !shrunk ? sparkleStamps(heal, tick, center, { light: ink === INKS.light }) : []),
+    ...(away ? centerStamps(heal, tick, center) : []),
   ]
   const balls = partyStamps(party, tick, { columns, ground: rows * 2 - 1, label: ink.party })
-  const nurse = healing ? nurseStamps(heal, rows * 2 - 1, sleeper.left) : []
-  const under = [...nurse, ...ball.under, ...(onStage ? [] : bubble), ...balls]
+  const under = [...ball.under, ...(onStage ? [] : bubble), ...balls]
   const pixels = rows * 2
   const width = stripColumns()
   const colorAt = (cx, py) => {
@@ -1555,8 +1579,8 @@ function frameNow(full = false) {
   const shaken = (cx, py) => (cx - shakeX < 0 || cx - shakeX >= scene ? null : colorAt(cx - shakeX - margin, py - shakeY))
   // The eyes kept through the shrink: the mon's, unless a move hides or reshapes it, and the foe's
   const reshaped = effect.hidden || effect.sx !== 1 || effect.sy !== 1 || effect.skew || effect.flipY
-  // A fainted frame is slumped, so its eyes no longer sit where the frame's eye boxes say
-  const own = shrunk && !reshaped && !down ? pupilsAt(shown, variant, sideOn ? 'walk' : 'idle', frame, { left, top, mirrored }) : []
+  // A fainted mon's eyes are Xs, with no pupils to keep
+  const own = shrunk && !reshaped && !knockedOut ? pupilsAt(shown, variant, sideOn ? 'walk' : 'idle', frame, { left, top, mirrored }) : []
   const pupils = [...own, ...(shrunk ? (foe?.pupils ?? []) : [])].map(([px, py, c, eye]) => [px + margin + shakeX, py + shakeY, c, eye && [eye[0] + margin + shakeX, eye[1] + shakeY, ...eye.slice(2)]])
   const zoomed = zoomedPixel(shaken, { columns: scene, pixels, scale: zoom.scale, pupils })
   // The head's zoomed columns, from the first its left column covers to the last its right one does
@@ -1570,7 +1594,11 @@ function frameNow(full = false) {
   const zoomedY = (py) => zoomedAt(py + shakeY, zoom.scale)
   const zoomedSleeper = { left: zoomedX(sleeper.left), right: zoomedX(sleeper.right), top: zoomedY(sleeper.top), bottom: zoomedY(sleeper.bottom) }
   const front = shrunk
-    ? [...(asleep ? sleepStamps(zoomedSleeper, SMALL_ZS) : []), ...(healing ? sparkleStamps(heal, tick, zoomedSleeper, { light: ink === INKS.light }) : []), ...(food ? [smallBerryStamp(zoom.scale, margin + shakeX)] : [])]
+    ? [
+        ...(asleep ? sleepStamps(zoomedSleeper, SMALL_ZS) : []),
+        ...(dizzy ? dizzyStamps(tick, zoomedSleeper, { light: ink === INKS.light, small: true }) : []),
+        ...(food ? [smallBerryStamp(zoom.scale, margin + shakeX)] : []),
+      ]
     : []
   const stampsAt = (stamps) => (tx, ty) => {
     for (const s of stamps) {
@@ -2639,6 +2667,7 @@ async function finishHeal($) {
     if (healed || !isFainted(mon)) {
       markActive()
       hopStart = tick
+      releasedAt = tick
       $.ui.toast(nameOf(mon) + ' is healed and back on its feet!')
       $.ui.invalidate('ui.render')
     }
@@ -2675,7 +2704,7 @@ async function reviveCommand($, wanted) {
   if (nuzlockeOn) return { text: 'Nuzlocke is on, so ' + shown + ' can\'t be revived.' }
   stats[name] = { ...stats[name], healing: { from: nowMs, until: nowMs + HEAL_MS } }
   await saveRecords($, [name])
-  // Joy comes to the mon at home, where the strip grows to fit her
+  // It comes back out of its ball at home
   if (name === mon) x = homeX()
   $.ui.invalidate('ui.render')
   return { text: 'You take ' + shown + ' to a Pokémon Center. It\'ll be back on its feet in ' + HEAL_MS / 60000 + ' minutes.' }

@@ -1,8 +1,7 @@
 // Draws a sprite frame fainted. The sprites have no fainted frames, so each eye box from
 // EYES is painted the skin around it and crossed with an X in the sprite's darkest color,
-// or on a face nearly that dark, in the darkest color light enough to show on it. Then the
-// mon slumps: its rows squash to about two thirds of their height, keeping the outline
-// rows and the X rows, and it rests on its bottom row with the freed rows left clear.
+// or on a face nearly that dark, in the darkest color light enough to show on it. The rest
+// of the frame stays as drawn, and dizzy stars circle over its head.
 
 const channels = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
 const luma = ([r, g, b]) => 0.299 * r + 0.587 * g + 0.114 * b
@@ -10,8 +9,6 @@ const hex = (cs) => '#' + cs.map((c) => Math.round(Math.max(0, Math.min(255, c))
 // How far an X's brightness sits from the skin's, as for the lids in eyes.js
 const DARKER_X = 48
 const LIGHTER_X = 40
-// Share of the mon's height it keeps when slumped
-const SLUMP = 0.65
 // How far the fainted palette moves toward gray, and how much it dims
 const GRAY = 0.45
 const DIM = 0.88
@@ -67,7 +64,6 @@ export function faintedRows(rows, palette, boxes) {
   const width = rows[0]?.length ?? 0
   const grid = rows.map((row) => row.split(''))
   const opaque = (x, y) => (rows[y]?.[x] ?? '.') !== '.'
-  const keep = new Set()
   if (boxes?.length) {
     const shades = paletteOf(palette)
     const { lumaOf, letters, darkest } = shades
@@ -78,34 +74,10 @@ export function faintedRows(rows, palette, boxes) {
       const shows = lumaOf(skin) - lumaOf(darkest) >= DARKER_X
       const ink = shows ? darkest : (letters.find((l) => lumaOf(l) - lumaOf(skin) >= LIGHTER_X) ?? darkest)
       for (let y = by; y < by + h; y++) for (let x = bx; x < bx + w; x++) if (opaque(x, y)) grid[y][x] = skin
-      for (const [x, y] of crossOf(box, width, height)) {
-        if (!opaque(x, y)) continue
-        grid[y][x] = ink
-        keep.add(y)
-      }
+      for (const [x, y] of crossOf(box, width, height)) if (opaque(x, y)) grid[y][x] = ink
     }
   }
-
-  const filled = grid.map((row) => row.some((l) => l !== '.'))
-  const top = filled.indexOf(true)
-  if (top < 0) return grid.map((row) => row.join(''))
-  const bottom = filled.lastIndexOf(true)
-  keep.add(top).add(bottom)
-  const tall = bottom - top + 1
-  const target = Math.max(keep.size, Math.round(tall * SLUMP))
-  // Drops the free rows spread evenly through the body, so no one part loses them all
-  const free = []
-  for (let y = top; y <= bottom; y++) if (!keep.has(y)) free.push(y)
-  const drop = new Set()
-  const dropping = tall - target
-  for (let j = 0; j < dropping; j++) drop.add(free[Math.floor(((j + 0.5) * free.length) / dropping)])
-  const kept = []
-  for (let y = top; y <= bottom; y++) if (!drop.has(y)) kept.push(grid[y])
-
-  const clear = '.'.repeat(width)
-  const out = rows.map((_, y) => (y > bottom ? grid[y].join('') : clear))
-  kept.forEach((row, i) => (out[bottom - kept.length + 1 + i] = row.join('')))
-  return out
+  return grid.map((row) => row.join(''))
 }
 
 // The palette grayed and dimmed for a fainted mon, still close enough to know it by
@@ -114,5 +86,36 @@ export function faintedPalette(palette) {
     const cs = channels(color)
     const gray = luma(cs)
     return hex(cs.map((c) => (c + (gray - c) * GRAY) * DIM))
+  })
+}
+
+// Three stars circle over a fainted mon's head on a flat ellipse, a third of a turn
+// apart, one turn every DIZZY_TURN ticks. The ones going round the back are smaller.
+// Each star is y yellow with a Y bright heart.
+export const DIZZY_STARS = [['.y.', 'yYy', '.y.'], ['y']]
+export const DIZZY_COLORS = { y: 0xf8d030, Y: 0xfff4b0 }
+export const DIZZY_LIGHT_COLORS = { y: 0xd09000, Y: 0xf8c838 }
+const DIZZY_TURN = 40
+// The ellipse's middle sits DIZZY_RISE pixels over the head and DIZZY_RY pixels from
+// its top and bottom, so the stars reach DIZZY_ROOM pixels over the head
+const DIZZY_RISE = 4
+const DIZZY_RY = 2
+export const DIZZY_ROOM = DIZZY_RISE + DIZZY_RY + (DIZZY_STARS[0].length - 1) / 2
+
+// The stars this tick over the mon's drawn box { left, right, top, bottom } in pixels.
+// A small band draws every star as one pixel.
+export function dizzyStamps(tick, body, { light = false, small = false } = {}) {
+  const colors = light ? DIZZY_LIGHT_COLORS : DIZZY_COLORS
+  const cx = (body.left + body.right) / 2
+  const rx = Math.max(small ? 2 : 4, Math.round((body.right - body.left) * 0.3))
+  const ry = small ? 1 : DIZZY_RY
+  const cy = body.top - (small ? 2 : DIZZY_RISE)
+  return [0, 1, 2].map((i) => {
+    const angle = 2 * Math.PI * ((tick % DIZZY_TURN) / DIZZY_TURN + i / 3)
+    const art = small || Math.sin(angle) < 0 ? DIZZY_STARS[1] : DIZZY_STARS[0]
+    const half = (art[0].length - 1) / 2
+    const x = Math.round(cx + rx * Math.cos(angle)) - half
+    const y = Math.round(cy + ry * Math.sin(angle)) - half
+    return { x, y: Math.max(0, y), rows: art, colors }
   })
 }
