@@ -2446,11 +2446,16 @@ const HELP = [
     ['nuzlocke', 'A fainted mon is lost for good', () => onOff(nuzlockeOn)],
   ]],
 ]
+// The hidden debug options, at the top of /pokemon help only while debug is on
+const DEBUG_HELP = ['Debug', [
+  ['wild [mon]', 'Call a wild mon now, or the one named; add shiny for its shiny colors'],
+  ['kill', 'Faint the mon now, or lose it under nuzlocke'],
+]]
 const OPTIONS = [...HELP.flatMap(([, rows]) => rows.map(([usage]) => usage.split(' ')[0])), 'help']
-const USAGE_WIDTH = Math.max(...HELP.flatMap(([, rows]) => rows.map(([usage]) => usage.length))) + 2
+const USAGE_WIDTH = Math.max(...[DEBUG_HELP, ...HELP].flatMap(([, rows]) => rows.map(([usage]) => usage.length))) + 2
 // A setting shows its value ahead of what it does, so the values line up in a column
-function helpText() {
-  const groups = HELP.map(([title, rows]) => title + '\n' + rows.map(([usage, does, value]) => '  ' + usage.padEnd(USAGE_WIDTH) + (value ? value().padEnd(7) : '') + does).join('\n'))
+function helpText(debug) {
+  const groups = (debug ? [DEBUG_HELP, ...HELP] : HELP).map(([title, rows]) => title + '\n' + rows.map(([usage, does, value]) => '  ' + usage.padEnd(USAGE_WIDTH) + (value ? value().padEnd(7) : '') + does).join('\n'))
   return 'Usage: /pokemon <option>\n\n' + groups.join('\n\n')
 }
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
@@ -2814,6 +2819,14 @@ async function reviveCommand($, wanted) {
   return { text: 'You take ' + shown + ' to a Pokémon Center. It\'ll be back on its feet in ' + HEAL_MS / 60000 + ' minutes.' }
 }
 
+// The shown mon is at the Pokémon Center, so it can't be swapped out until it's back
+async function stillHealing($) {
+  await freshen($, [mon])
+  return isHealing(mon) && nowMs < stats[mon].healing.until
+}
+
+const healingReply = () => ({ text: downReply().text + ' Wait for it before switching.' })
+
 // Joins items as "A", "A and B", or "A, B, and C"
 const andList = (items) => (items.length < 3 ? items.join(' and ') : items.slice(0, -1).join(', ') + ', and ' + items.at(-1))
 
@@ -3155,8 +3168,10 @@ export function register(on) {
       await freshen($, [asked])
       if (isDead(asked)) return { text: displayName(asked) + ' is gone. Catch a new one in the wild to raise it again.' }
       if (hasRunAway(asked)) return { text: goneLine(asked) }
+      if (asked !== mon && (await stillHealing($))) return healingReply()
       await switchTo($, asked)
     } else if (asked === 'new' || asked.startsWith('new ')) {
+      if (await stillHealing($)) return healingReply()
       return newCommand($, asked.slice('new'.length).trim())
     } else if (VARIANTS.includes(asked)) {
       variant = asked
@@ -3301,7 +3316,7 @@ export function register(on) {
     } else if (asked === 'list') {
       return { text: MONS.length + ' mons: ' + MONS.join(', ') }
     } else if (asked === 'help') {
-      return { text: helpText() }
+      return { text: helpText((await $.store.get('debug')) === true) }
     } else if (asked) {
       return { text: 'Unknown option "' + asked + '". Try one of: ' + OPTIONS.join(', ') + '. See /pokemon list for every mon.' }
     } else {
