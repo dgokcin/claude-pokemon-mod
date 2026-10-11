@@ -254,9 +254,10 @@ function resizedSpan(lo, hi, size, count) {
 }
 
 // A mon's sprite resized to height pixels, the same scale both ways. A shrinking one takes
-// the band's votes, eyes kept, and a growing one copies each pixel into a block. Each frame
-// carries its pupils, moved with it, as eyes.js has no boxes for it.
-function resizedSprite(name, height) {
+// the band's votes, pupils kept and each eye shrunk to a dot when dots is set, and a
+// growing one copies each pixel into a block. Each frame carries its pupils, moved with it, as eyes.js has no
+// boxes for it.
+function resizedSprite(name, height, dots) {
   const sprite = SPRITES[name]
   const scale = height / sprite.height
   const width = Math.max(1, Math.round(sprite.width * scale))
@@ -272,7 +273,7 @@ function resizedSprite(name, height) {
         const pupils = pupilsOf(source, sheet.palette, keptEyesOf(name, v, view, index))
         const colorAt = (x, y) => colors[source[y]?.[x]] ?? null
         const kept = pupils.map(([x, y, box, skin, inked]) => [x, y, colorAt(x, y), box && [...box, colors[skin], [...inked].map((l) => colors[l])]])
-        const shrunk = scale < 1 && zoomedPixel(colorAt, { columns: sprite.width, pixels: sprite.height, scale, pupils: kept })
+        const shrunk = scale < 1 && zoomedPixel(colorAt, { columns: sprite.width, pixels: sprite.height, scale, pupils: dots ? kept : kept.map(([x, y, c]) => [x, y, c, null]) })
         const pixel = shrunk
           ? (x, y) => letters.get(shrunk(x, y)) ?? '.'
           : (x, y) => source[Math.floor(((y + 0.5) * sprite.height) / height)]?.[Math.floor(((x + 0.5) * sprite.width) / width)] ?? '.'
@@ -297,8 +298,9 @@ const FOE_MIN_PIXELS = SPRITES.diglett.height
 // The foe as drawn. In a small band a foe taller than the home mon shrinks to its height,
 // so it doesn't grow the band and shrink the home mon with it, and a short one grows to
 // look as tall as a large Diglett, up to the home mon's height. Each size is resized once
-// and kept under its own name, unlisted. It goes by the size picked and the home mon's
-// scale alone, as the band's scale depends on the foe.
+// and kept under its own name, unlisted, apart for half blocks, whose eyes are dots. It
+// goes by the size picked and the home mon's scale alone, as the band's scale depends on
+// the foe.
 function foeAs(name) {
   if (SIZES[size] >= 1) return name
   const own = SPRITES[name].height
@@ -306,8 +308,9 @@ function foeAs(name) {
   const least = Math.min(home, Math.ceil(FOE_MIN_PIXELS / bandScale(rowsOf(mon)) - 1e-9))
   const height = own > home ? home : Math.max(own, least)
   if (height === own) return name
-  const sized = name + '@' + height
-  if (!SPRITES[sized]) addSprite(sized, resizedSprite(name, height), false)
+  const dots = dotsEyes()
+  const sized = name + '@' + height + (dots ? '-dots' : '')
+  if (!SPRITES[sized]) addSprite(sized, resizedSprite(name, height, dots), false)
   return sized
 }
 const foeName = () => foeAs(wild.mon)
@@ -1577,11 +1580,13 @@ function frameNow(full = false) {
   // columns start at the margin's left edge, the strip's at the margin's right.
   const [shakeX, shakeY] = effect.shake
   const shaken = (cx, py) => (cx - shakeX < 0 || cx - shakeX >= scene ? null : colorAt(cx - shakeX - margin, py - shakeY))
-  // The eyes kept through the shrink: the mon's, unless a move hides or reshapes it, and the foe's
+  // The eyes kept through the shrink: the mon's, unless a move hides or reshapes it, and
+  // the foe's. Each keeps its pupil, and in half blocks its box too, so it shrinks to a dot.
   const reshaped = effect.hidden || effect.sx !== 1 || effect.sy !== 1 || effect.skew || effect.flipY
+  const dots = dotsEyes()
   // A fainted mon's eyes are Xs, with no pupils to keep
   const own = shrunk && !reshaped && !knockedOut ? pupilsAt(shown, variant, sideOn ? 'walk' : 'idle', frame, { left, top, mirrored }) : []
-  const pupils = [...own, ...(shrunk ? (foe?.pupils ?? []) : [])].map(([px, py, c, eye]) => [px + margin + shakeX, py + shakeY, c, eye && [eye[0] + margin + shakeX, eye[1] + shakeY, ...eye.slice(2)]])
+  const pupils = [...own, ...(shrunk ? (foe?.pupils ?? []) : [])].map(([px, py, c, eye]) => [px + margin + shakeX, py + shakeY, c, dots && eye && [eye[0] + margin + shakeX, eye[1] + shakeY, ...eye.slice(2)]])
   const zoomed = zoomedPixel(shaken, { columns: scene, pixels, scale: zoom.scale, pupils })
   // The head's zoomed columns, from the first its left column covers to the last its right one does
   const [headLeft, headRight] = head.map((c) => c + margin)
@@ -1632,6 +1637,10 @@ const underPanel = (cx, cy, zoom) => cx >= (isSmall() ? zoom.columns - Math.roun
 // half blocks, it takes the zoom's votes as a shrunk band does.
 const isSmall = () => bandScale() < 1
 const drawsImage = () => bandSurface === 'terminal' && isSmall() && !noImages && imageRetryAt === null
+// A small band in half blocks shrinks each eye to one dot of its pupil, the same on both
+// eyes. Anywhere else a shrunk eye keeps its pupil and the rest of it takes the vote, so
+// it keeps its colors. It reads the size, not isSmall, since the foe's size depends on it.
+const dotsEyes = () => bandSurface === 'terminal' && SIZES[size] < 1 && (noImages || imageRetryAt !== null)
 // The text hearts are pixel hearts on the same terminals, which learn from the hearts'
 // blits whether the terminal draws them, even while the band is large
 const drawsHearts = () => bandSurface === 'terminal' && !emojiOn && needsOn && !noImages && imageRetryAt === null

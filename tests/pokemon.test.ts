@@ -2198,6 +2198,34 @@ test('a small band shrinks a foe taller than the home mon to its height, so the 
   expect((await ui.find({ key: 'pokemon' })).props.rows).toBe(alone)
 })
 
+// The teal of Mew's eyes, which no other color of its own or Pikachu's comes near
+const MEW_EYE = 0x408080
+
+test("a short pane shrinks a large band and keeps the whole of each eye, not just a dot", async ($, on) => {
+  const { clock, blits } = await startedWith($, on, { mon: 'mew', wander: false }, 0)
+  // Mew's 13 rows shrink to 11
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, maxRows: 11 } })
+  await clock.advance(200)
+  expect((await ui.find({ key: 'pokemon' })).props.rows).toBe(11)
+  expect(paints(await shown(ui, blits), MEW_EYE)).toBe(true)
+})
+
+test("a small band that draws Images keeps a shrunk foe's whole eyes", async ($, on) => {
+  const { clock, blits } = await startedWith($, on, { mon: 'pikachu', size: 'small', wander: false, debug: true }, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.command.run({ command: 'pokemon', args: 'wild mew' })
+  await clock.advance(10000)
+  expect(imageColors(blits[blits.length - 1]).has(MEW_EYE)).toBe(true)
+})
+
+test("a small band in half blocks shrinks a foe's eyes to dots of their pupils", async ($, on) => {
+  const { clock, blits } = await startedWith($, on, { mon: 'pikachu', size: 'small', wander: false, debug: true }, 0, {}, (e) => (e.source ? DENY_IMAGES : {}))
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.command.run({ command: 'pokemon', args: 'wild mew' })
+  await clock.advance(10000)
+  expect(paints(await shown(ui, blits), MEW_EYE)).toBe(false)
+})
+
 test('a saved small size draws the band small from the start, and a short pane still shrinks it', async ($, on) => {
   await startedWith($, on, { size: 'small' }, 0)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })

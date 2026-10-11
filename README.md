@@ -337,10 +337,11 @@ one grows to look as tall as a large Diglett, up to your mon's height.
 When the pane is too short, the whole scene shrinks to fit in half blocks, and so does
 the small band in other terminals. Each shrunk pixel takes the most common color of its
 block. Ties go to the color at the middle of the block, so lines stay unbroken, and then
-to the darker color, so outlines survive. Each eye shrinks to one dot of its pupil, its
-darkest color or on a dark face its brightest, with the rest of the eye painted over as
-skin, so a shrunk mon never loses its eyes and both come out alike. An eye drawn as a
-line keeps the middle of the line. The thought bubble, the Zs, and the berry
+to the darker color, so outlines survive. Each eye keeps its pupil, its darkest color or
+on a dark face its brightest, so a shrunk mon never loses its eyes. In the small band in
+half blocks, each eye shrinks to just that dot, with the rest of the eye painted over as
+skin, so both come out alike. Anywhere else, the rest of the eye takes the vote and keeps
+its colors. An eye drawn as a line keeps the middle of the line. The thought bubble, the Zs, and the berry
 aren't shrunk with the scene, as they'd break into specks: a shrunk band draws them from
 smaller art of its own: a smaller round bubble with 3 px icons and a pixel of room around
 them, 3 px Zs, and a 3 px berry.
