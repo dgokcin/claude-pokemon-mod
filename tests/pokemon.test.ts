@@ -659,15 +659,19 @@ test('narrows the strip to keep the meters, and hides them when even the mon bar
   expect(await ui.find({ type: 'Text', text: /●/ })).toBeUndefined()
 })
 
-// The empty columns right of a mon's idle frames, the fewest across them
-function idleRightGap(mon: string): number {
+// The columns a mon at home keeps clear on its right, past the empty ones its frames leave:
+// the fewest right of its idle and walk frames, or left of a walk frame, mirrored facing left
+function homeGapOf(mon: string): number {
   const { width, variants } = SPRITES[mon]
-  return width - 1 - Math.max(...variants.default.idle.flatMap(({ rows }) => rows.map((row) => row.search(/[^.]\.*$/))))
+  const { idle, walk } = variants.default
+  const rights = [...idle, ...walk].flatMap(({ rows }) => rows.map((row) => row.search(/[^.]\.*$/)))
+  const lefts = walk.flatMap(({ rows }) => rows.map((row) => row.search(/[^.]/)).filter((left) => left >= 0))
+  return Math.max(0, 3 - Math.min(width - 1 - Math.max(...rights), ...lefts))
 }
 
 test('emoji meters need their wider panel to show beside a narrow strip, with the mon kept 3 columns clear', async ($, on) => {
   await startedWith($, on, { emoji: true }, 0)
-  const fits = SPRITES.abra.width + Math.max(0, 3 - idleRightGap('abra')) + EMOJI_PANEL
+  const fits = SPRITES.abra.width + homeGapOf('abra') + EMOJI_PANEL
   const wide = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: fits } })
   expect(await wide.find({ type: 'Text', text: /🍓/ })).toBeDefined()
   await wide.unmount()
@@ -692,11 +696,35 @@ test('a small band keeps the mon at home 3 columns clear of the meters on screen
   }
 })
 
+test('a mon walking right stays 3 columns clear of the meters, large or small', { timeoutMs: 60000 }, async ($, on) => {
+  const { clock, blits } = await startedWith($, on, { mon: 'tauros', wander: true }, 0, { TERM_PROGRAM: 'Apple_Terminal' })
+  for (const size of ['large', 'small']) {
+    await $.command.run({ command: 'pokemon', args: 'size ' + size })
+    // The ones whose walk frames reached closest to the meters before
+    for (const mon of ['tauros', 'arcanine', 'persian']) {
+      await $.command.run({ command: 'pokemon', args: mon })
+      const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+      await clock.advance(200)
+      const band = (await ui.find({ key: 'pokemon' })).props
+      blits.length = 0
+      await clock.advance(90000)
+      let right = -1
+      for (const cells of [band.cells, ...blits]) {
+        const painted = paintedCells(cells)
+        for (let i = 0; i < painted.length; i++) if (painted[i]) right = Math.max(right, i % band.columns)
+      }
+      // The panel takes the band's last PANEL columns, and its text starts a column in
+      expect({ size, mon, clear: band.columns - PANEL - right >= 3 }).toEqual({ size, mon, clear: true })
+      await ui.unmount()
+    }
+  }
+})
+
 test('a bubble beside the head floats over the meters column instead of being cut off', async ($, on) => {
   const low = { value: 10, at: 0 }
   const { clock, blits } = await startedWith($, on, { wander: false, stats: { abra: { food: low, happiness: low } } }, 0)
-  // A strip barely wider than Abra, so the bubble has no room on the left and goes right
-  const strip = SPRITES.abra.width + 2
+  // A strip barely wider than Abra and its gap, so the bubble has no room on the left and goes right
+  const strip = SPRITES.abra.width + homeGapOf('abra')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: strip + PANEL } })
   const raster = await ui.find({ key: 'pokemon' })
   expect(raster.props.columns).toBe(strip + PANEL)
@@ -1658,7 +1686,7 @@ test('/pokemon box leaves out the meters with needs off', async ($, on) => {
   expect(box.text).toBe('2 mons in your box:\nCharizard, Lv. 40\nPikachu, Lv. 12 (active)')
 })
 
-test('/pokemon box marks the caught mons and lists them before the ones only switched into', async ($, on) => {
+test('/pokemon box marks the caught mons, an evolved catch included, in level order', async ($, on) => {
   const stats = {
     pikachu: { xp: 12 ** 3 },
     pidgeotto: { xp: 20 ** 3, caught: true },
@@ -1670,9 +1698,9 @@ test('/pokemon box marks the caught mons and lists them before the ones only swi
   expect(box.text).toBe(
     [
       '4 mons in your box:',
+      'Charizard, Lv. 40',
       'Snorlax ◓, Lv. 30',
       'Pidgeotto ◓, Lv. 20',
-      'Charizard, Lv. 40',
       'Pikachu, Lv. 12 (active)',
     ].join('\n'),
   )

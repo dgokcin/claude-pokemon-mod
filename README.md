@@ -300,9 +300,8 @@ until it's gone, and so does an evolution that comes due.
 
 The Pokédex counts wild mons only, seen when one shows up and caught when you catch it. A
 caught species joins your box at its first level, unless it's there already, and
-its line in `/pokemon box` shows ◓. The box lists caught mons first, then the ones you
-only switched into with `/pokemon <mon>`, each highest level first. A mon evolved from a
-caught one keeps its ◓. Releasing a mon keeps it in the dex, and raising that species again
+its line in `/pokemon box` shows ◓. `/pokemon <mon>` still picks any mon, and a mon
+evolved from a caught one keeps its ◓. Releasing a mon keeps it in the dex, and raising that species again
 shows ◓ too.
 
 The battle needs a wider strip than the mon alone. A band 80 columns wide fits every pair,

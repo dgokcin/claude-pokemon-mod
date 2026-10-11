@@ -215,9 +215,10 @@ const gapUnder = (anim) => Math.min(...anim.map(({ rows }) => gapOf(rows)))
 // How far to lower the walk frames so the feet stand where the idle frames' do,
 // per mon and variant. Some sheets leave more empty rows under a walking mon.
 const WALK_DROP = {}
-// The empty columns right of an idle mon, the fewest across its idle frames, per variant.
-// Many sheets draw the idle mon right up to the frame's edge.
-const IDLE_RIGHT_GAP = {}
+// The empty columns right of a mon, the fewest across its idle frames and its walk frames
+// facing either way, per variant, so no frame steps closer to the meters than home allows.
+// Many sheets draw the mon right up to the frame's edge.
+const RIGHT_GAP = {}
 // The rightmost head column of a mon walking right, across its walk frames, per variant
 const WALK_HEAD_RIGHT = {}
 
@@ -231,9 +232,11 @@ function addSprite(name, sprite, listed = true) {
     Object.fromEntries(palette.map((hex, i) => [String.fromCharCode(97 + i), parseInt(hex.slice(1), 16)])),
   )
   WALK_DROP[name] = perVariant(({ walk, idle }) => gapUnder(walk) - gapUnder(idle))
-  IDLE_RIGHT_GAP[name] = perVariant(({ idle }) => {
-    const rights = idle.flatMap(({ rows }) => rows.map((row) => row.search(/[^.]\.*$/)))
-    return sprite.width - 1 - Math.max(...rights)
+  RIGHT_GAP[name] = perVariant(({ idle, walk }) => {
+    const rights = [...idle, ...walk].flatMap(({ rows }) => rows.map((row) => row.search(/[^.]\.*$/)))
+    // Facing left, a walk frame is mirrored, so its empty columns on the left end up on the right
+    const lefts = walk.flatMap(({ rows }) => rows.map((row) => row.search(/[^.]/)).filter((left) => left >= 0))
+    return Math.min(sprite.width - 1 - Math.max(...rights), ...lefts)
   })
   WALK_HEAD_RIGHT[name] = perVariant(({ walk }) =>
     Math.max(...walk.flatMap(({ rows }) => rows.slice(0, HEAD_PIXELS).map((row) => row.search(/[^.]\.*$/)))),
@@ -340,7 +343,7 @@ const panelRows = () => (needsOn ? 3 : 1)
 const HOME_GAP = 3
 const homeGap = () => Math.ceil(HOME_GAP / bandScale() - 1e-9)
 // The columns a mon's frame adds right of its body to keep the gap, past what it leaves empty
-const gapRightOf = (name) => Math.max(0, homeGap() - IDLE_RIGHT_GAP[name][variant])
+const gapRightOf = (name) => Math.max(0, homeGap() - RIGHT_GAP[name][variant])
 // The right edge of the strip, where the sprite idles, kept the gap clear of the meters
 // whatever empty space the sprite's frame leaves on its right
 const homeXOf = (name) => Math.max(0, columns - SPRITES[name].width - gapRightOf(name))
@@ -2237,14 +2240,13 @@ async function statsText($) {
 }
 
 // Every mon with a saved record, one a line, like "Charizard ◓, Lv. 36 ●●●○○ ♥♥♥♡♡ (active)",
-// where ◓ marks a mon caught in the wild. The caught ones come first, each lot highest level
-// first. A record caught since carries caught, and one saved before that counts as caught
-// when its species is in the dex.
+// highest level first, where ◓ marks a mon caught in the wild. A record caught since carries
+// caught, and one saved before that counts as caught when its species is in the dex.
 function boxText(dex = {}) {
   const raised = Object.keys(stats).filter((name) => MONS.includes(name) && stats[name] && typeof stats[name] === 'object' && !isDead(name))
   if (raised.length === 0) return 'Your box is empty. Pet or feed ' + displayName(mon) + ', or finish a turn, to start raising it.'
   const caught = (name) => Boolean(stats[name].caught || isCaught(dex[dexKey(name)]))
-  raised.sort((a, b) => caught(b) - caught(a) || levelOf(b) - levelOf(a) || displayName(a).localeCompare(displayName(b)) || a.localeCompare(b))
+  raised.sort((a, b) => levelOf(b) - levelOf(a) || displayName(a).localeCompare(displayName(b)) || a.localeCompare(b))
   const lines = raised.map((name) => {
     const meters = needsOn && !hasRunAway(name) ? ' ' + iconsFor('food', name).trimEnd() + ' ' + iconsFor('happiness', name).trimEnd() : ''
     const tags = [name === mon && !hasRunAway(name) ? 'active' : null, conditionOf(name)].filter(Boolean)
