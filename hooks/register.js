@@ -2819,6 +2819,14 @@ async function reviveCommand($, wanted) {
   return { text: 'You take ' + shown + ' to a Pokémon Center. It\'ll be back on its feet in ' + HEAL_MS / 60000 + ' minutes.' }
 }
 
+// The shown mon is at the Pokémon Center, so it can't be swapped out until it's back
+async function stillHealing($) {
+  await freshen($, [mon])
+  return isHealing(mon) && nowMs < stats[mon].healing.until
+}
+
+const healingReply = () => ({ text: downReply().text + ' Wait for it before switching.' })
+
 // Joins items as "A", "A and B", or "A, B, and C"
 const andList = (items) => (items.length < 3 ? items.join(' and ') : items.slice(0, -1).join(', ') + ', and ' + items.at(-1))
 
@@ -3160,8 +3168,10 @@ export function register(on) {
       await freshen($, [asked])
       if (isDead(asked)) return { text: displayName(asked) + ' is gone. Catch a new one in the wild to raise it again.' }
       if (hasRunAway(asked)) return { text: goneLine(asked) }
+      if (asked !== mon && (await stillHealing($))) return healingReply()
       await switchTo($, asked)
     } else if (asked === 'new' || asked.startsWith('new ')) {
+      if (await stillHealing($)) return healingReply()
       return newCommand($, asked.slice('new'.length).trim())
     } else if (VARIANTS.includes(asked)) {
       variant = asked
