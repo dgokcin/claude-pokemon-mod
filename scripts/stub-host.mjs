@@ -3,7 +3,8 @@
 // hooks/register.js, and contactSheet paints the frames it shows into a PNG the way the
 // half blocks look. Like a terminal without kitty graphics, it draws an Image's alt, so a
 // small band falls back to half blocks on its first tick. Its clock stands at 0 unless
-// ticking is set, when it runs on 50 ms a tick.
+// ticking is set, when it runs on 50 ms a tick. The agent list reports agents, which a
+// previewer can add to and mark done.
 
 import { execFileSync } from 'node:child_process'
 import { rmSync, writeFileSync } from 'node:fs'
@@ -40,7 +41,7 @@ const matches = (matcher, e) => !matcher || Object.entries(matcher).every(([k, v
 // Start a session with the saved store entries. Math.random is seeded before the band
 // loads. The band only blits a frame that changed, so a tick with no blit leaves the last
 // frame showing, and a tick that asks for a redraw draws the band again, as the host does.
-export async function stubHost({ saved = {}, light = false, seed = 1, bodyColumns = 120, ticking = false } = {}) {
+export async function stubHost({ saved = {}, light = false, seed = 1, bodyColumns = 120, ticking = false, agents = [] } = {}) {
   const hooks = {}
   const store = new Map(Object.entries(saved))
   const screen = { cells: null, columns: 0 }
@@ -59,7 +60,7 @@ export async function stubHost({ saved = {}, light = false, seed = 1, bodyColumn
       delete: async (k) => void store.delete(k),
     },
     clock: { now: async () => elapsed, every: (ms, fn) => void (tickFn = fn) },
-    agent: { list: async () => [] },
+    agent: { list: async () => agents },
     env: { get: async () => undefined },
     ui: {
       invalidate: () => void (invalid = true),
@@ -74,10 +75,12 @@ export async function stubHost({ saved = {}, light = false, seed = 1, bodyColumn
     },
   }
 
-  // Fire an event at the band, with result as what the hooks beneath it return
+  // Fire an event at the band, with result as what the hooks beneath it return, or as
+  // the next they call when it's a function, as a streaming event's stream is
   async function fire(event, e, result) {
     const hook = (hooks[event] ?? []).find((h) => matches(h.matcher, e))
-    return hook ? hook.fn($, e, async () => result) : result
+    const next = typeof result === 'function' ? result : async () => result
+    return hook ? hook.fn($, e, next) : result
   }
 
   async function render() {
@@ -108,7 +111,7 @@ export async function stubHost({ saved = {}, light = false, seed = 1, bodyColumn
   await fire('session.start', {})
   await render()
   const command = async (args) => (await fire('command.run', { command: 'pokemon', args }))?.text
-  return { fire, command, tick, screen, toasts, store }
+  return { fire, command, tick, screen, toasts, store, agents }
 }
 
 // Glyphs for the few non-block characters the band draws, on a 5x10 grid

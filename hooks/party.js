@@ -3,7 +3,8 @@ import { rnd } from './effects/draw.js'
 // Claude's running subagents as a party of Poké Balls along the left of the strip.
 // A ball drops in when a subagent starts, rocks now and then while it runs, and
 // pops open in a burst of light when it stops. The balls to its right then slide
-// over to close the gap. Past six, the sixth slot shows +n for the rest.
+// over to close the gap. Past six, the sixth slot shows +n for the rest. A ball whose
+// party mon is out of it rests still, and lifts its lid while the mon comes and goes.
 // A party is a plain array of balls, oldest first. Every function returns a new
 // party or new stamps and leaves its input alone.
 
@@ -109,6 +110,14 @@ function tiltAt(ball, age, ground) {
   return WOBBLE[(rested + h) % beat] ?? 0
 }
 
+// Whether a subagent's ball has landed and settled in one of the first five slots, so
+// its party mon can step out
+export function ballReady(party, id, tick, ground) {
+  const i = party.findIndex((ball) => ball.id === id)
+  if (i < 0 || i >= PARTY_SIZE - 1 || party[i].popStart !== null) return false
+  return tick - party[i].born >= landingAge(ground) + SETTLE_TICKS
+}
+
 export function joinParty(party, id, tick) {
   if (party.some((ball) => ball.id === id)) return party
   return [...party, { id, born: tick, popStart: null, slideFrom: null, slideStart: 0 }]
@@ -186,7 +195,8 @@ function labelStamp(n, ground, color) {
 // What to draw this tick, the first stamp on top: popping lids and flashes, falling
 // balls, resting balls, sparks, then the +n label. Balls past the fifth that have
 // landed fold into the label, so a new one falls into the sixth slot and joins it.
-export function partyStamps(party, tick, { columns, ground, label = LABEL_COLOR }) {
+// still lists the balls a party mon is out of, and open the ones lifting their lid for it.
+export function partyStamps(party, tick, { columns, ground, label = LABEL_COLOR, still = new Set(), open = new Set() }) {
   const landed = (ball) => hasLanded(ball, tick, ground)
   const crowd = party.slice(PARTY_SIZE - 1)
   const settled = crowd.filter(landed)
@@ -212,8 +222,13 @@ export function partyStamps(party, tick, { columns, ground, label = LABEL_COLOR 
     }
     if (hidden || (i >= PARTY_SIZE - 1 && !landed(ball) && ball !== leader)) return
     const age = tick - ball.born
-    const tilt = tiltAt(ball, age, ground)
-    const s = stamp(x - 1, topAt(age, ground), LEANS[tilt + 1], BALL_COLORS)
+    const top = topAt(age, ground)
+    if (landed(ball) && open.has(ball.id)) {
+      resting.push(stamp(x - 1, top + BALL_SIZE - OPEN[1].length, OPEN[1], LIGHT_COLORS))
+      return
+    }
+    const tilt = still.has(ball.id) ? 0 : tiltAt(ball, age, ground)
+    const s = stamp(x - 1, top, LEANS[tilt + 1], BALL_COLORS)
     if (landed(ball)) resting.push(s)
     else falling.push(s)
   })

@@ -2400,7 +2400,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('env.get', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|new|list|pet|feed|sleep|revive|nickname|attack|moves|catch|run|evolve|stop|stats|box|dex|release|wander|needs|emoji|size|pane|sync|autoevolve|nuzlocke|help]')
+  expect(hint).toBe('[<mon>|default|shiny|new|list|pet|feed|sleep|revive|nickname|attack|moves|catch|run|evolve|stop|stats|box|party|dex|release|wander|needs|emoji|size|pane|sync|autoevolve|nuzlocke|help]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
@@ -2783,6 +2783,206 @@ test('past five subagents, the last slot counts the rest as +n', async ($, on) =
   for (let k = 5; k < 8; k++) await $.agent.spawn(spawnOf('t' + k))
   await clock.advance(3000)
   expect(paints(await shown(ui, blits), PARTY_LABEL)).toBe(true)
+})
+
+// Pikachu's yellow and Charmander's orange, colors Abra and the balls don't paint
+const PIKACHU = 0xf8d050
+const CHARMANDER = 0xf88838
+// A box beside Abra: Pikachu at Lv. 12 comes out first, then Charmander at Lv. 8
+const PARTY_BOX = { pikachu: { xp: 12 ** 3 }, charmander: { xp: 8 ** 3 } }
+// The band's whole width while a party mon is out: the strip takes all the room
+const FULL = BAND.props.bodyColumns
+
+test('a party mon steps out of a subagent\'s ball, and the strip widens to the whole band', async ($, on) => {
+  runningAgents(on)
+  const { clock, blits, widths } = await startedWith($, on, { wander: false, stats: PARTY_BOX }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  await $.agent.spawn(spawnOf('t1'))
+  await clock.advance(500)
+  // The strip widens as the ball drops, and Pikachu waits in it until it lands
+  expect(widths[widths.length - 1]).toBe(FULL)
+  expect(paints(await shown(ui, blits), PIKACHU)).toBe(false)
+  await clock.advance(3500)
+  const out = await shown(ui, blits)
+  expect(paints(out, PIKACHU)).toBe(true)
+  expect(paints(out, CHARMANDER)).toBe(false)
+})
+
+test('party mons come out one after the other, each from a flash that shows before it does', async ($, on) => {
+  runningAgents(on)
+  const { clock, blits } = await startedWith($, on, { wander: false, stats: PARTY_BOX }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.agent.spawn(spawnOf('t1'))
+  await $.agent.spawn(spawnOf('t2'))
+  // Both balls have landed and Pikachu's has opened, but it's still inside its flash
+  await clock.advance(2750)
+  const flashing = await shown(ui, blits)
+  expect(paints(flashing, PIKACHU)).toBe(false)
+  expect(paints(flashing, CHARMANDER)).toBe(false)
+  // Pikachu is out, and Charmander's ball waits its turn
+  await clock.advance(250)
+  const first = await shown(ui, blits)
+  expect(paints(first, PIKACHU)).toBe(true)
+  expect(paints(first, CHARMANDER)).toBe(false)
+  await clock.advance(500)
+  const both = await shown(ui, blits)
+  expect(paints(both, PIKACHU)).toBe(true)
+  expect(paints(both, CHARMANDER)).toBe(true)
+})
+
+test('the desktop draws a party mon in its Svg too', async ($, on) => {
+  runningAgents(on)
+  const { clock } = await startedWith($, on, { wander: false, stats: PARTY_BOX }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await $.agent.spawn(spawnOf('t1'))
+  await clock.advance(4000)
+  expect(svgOf(await ui.find({ type: 'Svg' }))).toContain('fill="#f8d050"')
+})
+
+test('a party mon shows its own agent\'s tool in its bubble', async ($, on) => {
+  runningAgents(on)
+  const { clock, blits } = await startedWith($, on, { wander: false, stats: PARTY_BOX }, 0)
+  slowTools(on, clock)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.agent.spawn(spawnOf('t1'))
+  await clock.advance(4000)
+  expect(paints(await shown(ui, blits), SHELL_ICON)).toBe(false)
+
+  // Claude isn't working, so the lead shows no bubble: the prompt is Pikachu's
+  const bash = $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'agent-t1' })
+  await clock.advance(100)
+  expect(paints(await shown(ui, blits), SHELL_ICON)).toBe(true)
+  await clock.advance(2000)
+  await bash
+  await clock.advance(100)
+  expect(paints(await shown(ui, blits), SHELL_ICON)).toBe(false)
+
+  const edit = $.tool.call({ tool: 'Edit', file_path: '/work/a.ts', old_string: 'a', new_string: 'b', agentId: 'agent-t1' })
+  await clock.advance(100)
+  expect(paints(await shown(ui, blits), PENCIL_ICON)).toBe(true)
+  await clock.advance(2000)
+  await edit
+})
+
+test('a party mon shows dots while its agent thinks', async ($, on) => {
+  runningAgents(on)
+  const { clock, blits } = await startedWith($, on, { wander: false, stats: PARTY_BOX }, 0)
+  on('turn.step', async function* (_, e) {
+    yield { kind: 'thinking', index: 0, text: 'Counting' }
+    await clock.sleep(2000)
+    yield { kind: 'text', index: 1, text: 'Done' }
+    yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+    return { turnId: e.turnId, index: e.index, answer: 'Done', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.agent.spawn(spawnOf('t1'))
+  await clock.advance(4000)
+  expect(paints(await shown(ui, blits), DOTS)).toBe(false)
+
+  const step = $.turn.step({ turnId: 's1', index: 0, model: 'claude-haiku-4-5', messageCount: 1, agentId: 'agent-t1' })
+  const read = (async () => {
+    for await (const _ of step);
+  })()
+  await clock.advance(500)
+  expect(paints(await shown(ui, blits), DOTS)).toBe(true)
+  await clock.advance(2000)
+  await read
+  await clock.advance(100)
+  expect(paints(await shown(ui, blits), DOTS)).toBe(false)
+})
+
+test('a party mon goes back into its ball when its agent finishes, and the strip shrinks back', async ($, on) => {
+  runningAgents(on)
+  on('turn.complete', () => ({ text: '' }))
+  const { clock, blits, widths } = await startedWith($, on, { wander: false, stats: PARTY_BOX }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.agent.spawn(spawnOf('t1'))
+  await clock.advance(4000)
+  expect(paints(await shown(ui, blits), PIKACHU)).toBe(true)
+
+  await $.turn.complete({ turnId: 's1', answer: 'done', durationMs: 3000, isAborted: false, reason: 'answer', agentId: 'agent-t1' })
+  // It hops and turns red on its way in, and its ball stays until it's in
+  await clock.advance(600)
+  expect(paints(await shown(ui, blits), BALL_TOP)).toBe(true)
+  await clock.advance(3000)
+  const back = await shown(ui, blits)
+  expect(paints(back, PIKACHU)).toBe(false)
+  expect(paints(back, BALL_TOP)).toBe(false)
+  expect(widths[widths.length - 1]).toBe(RASTER)
+})
+
+test('a subagent past the room keeps a closed ball, with its mon waiting inside', async ($, on) => {
+  runningAgents(on)
+  const { clock, blits } = await startedWith($, on, { wander: false, stats: PARTY_BOX }, 0)
+  // 25 columns beside the lead's strip fit Pikachu's 16 column body and its gap, not Charmander's too
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: PANEL + STRIP + 25 } })
+  await $.agent.spawn(spawnOf('t1'))
+  await $.agent.spawn(spawnOf('t2'))
+  await clock.advance(4000)
+  const cells = await shown(ui, blits)
+  expect(paints(cells, PIKACHU)).toBe(true)
+  expect(paints(cells, CHARMANDER)).toBe(false)
+  expect(paints(cells, BALL_TOP)).toBe(true)
+  const party = await $.command.run({ command: 'pokemon', args: 'party' })
+  expect(party.text).toContain('Charmander, Lv. 8, working for Count files, waiting in its ball for room')
+})
+
+test('with no other mon in the box, a subagent is just a ball', async ($, on) => {
+  runningAgents(on)
+  const { clock, blits, widths } = await startedWith($, on, { wander: false, stats: { abra: { xp: 20 ** 3 } } }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.agent.spawn(spawnOf('t1'))
+  await clock.advance(4000)
+  const cells = await shown(ui, blits)
+  expect(groundColors(cells).has(BALL_BOTTOM)).toBe(true)
+  expect(widths.every((w) => w === RASTER)).toBe(true)
+  const party = await $.command.run({ command: 'pokemon', args: 'party' })
+  expect(party.text).toBe('Your party is empty. Raise or catch another mon, and it comes out of a subagent\'s Poké Ball to work beside Abra.')
+})
+
+test('/pokemon party lists the party, highest level first, and the agent each one works for', async ($, on) => {
+  runningAgents(on)
+  const stats = { ...PARTY_BOX, squirtle: { xp: 6 ** 3, nickname: 'Shelly' }, bulbasaur: { xp: 30 ** 3, fainted: { ms: 0, at: 0 } } }
+  const { clock } = await startedWith($, on, { wander: false, stats }, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.agent.spawn(spawnOf('t1'))
+  await clock.advance(4000)
+  const party = await $.command.run({ command: 'pokemon', args: 'party' })
+  expect(party.text).toBe(['3 mons in your party, beside Abra:', 'Pikachu, Lv. 12, working for Count files', 'Charmander, Lv. 8, free', 'Shelly (Squirtle), Lv. 6, free'].join('\n'))
+})
+
+test('/pokemon party add and remove pick who comes out, in the order added', async ($, on) => {
+  runningAgents(on)
+  const stats = { ...PARTY_BOX, squirtle: { xp: 6 ** 3 } }
+  const { clock, blits } = await startedWith($, on, { wander: false, stats }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const party = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+
+  expect(await party('party remove pikachu')).toBe('Pikachu leaves your party.')
+  expect(await party('party remove pikachu')).toBe('Pikachu isn\'t in your party.')
+  expect(await party('party add pikachu')).toBe('Pikachu joins your party.')
+  expect(await party('party add pikachu')).toBe('Pikachu is already in your party.')
+  expect(await party('party add abra')).toBe('Abra is the mon on show. Pick another with /pokemon <mon> first.')
+  expect(await party('party add mew')).toBe('Mew isn\'t in your box. Catch one, or pick it with /pokemon mew.')
+  expect(await party('party add pidgey2')).toBe('Unknown mon "pidgey2". /pokemon box lists yours.')
+  expect(await party('party')).toBe(['3 mons in your party, beside Abra:', 'Charmander, Lv. 8, free', 'Squirtle, Lv. 6, free', 'Pikachu, Lv. 12, free'].join('\n'))
+
+  // Charmander, first in the picked order, comes out ahead of the higher level Pikachu
+  await $.agent.spawn(spawnOf('t1'))
+  await clock.advance(4000)
+  const out = await shown(ui, blits)
+  expect(paints(out, CHARMANDER)).toBe(true)
+  expect(paints(out, PIKACHU)).toBe(false)
+})
+
+test('/pokemon party add refuses a sixth mon, and an emptied party stays empty', async ($, on) => {
+  const stats = Object.fromEntries(['pikachu', 'charmander', 'squirtle', 'bulbasaur', 'pidgey', 'rattata'].map((name, i) => [name, { xp: (10 - i) ** 3 }]))
+  await startedWith($, on, { wander: false, stats }, 0)
+  const party = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await party('party add rattata')).toBe('Your party is full at 5. Take one out with /pokemon party remove <mon> first.')
+  for (const name of ['pikachu', 'charmander', 'squirtle', 'bulbasaur', 'pidgey']) await party('party remove ' + name)
+  expect(await party('party')).toBe('Your party is empty. Add a mon from your box with /pokemon party add <mon>.')
 })
 
 // The strip columns where a color shows, as a foreground or a background
