@@ -2446,11 +2446,16 @@ const HELP = [
     ['nuzlocke', 'A fainted mon is lost for good', () => onOff(nuzlockeOn)],
   ]],
 ]
+// The hidden debug options, at the top of /pokemon help only while debug is on
+const DEBUG_HELP = ['Debug', [
+  ['wild [mon]', 'Call a wild mon now, or the one named; add shiny for its shiny colors'],
+  ['kill', 'Faint the mon now, or lose it under nuzlocke'],
+]]
 const OPTIONS = [...HELP.flatMap(([, rows]) => rows.map(([usage]) => usage.split(' ')[0])), 'help']
-const USAGE_WIDTH = Math.max(...HELP.flatMap(([, rows]) => rows.map(([usage]) => usage.length))) + 2
+const USAGE_WIDTH = Math.max(...[DEBUG_HELP, ...HELP].flatMap(([, rows]) => rows.map(([usage]) => usage.length))) + 2
 // A setting shows its value ahead of what it does, so the values line up in a column
-function helpText() {
-  const groups = HELP.map(([title, rows]) => title + '\n' + rows.map(([usage, does, value]) => '  ' + usage.padEnd(USAGE_WIDTH) + (value ? value().padEnd(7) : '') + does).join('\n'))
+function helpText(debug) {
+  const groups = (debug ? [DEBUG_HELP, ...HELP] : HELP).map(([title, rows]) => title + '\n' + rows.map(([usage, does, value]) => '  ' + usage.padEnd(USAGE_WIDTH) + (value ? value().padEnd(7) : '') + does).join('\n'))
   return 'Usage: /pokemon <option>\n\n' + groups.join('\n\n')
 }
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
@@ -3301,7 +3306,7 @@ export function register(on) {
     } else if (asked === 'list') {
       return { text: MONS.length + ' mons: ' + MONS.join(', ') }
     } else if (asked === 'help') {
-      return { text: helpText() }
+      return { text: helpText((await $.store.get('debug')) === true) }
     } else if (asked) {
       return { text: 'Unknown option "' + asked + '". Try one of: ' + OPTIONS.join(', ') + '. See /pokemon list for every mon.' }
     } else {

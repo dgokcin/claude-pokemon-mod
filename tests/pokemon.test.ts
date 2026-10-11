@@ -235,6 +235,24 @@ test('/pokemon help lists every option in groups, with each setting\'s value', a
   expect([...listed, 'help']).toEqual(options)
 })
 
+test('/pokemon help puts the debug options first, only while debug is on', async ($, on) => {
+  const saved: Record<string, any> = {}
+  await startedWith($, on, saved, 0)
+  const help = async () => (await $.command.run({ command: 'pokemon', args: 'help' })).text.split('\n')
+  expect(await help()).not.toContain('Debug')
+  saved.debug = true
+  const lines = await help()
+  expect(lines.slice(0, 6)).toEqual([
+    'Usage: /pokemon <option>',
+    '',
+    'Debug',
+    '  wild [mon]        Call a wild mon now, or the one named; add shiny for its shiny colors',
+    '  kill              Faint the mon now, or lose it under nuzlocke',
+    '',
+  ])
+  expect(lines[6]).toBe('Pick')
+})
+
 test('/pokemon charmander draws Charmander', async ($, on) => {
   mock.clock(on)
   on('ui.render', () => THEIRS)
