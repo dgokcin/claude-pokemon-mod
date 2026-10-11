@@ -372,7 +372,8 @@ To call a wild mon without waiting, turn on debug mode:
 3. Run `/reload-plugins`.
 
 Then `/pokemon wild`, `/pokemon wild <mon>`, or `/pokemon wild <mon> shiny` calls one in
-without waiting for the shared timer. Without debug, `wild` replies as an unknown option.
+without waiting for the shared timer. `/pokemon kill` faints the mon on show, or loses it for good
+with nuzlocke on. Without debug, `wild` and `kill` reply as unknown options.
 
 <details>
 <summary>Add a mon</summary>
