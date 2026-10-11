@@ -2362,7 +2362,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('env.get', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|size|sync|autoevolve|nuzlocke|pet|feed|sleep|revive|attack|catch|run|moves|evolve|stop|stats|box|dex|nickname|release|new|list]')
+  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|size|pane|sync|autoevolve|nuzlocke|pet|feed|sleep|revive|attack|catch|run|moves|evolve|stop|stats|box|dex|nickname|release|new|list]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
@@ -3659,4 +3659,71 @@ test('a species lost in a nuzlocke comes back only by catching a new one, at its
   expect(saved.stats.pidgey).toEqual({ xp: 5 ** 3, caught: true, parked: true })
   expect(await run($, 'dex')).toBe('Pokédex: seen 1, caught 1 of 151.\n#016 Pidgey ◓\nRest well: Pidgey, Lv. 30, on 1970-01-01.')
   expect(await run($, 'pidgey')).toBe('Now showing default Pidgey.')
+})
+
+const PANE = {
+  plugin: 'pokemon',
+  component: 'Pane',
+  requestId: 'pokemon',
+  viewport: { columns: 200, rows: 50, isFullscreen: true },
+  props: {
+    title: 'Pokémon',
+    isFocused: false,
+    bodyColumns: 98,
+    placement: 'dock',
+    scroll: { offset: 0, bodyRows: 46 },
+    view: {},
+  },
+} as const
+
+// Answers the pane calls as a fullscreen terminal does, keeping what was asked
+function paneEngine(on) {
+  const opened: any[] = []
+  const closed: any[] = []
+  on('ui.open', ($, e) => {
+    opened.push(e)
+    return { value: { isPlaced: true } }
+  })
+  on('ui.close', ($, e) => {
+    closed.push(e)
+    return { value: undefined }
+  })
+  return { opened, closed }
+}
+
+test('/pokemon pane moves the scene from the band into a pane half the terminal wide', async ($, on) => {
+  const saved: Record<string, unknown> = { mon: 'abra' }
+  const { opened } = paneEngine(on)
+  await startedWith($, on, saved, 0)
+  const answer = await $.command.run({ command: 'pokemon', args: 'pane' })
+  expect(answer.text).toContain('pane')
+  expect(opened).toHaveLength(1)
+  expect(opened[0].id).toBe('pokemon')
+  expect(opened[0].columns ?? 0).toBe(Math.floor(Number(saved.paneColumns)))
+  expect(saved.pane).toBe(true)
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await pane.find({ key: 'pokemon' })).toBeDefined()
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await band.find({ key: 'pokemon' })).toBeUndefined()
+})
+
+test('/pokemon pane again brings the scene back to the band', async ($, on) => {
+  const saved: Record<string, unknown> = { mon: 'abra' }
+  const { closed } = paneEngine(on)
+  await startedWith($, on, saved, 0)
+  await $.command.run({ command: 'pokemon', args: 'pane' })
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const answer = await $.command.run({ command: 'pokemon', args: 'pane' })
+  expect(answer.text).toContain('back above the prompt')
+  expect(closed.map((e) => e.id)).toEqual(['pokemon'])
+  expect(saved.pane).toBe(false)
+  await pane.unmount()
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await band.find({ key: 'pokemon' })).toBeDefined()
+})
+
+test('a session that left the scene in the pane opens it again on start', async ($, on) => {
+  const { opened } = paneEngine(on)
+  await startedWith($, on, { mon: 'abra', pane: true, paneColumns: 90 }, 0)
+  expect(opened.map((e) => [e.id, e.columns])).toEqual([['pokemon', 90]])
 })
