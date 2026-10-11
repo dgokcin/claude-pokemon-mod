@@ -2998,6 +2998,22 @@ test('/pokemon wild spawns a mon only with debug on and a band it fits in', asyn
   expect(await run('wild rattata')).toBe('A wild Pidgey is already here.')
 })
 
+test('/pokemon kill faints the shown mon only with debug on, and loses it under nuzlocke', async ($, on) => {
+  const toasts = toastsOf(on)
+  const saved: Record<string, any> = { wander: false, stats: { abra: { nickname: 'Spoon' }, pidgey: {} } }
+  await startedWith($, on, saved, 0)
+  expect(await run($, 'kill')).toMatch(/^Unknown option "kill"\. /)
+  saved.debug = true
+  expect(await run($, 'kill')).toBe('Spoon fainted.')
+  expect(toasts).toContain('Spoon fainted! /pokemon revive takes it to a Pokémon Center.')
+  expect(saved.stats.abra.fainted).toEqual({ ms: 0, at: expect.any(Number) })
+  expect(await run($, 'kill')).toBe('Spoon has fainted. /pokemon revive takes it to a Pokémon Center.')
+  await run($, 'pidgey')
+  await run($, 'nuzlocke')
+  expect(await run($, 'kill')).toBe('Pidgey fainted for good.')
+  expect(saved.stats.pidgey).toEqual({ dead: { at: expect.any(Number) } })
+})
+
 test('a wild mon walks in from the left, the strip widens to fit it, and the dex marks it seen', async ($, on) => {
   const toasts = toastsOf(on)
   const saved: Record<string, any> = { wander: false, debug: true }

@@ -1493,6 +1493,18 @@ async function wildCommand($, rest) {
   return { text: 'A wild ' + displayName(pick.mon) + ' is on its way.' }
 }
 
+// The hidden debug faint, /pokemon kill. It faints the shown mon as neglect would, or
+// loses it under nuzlocke. Null when debug is off, so it reads as an unknown option.
+async function killCommand($) {
+  if ((await $.store.get('debug')) !== true) return null
+  nowMs = await $.clock.now()
+  await freshen($, [mon])
+  if (isDown()) return downReply()
+  const name = nameOf(mon)
+  await (nuzlockeOn ? loseMon($, mon) : faintMon($))
+  return { text: name + (nuzlockeOn ? ' fainted for good.' : ' fainted.') }
+}
+
 // The current frame, zoomed to the band or at full size: a color or null per pixel, two
 // pixel rows per cell, and the effects' glyphs by cell
 function frameNow(full = false) {
@@ -3198,6 +3210,8 @@ export function register(on) {
       fleeWild($, true)
       return { text: 'Got away safely!' }
     } else if ((asked === 'wild' || asked.startsWith('wild ')) && (reply = await wildCommand($, asked.slice('wild'.length)))) {
+      return reply
+    } else if (asked === 'kill' && (reply = await killCommand($))) {
       return reply
     } else if (asked === 'moves' || asked.startsWith('moves ')) {
       const whose = asked.slice('moves'.length).trim() || mon
