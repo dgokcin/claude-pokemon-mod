@@ -13,7 +13,7 @@ import { encodePng } from './png.js'
 import { BALL, BALL_COLORS, FLASH, LEANS, LIGHT_COLORS, OPEN, joinParty, leaveParty, partyStamps, prunedParty } from './party.js'
 import {
   ATTACK_GAP_MS, ATTACK_JITTER_MS, THROW_TICKS, WILD_STAY_MS, WILD_TURNS, WORN_OUT_MS, battleColumns, chargedWild, damageOf,
-  foeBlinks, foeJolt, foeSpotX, foeX, fleeingWild, hpBar, isHere, isOnStage, newWild, stepWild, thrownWild, throwStage,
+  foeBlinks, foeJolt, foeSpotX, foeX, fleeingWild, HP_BAR, hpBar, isHere, isOnStage, newWild, stepWild, thrownWild, throwStage,
 } from './wild.js'
 import { SIZES, zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 
@@ -297,11 +297,12 @@ function resizedSprite(name, height) {
 // The foe as drawn. In a small band it stands as tall on screen as it would as the mon on
 // show, so a big foe makes the band taller rather than shrinking to the home mon. Only a
 // half block band, whose scale goes by the mon, resizes it. Each size is resized once and
-// kept under its own name, unlisted.
+// kept under its own name, unlisted. A foe too tall for the room the home mon leaves in a
+// short band, as on desktop, shrinks to fit it rather than shrinking the home mon with it.
 function foeAs(name) {
-  if (SIZES[size] >= 1) return name
   const own = SPRITES[name].height
-  const height = Math.max(1, Math.round((own * bandScale(rowsOf(name))) / bandScale()))
+  const shown = SIZES[size] >= 1 ? own : Math.max(1, Math.round((own * bandScale(rowsOf(name))) / bandScale()))
+  const height = Math.max(1, Math.min(shown, 2 * (foeRoom() - HEAD_ROWS)))
   if (height === own) return name
   const sized = name + '@' + height
   if (!SPRITES[sized]) addSprite(sized, resizedSprite(name, height), false)
@@ -332,6 +333,11 @@ const bandScale = (rows = homeRows()) => {
   return Math.min(1, Math.max(scale, HALF_BLOCK_MIN_ROWS / rows))
 }
 const bandZoom = () => zoomFor({ columns: sceneColumns(), rows: bandRows(), maxRows, size: bandScale() })
+// The scene rows a foe can take without the band shrinking past the home mon's own fit
+const foeRoom = () => {
+  const home = zoomFor({ columns: 1, rows: homeRows(), maxRows, size: bandScale() })
+  return home ? Math.floor(maxRows / home.scale + 1e-9) : Infinity
+}
 // The strip and the panel, in the strip's own columns, and the whole scene with the margin
 const stripColumns = () => columns + panel
 const sceneColumns = () => margin + columns + panel
@@ -1161,12 +1167,37 @@ function foeBox(rows) {
   return { left: left + box.left, right: left + box.right, top: top + box.top, bottom: top + box.bottom }
 }
 
-// The HP bar, a pixel row centred over the standing foe with a row of space between
+// A mon's head in its first idle frame, as the columns of its top HEAD_PIXELS opaque rows
+const heads = new Map()
+function headOf(name, v) {
+  const key = name + ':' + v
+  if (heads.has(key)) return heads.get(key)
+  const rows = SPRITES[name].variants[v].idle[0].rows
+  const colors = COLORS[name][v]
+  const { top } = idleBox(name, v)
+  const head = { left: Infinity, right: -1 }
+  for (const row of rows.slice(top, top + HEAD_PIXELS)) {
+    for (let px = 0; px < row.length; px++) {
+      if (colors[row[px]] === undefined) continue
+      head.left = Math.min(head.left, px)
+      head.right = Math.max(head.right, px)
+    }
+  }
+  heads.set(key, head)
+  return head
+}
+
+// The HP bar, a pixel row centred over the standing foe's head with a row of space
+// between, so a tail or an arm out to one side doesn't pull it off. It takes a pixel more
+// over a head an odd number of pixels wide, so it can sit exactly in the middle.
 function hpStamps(rows) {
   if (wild.phase !== 'battle') return []
   const box = foeBox(rows)
-  const bar = hpBar(wild, ink.hpEmpty)
-  const left = Math.round((box.left + box.right + 1 - bar.width) / 2)
+  const head = headOf(foeName(), wild.variant)
+  const at = foeX(wild, wildAt())
+  const span = head.right - head.left + 1
+  const bar = hpBar(wild, ink.hpEmpty, HP_BAR + ((span - HP_BAR) & 1))
+  const left = at + head.left + (span - bar.width) / 2
   return [stamp(left, Math.max(0, box.top - 2), bar.rows, bar.colors)]
 }
 

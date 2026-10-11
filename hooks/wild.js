@@ -23,7 +23,7 @@ const MAX_CHARGE = 2
 // A hit jolts the foe a pixel to either side in turn, and blinks it, in 2-tick phases
 const JOLT_TICKS = 12
 const BLINK_TICKS = 8
-const HP_BAR = 12
+export const HP_BAR = 12
 const HP_COLORS = [[0.5, 0x48c858], [0.2, 0xe8c030], [0, 0xe04040]]
 
 // How long each stage of a throw takes, in ticks. The drop's length depends on how far
@@ -94,11 +94,11 @@ export const foeBlinks = (wild, tick) => wild.hitAt !== null && tick - wild.hitA
 
 // The HP bar as stamp rows and colors: filled from the left in green, yellow, or red by
 // what's left, the rest in empty
-export function hpBar(wild, empty) {
+export function hpBar(wild, empty, width = HP_BAR) {
   const share = wild.hp / wild.maxHp
-  const filled = Math.ceil(share * HP_BAR)
+  const filled = Math.ceil(share * width)
   const color = HP_COLORS.find(([above]) => share > above)?.[1] ?? HP_COLORS[2][1]
-  return { rows: ['f'.repeat(filled) + 'e'.repeat(HP_BAR - filled)], colors: { f: color, e: empty }, width: HP_BAR }
+  return { rows: ['f'.repeat(filled) + 'e'.repeat(width - filled)], colors: { f: color, e: empty }, width }
 }
 
 // Drawn in the scene, from walking in to walking off
