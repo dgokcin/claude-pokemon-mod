@@ -123,6 +123,12 @@ let alertUntil = 0
 let idleAlertAt = null
 let party = []
 let bandId = null
+// /pokemon pane moves the scene from the band into a pane, docked beside the transcript in
+// the fullscreen layout so Claude's replies keep the rest of the screen. It's drawn there
+// once the surface places it; until then the band goes on drawing it.
+const PANE_ID = 'pokemon'
+let paneOn = false
+let paneShown = false
 // The surface the band is drawn on, terminal or desktop
 let bandSurface = 'terminal'
 let columns = STRIP_COLUMNS
@@ -2422,6 +2428,7 @@ const HELP = [
     ['needs', 'Food and happiness', () => onOff(needsOn)],
     ['emoji', 'Emoji meters', () => onOff(emojiOn)],
     ['size small|large', 'Band size', () => size],
+    ['pane', 'Show the mon in a docked pane, not the band', () => onOff(paneOn)],
     ['sync', 'Same mon in every open session', () => onOff(syncOn)],
     ['autoevolve', 'Evolve on its own at its level', () => onOff(autoEvolve)],
     ['nuzlocke', 'A fainted mon is lost for good', () => onOff(nuzlockeOn)],
@@ -2901,6 +2908,131 @@ async function newCommand($, wanted) {
   }
 }
 
+// Asks for half the terminal, unless the person sized the dock themselves
+async function openPane($, columns) {
+  const opened = await $.ui.open({ id: PANE_ID, title: 'Pokémon', ...(columns > 0 ? { columns } : {}) })
+  if (!opened.isPlaced) leavePane($)
+  return opened
+}
+
+// The band draws the scene again, and blits go to it
+function leavePane($) {
+  if (!paneShown) return
+  paneShown = false
+  bandId = null
+  $.ui.invalidate('ui.render')
+}
+
+async function paneCommand($, presentation) {
+  if (paneOn) {
+    paneOn = false
+    await $.store.set('pane', false)
+    await $.ui.close({ id: PANE_ID })
+    leavePane($)
+    return { text: nameOf(mon) + ' is back above the prompt.' }
+  }
+  paneOn = true
+  const columns = Math.floor((presentation?.columns ?? 0) / 2)
+  await $.store.set('pane', true)
+  await $.store.set('paneColumns', columns)
+  const opened = await openPane($, columns)
+  if (!opened.isPlaced) return { text: nameOf(mon) + "'s pane is open but waits for a wider terminal. /pokemon pane brings it back to the band." }
+  if (presentation?.isFullscreen === false) return { text: nameOf(mon) + ' moved to a pane above the prompt. It docks beside the transcript in the fullscreen layout. /pokemon pane brings it back to the band.' }
+  return { text: nameOf(mon) + ' moved to a pane beside the transcript. /pokemon pane brings it back to the band.' }
+}
+
+// Lays out the scene, the mon with its meters beside or over it, in the room the band
+// or the pane gives it, and returns its parts for the site to wrap
+function drawScene($, e, site) {
+  const desktop = e.surface === 'desktop'
+  const elements = $.ui.resolve(e)
+  const { Box, Text } = elements
+  const wasHome = isHome()
+  bandId = e.requestId
+  bandSurface = e.surface
+  maxRows = site.maxRows
+  // The panel goes over the scene's right end when the band shows at full size and
+  // has room for it, and beside a shrunk band otherwise. The desktop draws text in its
+  // own font, so its meters can't line up with the pixels and always sit beside them.
+  // A small band at its own size lays out as a full-size one and shows it at its scale,
+  // so its panel and margin take more of the scene's columns per band column.
+  const panelColumns = meterColumns() + 1
+  const fullSize = !isSmall() && bandRows() <= maxRows
+  const small = smallZoom()
+  // It goes over the scene only when the mon at home still keeps its gap from it.
+  const atHome = SPRITES[mon].width + gapRightOf(mon)
+  panel = !desktop && fullSize && site.bodyColumns >= atHome + panelColumns ? panelColumns : 0
+  if (small && !desktop && site.bodyColumns >= atHome * small.scale + panelColumns) panel = Math.ceil(panelColumns / small.scale)
+  lastBodyColumns = site.bodyColumns
+  columns = stripTarget(site.bodyColumns)
+  drawnColumns = columns
+  margin = fullSize ? Math.max(0, Math.min(BUBBLE_SPAN, site.bodyColumns - panel - columns)) : 0
+  if (small) {
+    const room = Math.floor((site.bodyColumns - (panel > 0 ? 0 : panelColumns)) / small.scale) - columns - panel - 1
+    margin = Math.max(0, Math.min(BUBBLE_SPAN, room))
+  }
+  if (wasHome) x = homeX()
+  clampX()
+
+  const zoom = bandZoom()
+  // Pixel hearts go out with the band's blits, so a band too short for them has none
+  drawnHearts = Boolean(zoom) && drawsHearts()
+  const meter = (key, lead = '') => {
+    const text = Text({ color: meterStyle()[key].color, children: [lead + iconsFor(key)] })
+    if (key !== 'happiness' || !drawnHearts) return text
+    const source = heartsImage(filledIcons(key))
+    // Until a blit says the terminal draws Images, the next tick asks with one
+    sentHearts = imagesDrawn ? source.png : null
+    return elements.Image({ key: 'hearts', source, columns: STAT_ICONS, rows: 1, alt: iconsFor(key) })
+  }
+  const level = Text({ dimColor: true, children: [levelLine()] })
+  let corner
+  drawnImage = false
+  if (isGone(mon)) {
+    // Ran away or lost with no other mon in the box, the band is just a line saying so
+    bandId = null
+    drawnHearts = false
+    corner = [Text({ dimColor: true, children: [goneLine(mon)] })]
+  } else if (zoom) {
+    let sprite
+    if (desktop) {
+      const svg = svgNow()
+      if (svg !== sentSvg) svgFrame += 1
+      sentSvg = svg
+      const alt = isOnStage(wild) ? nameOf(mon) + ' vs. wild ' + displayName(wild.mon) : nameOf(mon) + (conditionOf(mon) ? ', ' + conditionOf(mon) : '')
+      const image = elements.Svg({ source: svg, alt, width: zoom.columns * PIXEL_PX, height: zoom.rows * 2 * PIXEL_PX })
+      sprite = Box({ key: 'pokemon-' + svgFrame, children: [image] })
+    } else if (drawsImage()) {
+      const source = imageNow(zoom)
+      // Until a blit says the terminal draws Images, the next tick asks with one
+      sentImage = imagesDrawn ? source.png : null
+      drawnImage = true
+      sprite = elements.Image({ key: 'pokemon', source, columns: zoom.columns, rows: zoom.rows, alt: ' ' })
+    } else {
+      sentCells = cellsNow()
+      sprite = elements.Raster({ key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells: sentCells })
+    }
+    const meterLines = needsOn ? [level, meter('food'), meter('happiness')] : [level]
+    if (panel > 0) {
+      const meters = Box({ position: 'absolute', right: 0, bottom: 0, width: panelColumns, paddingLeft: 1, flexDirection: 'column', children: meterLines })
+      corner = [Box({ position: 'relative', children: [sprite, meters] })]
+    } else {
+      const meters = Box({ flexDirection: 'column', justifyContent: 'flex-end', paddingLeft: 1, children: meterLines })
+      corner = site.bodyColumns >= zoom.columns + panelColumns ? [sprite, meters] : [sprite]
+      // The desktop clips the band's right edge, so its meters keep clear of it
+      if (desktop) corner = [Box({ flexDirection: 'row', flexShrink: 0, paddingRight: 2, children: corner })]
+    }
+  } else {
+    // Too short even for a shrunk mon: its name, level, and meters on one line, and no blits
+    bandId = null
+    const name = Text({ children: [nameOf(mon) + ' ' + levelLine() + (conditionOf(mon) ? ' ' + conditionOf(mon) : '')] })
+    const meters = needsOn ? [meter('food', ' '), meter('happiness', ' ')] : []
+    corner = [Box({ flexDirection: 'row', children: [name, ...meters] })]
+  }
+
+  return corner
+}
+
 export function register(on) {
   on('session.start', async ($, e, next) => {
     sessionToken = Math.random().toString(36).slice(2)
@@ -2925,6 +3057,9 @@ export function register(on) {
     const savedSize = await $.store.get('size')
     if (Object.hasOwn(SIZES, savedSize)) size = savedSize
     autoEvolve = (await $.store.get('autoEvolve')) !== false
+    paneOn = (await $.store.get('pane')) === true
+    paneShown = false
+    if (paneOn) openPane($, await $.store.get('paneColumns')).catch((err) => logOnce($, err))
     const savedStats = await $.store.get('stats')
     if (savedStats && typeof savedStats === 'object') stats = savedStats
     nowMs = await $.clock.now()
@@ -3090,6 +3225,8 @@ export function register(on) {
       await $.store.set('size', size)
       $.ui.invalidate('ui.render')
       return { text: 'The band is ' + size + '.' }
+    } else if (asked === 'pane') {
+      return paneCommand($, e.presentation)
     } else if (asked === 'sync') {
       syncOn = !syncOn
       await $.store.set('sync', syncOn)
@@ -3217,102 +3354,54 @@ export function register(on) {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const desktop = e.surface === 'desktop'
     if ((e.surface !== 'terminal' && !desktop) || e.props.hasSurvey) {
-      bandId = null
+      if (!paneShown) bandId = null
       return next(e)
     }
-    const elements = $.ui.resolve(e)
-    const { Box, Text } = elements
-    const wasHome = isHome()
-    working = e.props.isWorking
+    if (working !== e.props.isWorking) {
+      working = e.props.isWorking
+      // The pane hears of a turn through the band, so it draws again with it
+      if (paneShown) $.ui.invalidate('ui.render')
+    }
     if (!working) thinking = false
-    bandId = e.requestId
-    bandSurface = e.surface
-    maxRows = e.props.maxRows
-    // The panel goes over the scene's right end when the band shows at full size and
-    // has room for it, and beside a shrunk band otherwise. The desktop draws text in its
-    // own font, so its meters can't line up with the pixels and always sit beside them.
-    // A small band at its own size lays out as a full-size one and shows it at its scale,
-    // so its panel and margin take more of the scene's columns per band column.
-    const panelColumns = meterColumns() + 1
-    const fullSize = !isSmall() && bandRows() <= maxRows
-    const small = smallZoom()
-    // It goes over the scene only when the mon at home still keeps its gap from it.
-    const atHome = SPRITES[mon].width + gapRightOf(mon)
-    panel = !desktop && fullSize && e.props.bodyColumns >= atHome + panelColumns ? panelColumns : 0
-    if (small && !desktop && e.props.bodyColumns >= atHome * small.scale + panelColumns) panel = Math.ceil(panelColumns / small.scale)
-    lastBodyColumns = e.props.bodyColumns
-    columns = stripTarget(e.props.bodyColumns)
-    drawnColumns = columns
-    margin = fullSize ? Math.max(0, Math.min(BUBBLE_SPAN, e.props.bodyColumns - panel - columns)) : 0
-    if (small) {
-      const room = Math.floor((e.props.bodyColumns - (panel > 0 ? 0 : panelColumns)) / small.scale) - columns - panel - 1
-      margin = Math.max(0, Math.min(BUBBLE_SPAN, room))
-    }
-    if (wasHome) x = homeX()
-    clampX()
-
-    const zoom = bandZoom()
-    // Pixel hearts go out with the band's blits, so a band too short for them has none
-    drawnHearts = Boolean(zoom) && drawsHearts()
-    const meter = (key, lead = '') => {
-      const text = Text({ color: meterStyle()[key].color, children: [lead + iconsFor(key)] })
-      if (key !== 'happiness' || !drawnHearts) return text
-      const source = heartsImage(filledIcons(key))
-      // Until a blit says the terminal draws Images, the next tick asks with one
-      sentHearts = imagesDrawn ? source.png : null
-      return elements.Image({ key: 'hearts', source, columns: STAT_ICONS, rows: 1, alt: iconsFor(key) })
-    }
-    const level = Text({ dimColor: true, children: [levelLine()] })
-    let corner
-    drawnImage = false
-    if (isGone(mon)) {
-      // Ran away or lost with no other mon in the box, the band is just a line saying so
-      bandId = null
-      drawnHearts = false
-      corner = [Text({ dimColor: true, children: [goneLine(mon)] })]
-    } else if (zoom) {
-      let sprite
-      if (desktop) {
-        const svg = svgNow()
-        if (svg !== sentSvg) svgFrame += 1
-        sentSvg = svg
-        const alt = isOnStage(wild) ? nameOf(mon) + ' vs. wild ' + displayName(wild.mon) : nameOf(mon) + (conditionOf(mon) ? ', ' + conditionOf(mon) : '')
-        const image = elements.Svg({ source: svg, alt, width: zoom.columns * PIXEL_PX, height: zoom.rows * 2 * PIXEL_PX })
-        sprite = Box({ key: 'pokemon-' + svgFrame, children: [image] })
-      } else if (drawsImage()) {
-        const source = imageNow(zoom)
-        // Until a blit says the terminal draws Images, the next tick asks with one
-        sentImage = imagesDrawn ? source.png : null
-        drawnImage = true
-        sprite = elements.Image({ key: 'pokemon', source, columns: zoom.columns, rows: zoom.rows, alt: ' ' })
-      } else {
-        sentCells = cellsNow()
-        sprite = elements.Raster({ key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells: sentCells })
-      }
-      const meterLines = needsOn ? [level, meter('food'), meter('happiness')] : [level]
-      if (panel > 0) {
-        const meters = Box({ position: 'absolute', right: 0, bottom: 0, width: panelColumns, paddingLeft: 1, flexDirection: 'column', children: meterLines })
-        corner = [Box({ position: 'relative', children: [sprite, meters] })]
-      } else {
-        const meters = Box({ flexDirection: 'column', justifyContent: 'flex-end', paddingLeft: 1, children: meterLines })
-        corner = e.props.bodyColumns >= zoom.columns + panelColumns ? [sprite, meters] : [sprite]
-        // The desktop clips the band's right edge, so its meters keep clear of it
-        if (desktop) corner = [Box({ flexDirection: 'row', flexShrink: 0, paddingRight: 2, children: corner })]
-      }
-    } else {
-      // Too short even for a shrunk mon: its name, level, and meters on one line, and no blits
-      bandId = null
-      const name = Text({ children: [nameOf(mon) + ' ' + levelLine() + (conditionOf(mon) ? ' ' + conditionOf(mon) : '')] })
-      const meters = needsOn ? [meter('food', ' '), meter('happiness', ' ')] : []
-      corner = [Box({ flexDirection: 'row', children: [name, ...meters] })]
-    }
-
+    if (paneShown) return next(e)
+    const corner = drawScene($, e, { maxRows: e.props.maxRows, bodyColumns: e.props.bodyColumns })
+    const { Box } = $.ui.resolve(e)
     const theirs = await next(e)
     return Box({
       flexDirection: 'row',
       justifyContent: theirs ? 'space-between' : 'flex-end',
       children: theirs ? [Box({ flexGrow: 1, children: [theirs] }), ...corner] : corner,
     })
+  })
+
+  // Docked, the pane runs floor to ceiling, so the scene sits at its foot by the prompt
+  on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
+    if (e.surface !== 'terminal' && e.surface !== 'desktop') return next(e)
+    const wasShown = paneShown
+    paneShown = true
+    // The band stops drawing the scene once the pane does
+    if (!wasShown) $.ui.invalidate('ui.render')
+    const { Box } = $.ui.resolve(e)
+    const corner = drawScene($, e, { maxRows: e.props.scroll.bodyRows, bodyColumns: e.props.bodyColumns })
+    const docked = e.props.placement === 'dock'
+    return Box({
+      flexDirection: 'column',
+      justifyContent: 'flex-end',
+      height: docked ? e.props.scroll.bodyRows : undefined,
+      children: [Box({ flexDirection: 'row', justifyContent: 'flex-end', children: corner })],
+    })
+  })
+
+  // Closed by hand, the scene goes back to the band and stays there
+  on('ui.close', async ($, e, next) => {
+    const result = await next(e)
+    if (e.id !== PANE_ID) return result
+    leavePane($)
+    if (e.origin === 'person') {
+      paneOn = false
+      await $.store.set('pane', false)
+    }
+    return result
   })
 
   // Show the main loop's running tools in the bubble, and any agent's running skill as

@@ -105,6 +105,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon autoevolve` | Toggle level evolutions starting on their own once idle (on by default). Off, the mon waits for `/pokemon evolve` |
 | `/pokemon emoji` | Toggle emoji meters, 🍓 and 💗 instead of ● and ♥ (off by default, saved across sessions) |
 | `/pokemon size small`, `/pokemon size large` | Draw the band at half size or full size (large by default, saved across sessions). A short pane still shrinks it further. See [How it works](#how-it-works) for crisp small mons in iTerm2 |
+| `/pokemon pane` | Move the mon out of the band into a pane half the terminal wide, docked beside the transcript in the fullscreen layout so Claude's replies keep the left half. Run it again, or close the pane, to bring it back to the band (saved across sessions). On the main screen the pane sits above the prompt instead |
 | `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
 | `/pokemon box` | List every mon you've raised, highest level first |
 | `/pokemon new <mon>` | Fetch a mon from any generation in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) (gen 1 to 5) and show it. It's saved in the mod's store, so it stays through plugin updates and shows up in every session. Moves come from its types, using gen 1 animations |
