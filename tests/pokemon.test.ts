@@ -3096,14 +3096,51 @@ const movesIn = (toasts: string[]) => toasts.filter((text) => / used .+!$/.test(
 test('work during a battle fires a move at the foe, and the hit shrinks its HP bar', async ($, on) => {
   const { clock, blits, widths, toasts } = await inBattle($, on, {})
   const green = () => columnsIn(blits[blits.length - 1], widths[widths.length - 1], HP_GREEN).length
-  expect(green()).toBe(12)
+  // Pidgey's head is 13 pixels wide, so the bar takes 13 to sit in its middle
+  expect(green()).toBe(13)
   await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
   await clock.advance(100)
   // Teleport would leave the foe behind, so Confusion is the move that reaches it
   expect(movesIn(toasts)).toEqual(['Abra used Confusion!'])
   await clock.advance(5000)
-  expect(green()).toBeLessThan(12)
+  expect(green()).toBeLessThan(13)
 })
+
+// The raster as pixel rows, a color or null per pixel, two to a half block cell
+function rasterPixels(cells: string, width: number): (number | null)[][] {
+  const words = new Uint32Array(Uint8Array.fromBase64(cells).buffer)
+  const rows: (number | null)[][] = []
+  const shown = (c: number) => (c === 0x01000000 ? null : c)
+  for (let i = 0; i < words.length; i += 3) {
+    const [code, fg, bg] = [words[i], words[i + 1], words[i + 2]]
+    const cell = i / 3
+    const [cx, cy] = [cell % width, Math.floor(cell / width)]
+    const [top, bottom] = code === 0x2580 ? [fg, bg] : code === 0x2584 ? [bg, fg] : [bg, bg]
+    rows[cy * 2] ??= []
+    rows[cy * 2 + 1] ??= []
+    rows[cy * 2][cx] = shown(top)
+    rows[cy * 2 + 1][cx] = shown(bottom)
+  }
+  return rows
+}
+
+// Both foes' heads keep their columns across their idle frames, so whichever frame shows,
+// the bar's middle and the head's land on the same pixel
+for (const foe of ['snorlax', 'raichu']) {
+  test(`the HP bar sits centred over a wild ${foe}'s head`, async ($, on) => {
+    const { blits, widths } = await inBattle($, on, {}, foe)
+    const pixels = rasterPixels(blits[blits.length - 1], widths[widths.length - 1])
+    const barRow = pixels.findIndex((row) => row.includes(HP_GREEN))
+    const bar = pixels[barRow].flatMap((c, x) => (c === HP_GREEN ? [x] : []))
+    // The head is the foe's top 8 rows, from wherever its idle bob puts them, the scene's
+    // leftmost run of painted columns, well clear of the home mon
+    const top = pixels.findIndex((row, y) => y > barRow && row.some((c) => c !== null))
+    const painted = new Set(pixels.slice(top, top + 8).flatMap((row) => row.flatMap((c, x) => (c === null ? [] : [x]))))
+    let [left, right] = [Math.min(...painted), Math.min(...painted)]
+    while (painted.has(right + 1) || painted.has(right + 2)) right += painted.has(right + 1) ? 1 : 2
+    expect(bar[0] + bar[bar.length - 1]).toBe(left + right)
+  })
+}
 
 test('banked work fires one move at a time, at most one every six seconds', async ($, on) => {
   const { clock, toasts } = await inBattle($, on, {})
