@@ -276,8 +276,20 @@ const LINE_EYES = {
   snorlax: { idle: [[[9, 11, 3, 1], [15, 11, 3, 1]], [[9, 10, 3, 1], [15, 10, 3, 1]]], walk: [[[16, 10, 2, 2]], [[16, 9, 2, 2]]] },
 }
 
-// The eyes a shrunk band keeps on a frame: the open ones, or else the lines
+// A mon has dot eyes when an eye facing you, in either variant, is no bigger than DOT_EYE
+// pixels, or its eyes are lines. A shrunk band keeps a dot-eyed mon's pupils, facing you or
+// walking, as its votes would lose them. Bigger eyes are left to the votes, which keep
+// their shape where keeping just the pupil would shrink each one to a dot.
+const DOT_EYE = 2 * 2
+const idleBoxes = (own) => (own?.idle ?? []).flat()
+export const DOT_EYED = new Set([
+  ...Object.keys(EYES).filter((mon) => [...idleBoxes(EYES[mon]), ...idleBoxes(EYES[mon].shiny)].some(([, , w, h]) => w * h <= DOT_EYE)),
+  ...Object.keys(LINE_EYES),
+])
+
+// The eyes a shrunk band keeps on a frame: none unless dot eyes, the open ones, or else the lines
 export function keptEyesOf(mon, variant, view, frame) {
+  if (!DOT_EYED.has(mon)) return { boxes: null, lines: false }
   const open = eyesOf(mon, variant, view, frame)
   if (open?.length) return { boxes: open, lines: false }
   return { boxes: LINE_EYES[mon]?.[view]?.[frame] ?? null, lines: true }
