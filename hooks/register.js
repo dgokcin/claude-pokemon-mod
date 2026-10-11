@@ -2383,40 +2383,57 @@ function hopForJoy() {
   }
 }
 
-// Every option with what it does, for /pokemon help. A toggle also reports its setting.
+// Every option with what it does, in groups for /pokemon help. A setting's third field
+// reads its current value.
 const onOff = (on) => (on ? 'on' : 'off')
 const HELP = [
-  ['<mon>', () => 'Pick a mon, like /pokemon charmander'],
-  ['default', () => 'Show the default colors'],
-  ['shiny', () => 'Show the shiny colors'],
-  ['wander', () => 'Toggle idle wandering (' + onOff(wander) + ')'],
-  ['needs', () => 'Toggle food and happiness (' + onOff(needsOn) + ')'],
-  ['emoji', () => 'Toggle emoji meters (' + onOff(emojiOn) + ')'],
-  ['size', () => 'Draw the band small or large (' + size + ')'],
-  ['sync', () => 'Toggle sharing the mon across open sessions (' + onOff(syncOn) + ')'],
-  ['autoevolve', () => 'Toggle evolving on its own at its level (' + onOff(autoEvolve) + ')'],
-  ['nuzlocke', () => 'Toggle losing a fainted mon for good (' + onOff(nuzlockeOn) + ')'],
-  ['pet', () => 'Pet it'],
-  ['feed', () => 'Toss it a berry'],
-  ['sleep', () => 'Tuck it in, or wake it'],
-  ['revive', () => 'Take a fainted mon to a Pokémon Center'],
-  ['attack', () => 'Use a random move, or a named one'],
-  ['catch', () => 'Throw a Poké Ball at the wild mon'],
-  ['run', () => 'Send the wild mon away'],
-  ['moves', () => 'List its moves, or another mon\'s'],
-  ['evolve', () => 'Evolve with a stone or a trade'],
-  ['stop', () => 'Cancel an evolution'],
-  ['stats', () => 'Show its level, XP, evolution, and meters'],
-  ['box', () => "List every mon you've raised"],
-  ['dex', () => "List the wild mons you've seen and caught"],
-  ['nickname', () => 'Nickname it, up to 12 characters'],
-  ['release', () => 'Release a mon from your box'],
-  ['new', () => 'Fetch a mon from gen 2 to 5'],
-  ['list', () => 'List every mon name'],
-  ['help', () => 'Show this list'],
+  ['Pick', [
+    ['<mon>', 'Show a mon, like /pokemon charmander'],
+    ['default', 'Show its default colors'],
+    ['shiny', 'Show its shiny colors'],
+    ['new <mon>', 'Fetch a mon from gen 2 to 5, or new random, new gen3'],
+    ['list', 'List every mon name'],
+  ]],
+  ['Care', [
+    ['pet', 'Pet it'],
+    ['feed', 'Toss it a berry'],
+    ['sleep', 'Tuck it in, or wake it'],
+    ['revive [mon]', 'Take a fainted mon to a Pokémon Center'],
+    ['nickname <name>', 'Nickname it, up to 12 characters'],
+  ]],
+  ['Battle', [
+    ['attack [move]', 'Use a random move, or the one named'],
+    ['moves [mon]', 'List its moves, or another mon\'s'],
+    ['catch', 'Throw a Poké Ball at the wild mon'],
+    ['run', 'Send the wild mon away'],
+  ]],
+  ['Evolve', [
+    ['evolve [mon]', 'Evolve with a stone or a trade, or pick what Eevee becomes'],
+    ['stop', 'Cancel an evolution'],
+  ]],
+  ['Records', [
+    ['stats', 'Its level, XP, evolution, and meters'],
+    ['box', "Every mon you've raised"],
+    ['dex [mon]', "The wild mons you've seen and caught"],
+    ['release <mon>', 'Release a mon, so it starts over'],
+  ]],
+  ['Settings', [
+    ['wander', 'Wander while idle', () => onOff(wander)],
+    ['needs', 'Food and happiness', () => onOff(needsOn)],
+    ['emoji', 'Emoji meters', () => onOff(emojiOn)],
+    ['size small|large', 'Band size', () => size],
+    ['sync', 'Same mon in every open session', () => onOff(syncOn)],
+    ['autoevolve', 'Evolve on its own at its level', () => onOff(autoEvolve)],
+    ['nuzlocke', 'A fainted mon is lost for good', () => onOff(nuzlockeOn)],
+  ]],
 ]
-const OPTIONS = HELP.map(([name]) => name)
-const helpText = () => 'Options for /pokemon:\n' + HELP.map(([name, does]) => name + ': ' + does()).join('\n')
+const OPTIONS = [...HELP.flatMap(([, rows]) => rows.map(([usage]) => usage.split(' ')[0])), 'help']
+const USAGE_WIDTH = Math.max(...HELP.flatMap(([, rows]) => rows.map(([usage]) => usage.length))) + 2
+// A setting shows its value ahead of what it does, so the values line up in a column
+function helpText() {
+  const groups = HELP.map(([title, rows]) => title + '\n' + rows.map(([usage, does, value]) => '  ' + usage.padEnd(USAGE_WIDTH) + (value ? value().padEnd(7) : '') + does).join('\n'))
+  return 'Usage: /pokemon <option>\n\n' + groups.join('\n\n')
+}
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]

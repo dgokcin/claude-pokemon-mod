@@ -215,20 +215,24 @@ test('/pokemon rejects an unknown name', async ($, on) => {
   expect(answer.text).not.toContain('bulbasaur')
 })
 
-test('/pokemon help says what every option does', async ($, on) => {
+test('/pokemon help lists every option in groups, with each setting\'s value', async ($, on) => {
   mock.clock(on)
   mock.store(on)
-  const help = await $.command.run({ command: 'pokemon', args: 'help' })
-  const lines = help.text.split('\n')
-  expect(lines[0]).toBe('Options for /pokemon:')
-  expect(lines).toContain('pet: Pet it')
-  expect(lines).toContain('wander: Toggle idle wandering (on)')
-  expect(lines).toContain('size: Draw the band small or large (large)')
+  const help = async () => (await $.command.run({ command: 'pokemon', args: 'help' })).text.split('\n')
+  const lines = await help()
+  expect(lines[0]).toBe('Usage: /pokemon <option>')
+  expect(lines).toContain('Care')
+  expect(lines).toContain('  pet               Pet it')
+  expect(lines).toContain('  attack [move]     Use a random move, or the one named')
+  expect(lines).toContain('  wander            on     Wander while idle')
+  expect(lines).toContain('  size small|large  large  Band size')
   await $.command.run({ command: 'pokemon', args: 'wander' })
-  expect((await $.command.run({ command: 'pokemon', args: 'help' })).text).toContain('wander: Toggle idle wandering (off)')
+  expect(await help()).toContain('  wander            off    Wander while idle')
+  // Every option in the status line is in the help, which leaves out only itself
   const status = await $.command.run({ command: 'pokemon', args: '' })
   const options = status.text.match(/Options: (.*)\. \/pokemon help/)[1].split(', ')
-  expect(lines.slice(1).map((line) => line.split(':')[0])).toEqual(options)
+  const listed = lines.filter((line) => line.startsWith('  ')).map((line) => line.trim().split(' ')[0])
+  expect([...listed, 'help']).toEqual(options)
 })
 
 test('/pokemon charmander draws Charmander', async ($, on) => {
@@ -2378,7 +2382,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('env.get', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|size|sync|autoevolve|nuzlocke|pet|feed|sleep|revive|attack|catch|run|moves|evolve|stop|stats|box|dex|nickname|release|new|list|help]')
+  expect(hint).toBe('[<mon>|default|shiny|new|list|pet|feed|sleep|revive|nickname|attack|moves|catch|run|evolve|stop|stats|box|dex|release|wander|needs|emoji|size|sync|autoevolve|nuzlocke|help]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
