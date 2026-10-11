@@ -2,7 +2,8 @@
 // hand, the theme, toasts, and the frame on screen. It drives the real band renderer in
 // hooks/register.js, and contactSheet paints the frames it shows into a PNG the way the
 // half blocks look. Like a terminal without kitty graphics, it draws an Image's alt, so a
-// small band falls back to half blocks on its first tick.
+// small band falls back to half blocks on its first tick. Its clock stands at 0 unless
+// ticking is set, when it runs on 50 ms a tick.
 
 import { execFileSync } from 'node:child_process'
 import { rmSync, writeFileSync } from 'node:fs'
@@ -39,13 +40,14 @@ const matches = (matcher, e) => !matcher || Object.entries(matcher).every(([k, v
 // Start a session with the saved store entries. Math.random is seeded before the band
 // loads. The band only blits a frame that changed, so a tick with no blit leaves the last
 // frame showing, and a tick that asks for a redraw draws the band again, as the host does.
-export async function stubHost({ saved = {}, light = false, seed = 1, bodyColumns = 120 } = {}) {
+export async function stubHost({ saved = {}, light = false, seed = 1, bodyColumns = 120, ticking = false } = {}) {
   const hooks = {}
   const store = new Map(Object.entries(saved))
   const screen = { cells: null, columns: 0 }
   const toasts = []
   let tickFn = null
   let invalid = false
+  let elapsed = 0
 
   const $ = {
     command: { register: async () => {}, list: async () => [] },
@@ -56,7 +58,7 @@ export async function stubHost({ saved = {}, light = false, seed = 1, bodyColumn
       keys: async () => [...store.keys()],
       delete: async (k) => void store.delete(k),
     },
-    clock: { now: async () => 0, every: (ms, fn) => void (tickFn = fn) },
+    clock: { now: async () => elapsed, every: (ms, fn) => void (tickFn = fn) },
     agent: { list: async () => [] },
     env: { get: async () => undefined },
     ui: {
@@ -90,6 +92,7 @@ export async function stubHost({ saved = {}, light = false, seed = 1, bodyColumn
   }
 
   async function tick() {
+    if (ticking) elapsed += 50
     tickFn()
     // Lets a refused blit ask for its redraw
     await new Promise(setImmediate)
