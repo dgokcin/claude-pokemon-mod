@@ -297,11 +297,12 @@ function resizedSprite(name, height) {
 // The foe as drawn. In a small band it stands as tall on screen as it would as the mon on
 // show, so a big foe makes the band taller rather than shrinking to the home mon. Only a
 // half block band, whose scale goes by the mon, resizes it. Each size is resized once and
-// kept under its own name, unlisted.
+// kept under its own name, unlisted. A foe too tall for the room the home mon leaves in a
+// short band, as on desktop, shrinks to fit it rather than shrinking the home mon with it.
 function foeAs(name) {
-  if (SIZES[size] >= 1) return name
   const own = SPRITES[name].height
-  const height = Math.max(1, Math.round((own * bandScale(rowsOf(name))) / bandScale()))
+  const shown = SIZES[size] >= 1 ? own : Math.max(1, Math.round((own * bandScale(rowsOf(name))) / bandScale()))
+  const height = Math.max(1, Math.min(shown, 2 * (foeRoom() - HEAD_ROWS)))
   if (height === own) return name
   const sized = name + '@' + height
   if (!SPRITES[sized]) addSprite(sized, resizedSprite(name, height), false)
@@ -332,6 +333,11 @@ const bandScale = (rows = homeRows()) => {
   return Math.min(1, Math.max(scale, HALF_BLOCK_MIN_ROWS / rows))
 }
 const bandZoom = () => zoomFor({ columns: sceneColumns(), rows: bandRows(), maxRows, size: bandScale() })
+// The scene rows a foe can take without the band shrinking past the home mon's own fit
+const foeRoom = () => {
+  const home = zoomFor({ columns: 1, rows: homeRows(), maxRows, size: bandScale() })
+  return home ? Math.floor(maxRows / home.scale + 1e-9) : Infinity
+}
 // The strip and the panel, in the strip's own columns, and the whole scene with the margin
 const stripColumns = () => columns + panel
 const sceneColumns = () => margin + columns + panel

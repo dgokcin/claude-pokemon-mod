@@ -332,7 +332,9 @@ can't show the image even with that set. In those terminals the small band is dr
 half blocks and shrinks no shorter than a full-size Diglett, since a half-size mon in
 half blocks is too small to read. In a small band a wild mon stands as tall as it would as
 your mon on show, so a wild Snorlax beside a small Jigglypuff is a small Snorlax, and the
-band grows taller to fit it while your mon keeps its size.
+band grows taller to fit it while your mon keeps its size. At any size, a band too short
+for a big wild mon, as in the Desktop app, shrinks the wild mon to fit rather than your
+mon with it.
 
 When the pane is too short, the whole scene shrinks to fit in half blocks, and so does
 the small band in other terminals. Each shrunk pixel takes the most common color of its

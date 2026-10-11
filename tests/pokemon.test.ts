@@ -2301,6 +2301,34 @@ test('a half block small band draws a big foe as tall as it would be on show too
   expect(Math.abs(battle - alone)).toBeLessThanOrEqual(1)
 })
 
+// A wild Snorlax beside Jigglypuff in a 12 row band, which fits only Jigglypuff's 9 at full
+// size, as the sprite's columns and rows at home and then in battle
+async function tallFoeShown($, on, surface: 'terminal' | 'desktop') {
+  const { clock } = await startedWith($, on, { mon: 'jigglypuff', wander: false, debug: true }, 0)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  const ui = await $.ui.mount({ ...BAND, surface, props: { ...BAND.props, maxRows: 12 } })
+  const shown = async () => {
+    await clock.advance(200)
+    if (surface === 'terminal') return (await ui.find({ key: 'pokemon' })).props
+    const { width, height } = (await ui.find({ type: 'Svg' })).props
+    return { columns: width / PIXEL_PX, rows: height / PIXEL_PX / 2 }
+  }
+  const home = await shown()
+  expect(await run('wild snorlax')).toMatch(/^A wild .+ is on its way\.$/)
+  await clock.advance(10000)
+  return { home, battle: await shown() }
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`a foe too tall for a short band on ${surface} shrinks to fit it, and the home mon keeps its size`, async ($, on) => {
+    const { home, battle } = await tallFoeShown($, on, surface)
+    expect(home.rows).toBe(9)
+    expect(battle.rows).toBe(12)
+    // Shrinking the whole scene to fit Snorlax would take its columns down with it
+    expect(battle.columns).toBeGreaterThanOrEqual(home.columns)
+  })
+}
+
 test('a saved small size draws the band small from the start, and a short pane still shrinks it', async ($, on) => {
   await startedWith($, on, { size: 'small' }, 0)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
