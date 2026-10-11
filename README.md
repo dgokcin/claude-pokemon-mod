@@ -299,10 +299,10 @@ without a catch, when the mon falls asleep, or on `/pokemon run`. `/pokemon feed
 until it's gone, and so does an evolution that comes due.
 
 The Pokédex counts wild mons only, seen when one shows up and caught when you catch it. A
-caught species joins your box at its first level, unless it's there already, and its line
-in `/pokemon box` shows ◓. Releasing a mon keeps it in the dex. `/pokemon <mon>` still
-picks any mon, and a mon evolved from a caught one shows no ◓ until you catch its evolved
-form too.
+caught species joins your box at its first level, unless it's there already, and
+its line in `/pokemon box` shows ◓. `/pokemon <mon>` still picks any mon, and a mon
+evolved from a caught one keeps its ◓. Releasing a mon keeps it in the dex, and raising that species again
+shows ◓ too.
 
 The battle needs a wider strip than the mon alone. A band 80 columns wide fits every pair,
 a narrower one only the smaller foes, and under about 40 columns no encounter comes.
@@ -330,9 +330,9 @@ Newer iTerm2 builds, nightlies from 2026-09-18 on included, draw the image once 
 `~/.claude/settings.json`. VS Code's terminal, Cursor's included, and macOS Terminal
 can't show the image even with that set. In those terminals the small band is drawn in
 half blocks and shrinks no shorter than a full-size Diglett, since a half-size mon in
-half blocks is too small to read. In a small band a wild mon taller than yours shrinks to your
-mon's height, so it doesn't make the band taller and shrink yours with it, and a short
-one grows to look as tall as a large Diglett, up to your mon's height.
+half blocks is too small to read. In a small band a wild mon stands as tall as it would as
+your mon on show, so a wild Snorlax beside a small Jigglypuff is a small Snorlax, and the
+band grows taller to fit it while your mon keeps its size.
 
 When the pane is too short, the whole scene shrinks to fit in half blocks, and so does
 the small band in other terminals. Each shrunk pixel takes the most common color of its
@@ -340,7 +340,9 @@ block. Ties go to the color at the middle of the block, so lines stay unbroken, 
 to the darker color, so outlines survive. Each eye shrinks to one dot of its pupil, its
 darkest color or on a dark face its brightest, with the rest of the eye painted over as
 skin, so a shrunk mon never loses its eyes and both come out alike. An eye drawn as a
-line keeps the middle of the line. The thought bubble, the Zs, and the berry
+line keeps the middle of the line. A mon whose eyes facing you are all bigger than a
+2×2 dot, like Machoke or Jigglypuff, shrinks its eyes with the rest of it instead, so
+they keep their shape. The thought bubble, the Zs, and the berry
 aren't shrunk with the scene, as they'd break into specks: a shrunk band draws them from
 smaller art of its own: a smaller round bubble with 3 px icons and a pixel of room around
 them, 3 px Zs, and a 3 px berry.

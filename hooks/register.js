@@ -215,9 +215,10 @@ const gapUnder = (anim) => Math.min(...anim.map(({ rows }) => gapOf(rows)))
 // How far to lower the walk frames so the feet stand where the idle frames' do,
 // per mon and variant. Some sheets leave more empty rows under a walking mon.
 const WALK_DROP = {}
-// The empty columns right of an idle mon, the fewest across its idle frames, per variant.
-// Many sheets draw the idle mon right up to the frame's edge.
-const IDLE_RIGHT_GAP = {}
+// The empty columns right of a mon, the fewest across its idle frames and its walk frames
+// facing either way, per variant, so no frame steps closer to the meters than home allows.
+// Many sheets draw the mon right up to the frame's edge.
+const RIGHT_GAP = {}
 // The rightmost head column of a mon walking right, across its walk frames, per variant
 const WALK_HEAD_RIGHT = {}
 
@@ -231,9 +232,11 @@ function addSprite(name, sprite, listed = true) {
     Object.fromEntries(palette.map((hex, i) => [String.fromCharCode(97 + i), parseInt(hex.slice(1), 16)])),
   )
   WALK_DROP[name] = perVariant(({ walk, idle }) => gapUnder(walk) - gapUnder(idle))
-  IDLE_RIGHT_GAP[name] = perVariant(({ idle }) => {
-    const rights = idle.flatMap(({ rows }) => rows.map((row) => row.search(/[^.]\.*$/)))
-    return sprite.width - 1 - Math.max(...rights)
+  RIGHT_GAP[name] = perVariant(({ idle, walk }) => {
+    const rights = [...idle, ...walk].flatMap(({ rows }) => rows.map((row) => row.search(/[^.]\.*$/)))
+    // Facing left, a walk frame is mirrored, so its empty columns on the left end up on the right
+    const lefts = walk.flatMap(({ rows }) => rows.map((row) => row.search(/[^.]/)).filter((left) => left >= 0))
+    return Math.min(sprite.width - 1 - Math.max(...rights), ...lefts)
   })
   WALK_HEAD_RIGHT[name] = perVariant(({ walk }) =>
     Math.max(...walk.flatMap(({ rows }) => rows.slice(0, HEAD_PIXELS).map((row) => row.search(/[^.]\.*$/)))),
@@ -291,20 +294,14 @@ function resizedSprite(name, height) {
   return { ...sprite, width, height, variants }
 }
 
-// A wild mon in a small band stands no shorter on screen than a large Diglett
-const FOE_MIN_PIXELS = SPRITES.diglett.height
-
-// The foe as drawn. In a small band a foe taller than the home mon shrinks to its height,
-// so it doesn't grow the band and shrink the home mon with it, and a short one grows to
-// look as tall as a large Diglett, up to the home mon's height. Each size is resized once
-// and kept under its own name, unlisted. It goes by the size picked and the home mon's
-// scale alone, as the band's scale depends on the foe.
+// The foe as drawn. In a small band it stands as tall on screen as it would as the mon on
+// show, so a big foe makes the band taller rather than shrinking to the home mon. Only a
+// half block band, whose scale goes by the mon, resizes it. Each size is resized once and
+// kept under its own name, unlisted.
 function foeAs(name) {
   if (SIZES[size] >= 1) return name
   const own = SPRITES[name].height
-  const home = SPRITES[mon].height
-  const least = Math.min(home, Math.ceil(FOE_MIN_PIXELS / bandScale(rowsOf(mon)) - 1e-9))
-  const height = own > home ? home : Math.max(own, least)
+  const height = Math.max(1, Math.round((own * bandScale(rowsOf(name))) / bandScale()))
   if (height === own) return name
   const sized = name + '@' + height
   if (!SPRITES[sized]) addSprite(sized, resizedSprite(name, height), false)
@@ -315,19 +312,21 @@ const foeName = () => foeAs(wild.mon)
 const rowsOf = (name) => HEAD_ROWS + spriteRows(name)
 // While a mon evolves or transforms, the band is tall enough for both shapes, while it
 // heals, for the Pokémon Center, and while it's fainted, for the stars over its head
-const bandRows = () => {
+const homeRows = () => {
   if (isHealing(mon)) return Math.max(rowsOf(mon), CENTER_ROWS)
   if (isFainted(mon)) return Math.max(rowsOf(mon), dizzyRows(mon))
   if (evolving) return Math.max(rowsOf(evolving.from), rowsOf(evolving.into))
   if (attack?.move.effect === 'transform') return Math.max(rowsOf(mon), rowsOf(attack.swap))
-  if (isOnStage(wild)) return Math.max(rowsOf(mon), rowsOf(foeName()))
   return rowsOf(mon)
 }
+// A foe on stage makes the band tall enough for it too
+const bandRows = () => (isOnStage(wild) ? Math.max(homeRows(), rowsOf(foeName())) : homeRows())
 // The band's size on screen, shrunk to fit a short pane, or null when only the badge fits
 // A terminal known to lack Images draws the small band in half blocks, where a mon at
-// half size loses too much to read. It shrinks no shorter than a full-size Diglett.
+// half size loses too much to read. It shrinks no shorter than a full-size Diglett. The
+// scale goes by the home mon, so a foe never shrinks it.
 const HALF_BLOCK_MIN_ROWS = rowsOf('diglett')
-const bandScale = (rows = bandRows()) => {
+const bandScale = (rows = homeRows()) => {
   const scale = SIZES[size]
   if (scale >= 1 || !noImages || bandSurface !== 'terminal') return scale
   return Math.min(1, Math.max(scale, HALF_BLOCK_MIN_ROWS / rows))
@@ -339,11 +338,15 @@ const sceneColumns = () => margin + columns + panel
 // The rows the level and meters take at the bottom of the panel
 const panelRows = () => (needsOn ? 3 : 1)
 
-// The fewest empty columns between a mon at home and the level and meters beside it
+// The fewest empty columns on screen between a mon at home and the level and meters beside
+// it. A small band shows the scene at its scale, so the gap takes more of its columns.
 const HOME_GAP = 3
-// The right edge of the strip, where the sprite idles, kept HOME_GAP columns clear of the
-// meters whatever empty space the sprite's frame leaves on its right
-const homeXOf = (name) => Math.max(0, columns - SPRITES[name].width - Math.max(0, HOME_GAP - IDLE_RIGHT_GAP[name][variant]))
+const homeGap = () => Math.ceil(HOME_GAP / bandScale() - 1e-9)
+// The columns a mon's frame adds right of its body to keep the gap, past what it leaves empty
+const gapRightOf = (name) => Math.max(0, homeGap() - RIGHT_GAP[name][variant])
+// The right edge of the strip, where the sprite idles, kept the gap clear of the meters
+// whatever empty space the sprite's frame leaves on its right
+const homeXOf = (name) => Math.max(0, columns - SPRITES[name].width - gapRightOf(name))
 const homeX = () => homeXOf(mon)
 const isHome = () => x >= homeX()
 
@@ -1117,7 +1120,7 @@ function ghostPixel(ghosts, pixel, box, width, flip, baseX, baseTop) {
 const idleBox = (name, v) => boxOf(SPRITES[name].variants[v].idle[0].rows, COLORS[name][v])
 
 // The home mon's columns from its opaque left edge to the strip's right
-const homeSpan = () => SPRITES[mon].width + Math.max(0, HOME_GAP - IDLE_RIGHT_GAP[mon][variant]) - idleBox(mon, variant).left
+const homeSpan = () => SPRITES[mon].width + gapRightOf(mon) - idleBox(mon, variant).left
 
 // The strip columns a battle with this foe takes, beside the home mon at the strip's right
 const battleNeeds = (foe, foeVariant) => battleColumns(homeSpan(), idleBox(foe, foeVariant))
@@ -1324,7 +1327,7 @@ async function caughtFoe($, caught) {
     $.ui.toast('Gotcha! ' + name + ' was caught! ' + name + ' is already in your box, so it\'s marked in your Pokédex.')
     return
   }
-  stats[species] = { xp: xpAt(startLevel(species)), ...(species === mon ? {} : { parked: true }) }
+  stats[species] = { xp: xpAt(startLevel(species)), caught: true, ...(species === mon ? {} : { parked: true }) }
   await saveRecords($, [species])
   $.ui.toast('Gotcha! ' + name + ' was caught! It joined your box.')
 }
@@ -2236,17 +2239,18 @@ async function statsText($) {
   return fullNameOf(mon) + ', Lv. ' + level + ', ' + xpOf(mon) + ' XP' + next + '.' + becomes + meters + state + ' ' + pets + ' pets, ' + feeds + ' feeds.'
 }
 
-// Every mon with a saved record, highest level first, one a line, like
-// "Charizard ◓, Lv. 36 ●●●○○ ♥♥♥♡♡ (active)", where ◓ marks a species caught in the wild
+// Every mon with a saved record, one a line, like "Charizard ◓, Lv. 36 ●●●○○ ♥♥♥♡♡ (active)",
+// highest level first, where ◓ marks a mon caught in the wild. A record caught since carries
+// caught, and one saved before that counts as caught when its species is in the dex.
 function boxText(dex = {}) {
   const raised = Object.keys(stats).filter((name) => MONS.includes(name) && stats[name] && typeof stats[name] === 'object' && !isDead(name))
   if (raised.length === 0) return 'Your box is empty. Pet or feed ' + displayName(mon) + ', or finish a turn, to start raising it.'
+  const caught = (name) => Boolean(stats[name].caught || isCaught(dex[dexKey(name)]))
   raised.sort((a, b) => levelOf(b) - levelOf(a) || displayName(a).localeCompare(displayName(b)) || a.localeCompare(b))
   const lines = raised.map((name) => {
     const meters = needsOn && !hasRunAway(name) ? ' ' + iconsFor('food', name).trimEnd() + ' ' + iconsFor('happiness', name).trimEnd() : ''
-    const caught = isCaught(dex[dexKey(name)]) ? ' ◓' : ''
     const tags = [name === mon && !hasRunAway(name) ? 'active' : null, conditionOf(name)].filter(Boolean)
-    return fullNameOf(name) + caught + ', Lv. ' + levelOf(name) + meters + (tags.length > 0 ? ' (' + tags.join(', ') + ')' : '')
+    return fullNameOf(name) + (caught(name) ? ' ◓' : '') + ', Lv. ' + levelOf(name) + meters + (tags.length > 0 ? ' (' + tags.join(', ') + ')' : '')
   })
   const count = raised.length + (raised.length === 1 ? ' mon' : ' mons')
   const alone = raised.length === 1 && raised[0] === mon ? '\nOnly ' + nameOf(mon) + ' so far. /pokemon <mon> picks another.' : ''
@@ -3149,8 +3153,10 @@ export function register(on) {
     const panelColumns = meterColumns() + 1
     const fullSize = !isSmall() && bandRows() <= maxRows
     const small = smallZoom()
-    panel = !desktop && fullSize && e.props.bodyColumns >= SPRITES[mon].width + panelColumns ? panelColumns : 0
-    if (small && !desktop && e.props.bodyColumns >= SPRITES[mon].width * small.scale + panelColumns) panel = Math.ceil(panelColumns / small.scale)
+    // It goes over the scene only when the mon at home still keeps its gap from it.
+    const atHome = SPRITES[mon].width + gapRightOf(mon)
+    panel = !desktop && fullSize && e.props.bodyColumns >= atHome + panelColumns ? panelColumns : 0
+    if (small && !desktop && e.props.bodyColumns >= atHome * small.scale + panelColumns) panel = Math.ceil(panelColumns / small.scale)
     lastBodyColumns = e.props.bodyColumns
     columns = stripTarget(e.props.bodyColumns)
     drawnColumns = columns

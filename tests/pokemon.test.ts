@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { closedEyes, eyesOf, keptEyesOf, pupilsOf } from '../hooks/eyes.js'
+import { DOT_EYED, closedEyes, eyesOf, keptEyesOf, pupilsOf } from '../hooks/eyes.js'
 import { DIZZY_COLORS, faintedPalette, faintedRows } from '../hooks/faint.js'
 import { SPRITES } from '../hooks/frames.js'
 import { atCenter, CENTER_ROWS, centerPhase, centerSpan, centerStamps, JOY_COLORS, recallFlash, recallTint } from '../hooks/joy.js'
@@ -659,9 +659,19 @@ test('narrows the strip to keep the meters, and hides them when even the mon bar
   expect(await ui.find({ type: 'Text', text: /●/ })).toBeUndefined()
 })
 
-test('emoji meters need their wider panel to show beside a narrow strip', async ($, on) => {
+// The columns a mon at home keeps clear on its right, past the empty ones its frames leave:
+// the fewest right of its idle and walk frames, or left of a walk frame, mirrored facing left
+function homeGapOf(mon: string): number {
+  const { width, variants } = SPRITES[mon]
+  const { idle, walk } = variants.default
+  const rights = [...idle, ...walk].flatMap(({ rows }) => rows.map((row) => row.search(/[^.]\.*$/)))
+  const lefts = walk.flatMap(({ rows }) => rows.map((row) => row.search(/[^.]/)).filter((left) => left >= 0))
+  return Math.max(0, 3 - Math.min(width - 1 - Math.max(...rights), ...lefts))
+}
+
+test('emoji meters need their wider panel to show beside a narrow strip, with the mon kept 3 columns clear', async ($, on) => {
   await startedWith($, on, { emoji: true }, 0)
-  const fits = SPRITES.abra.width + EMOJI_PANEL
+  const fits = SPRITES.abra.width + homeGapOf('abra') + EMOJI_PANEL
   const wide = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: fits } })
   expect(await wide.find({ type: 'Text', text: /🍓/ })).toBeDefined()
   await wide.unmount()
@@ -669,11 +679,52 @@ test('emoji meters need their wider panel to show beside a narrow strip', async 
   expect(await ui.find({ type: 'Text', text: /🍓/ })).toBeUndefined()
 })
 
+test('a small band keeps the mon at home 3 columns clear of the meters on screen, as a large one does', async ($, on) => {
+  const { clock } = await startedWith($, on, { mon: 'charizard', size: 'small', wander: false }, 0, { TERM_PROGRAM: 'Apple_Terminal' })
+  for (const mon of ['charizard', 'dewgong']) {
+    await $.command.run({ command: 'pokemon', args: mon })
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await clock.advance(300)
+    const { columns, cells } = (await ui.find({ key: 'pokemon' })).props
+    const painted = paintedCells(cells)
+    let right = -1
+    for (let i = 0; i < painted.length; i++) if (painted[i]) right = Math.max(right, i % columns)
+    // The panel takes the band's last PANEL columns, and its text starts a column in
+    const empty = columns - PANEL + 1 - right - 1
+    expect({ mon, clear: empty >= 3 }).toEqual({ mon, clear: true })
+    await ui.unmount()
+  }
+})
+
+test('a mon walking right stays 3 columns clear of the meters, large or small', { timeoutMs: 60000 }, async ($, on) => {
+  const { clock, blits } = await startedWith($, on, { mon: 'tauros', wander: true }, 0, { TERM_PROGRAM: 'Apple_Terminal' })
+  for (const size of ['large', 'small']) {
+    await $.command.run({ command: 'pokemon', args: 'size ' + size })
+    // The ones whose walk frames reached closest to the meters before
+    for (const mon of ['tauros', 'arcanine', 'persian']) {
+      await $.command.run({ command: 'pokemon', args: mon })
+      const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+      await clock.advance(200)
+      const band = (await ui.find({ key: 'pokemon' })).props
+      blits.length = 0
+      await clock.advance(90000)
+      let right = -1
+      for (const cells of [band.cells, ...blits]) {
+        const painted = paintedCells(cells)
+        for (let i = 0; i < painted.length; i++) if (painted[i]) right = Math.max(right, i % band.columns)
+      }
+      // The panel takes the band's last PANEL columns, and its text starts a column in
+      expect({ size, mon, clear: band.columns - PANEL - right >= 3 }).toEqual({ size, mon, clear: true })
+      await ui.unmount()
+    }
+  }
+})
+
 test('a bubble beside the head floats over the meters column instead of being cut off', async ($, on) => {
   const low = { value: 10, at: 0 }
   const { clock, blits } = await startedWith($, on, { wander: false, stats: { abra: { food: low, happiness: low } } }, 0)
-  // A strip barely wider than Abra, so the bubble has no room on the left and goes right
-  const strip = SPRITES.abra.width + 2
+  // A strip barely wider than Abra and its gap, so the bubble has no room on the left and goes right
+  const strip = SPRITES.abra.width + homeGapOf('abra')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: strip + PANEL } })
   const raster = await ui.find({ key: 'pokemon' })
   expect(raster.props.columns).toBe(strip + PANEL)
@@ -1635,6 +1686,26 @@ test('/pokemon box leaves out the meters with needs off', async ($, on) => {
   expect(box.text).toBe('2 mons in your box:\nCharizard, Lv. 40\nPikachu, Lv. 12 (active)')
 })
 
+test('/pokemon box marks the caught mons, an evolved catch included, in level order', async ($, on) => {
+  const stats = {
+    pikachu: { xp: 12 ** 3 },
+    pidgeotto: { xp: 20 ** 3, caught: true },
+    snorlax: { xp: 30 ** 3 },
+    charizard: { xp: 40 ** 3 },
+  }
+  await startedWith($, on, { mon: 'pikachu', needs: false, stats, dex: { snorlax: { seen: 0, caught: 0 } } }, 0)
+  const box = await $.command.run({ command: 'pokemon', args: 'box' })
+  expect(box.text).toBe(
+    [
+      '4 mons in your box:',
+      'Charizard, Lv. 40',
+      'Snorlax ◓, Lv. 30',
+      'Pidgeotto ◓, Lv. 20',
+      'Pikachu, Lv. 12 (active)',
+    ].join('\n'),
+  )
+})
+
 test('/pokemon box says when the box is empty, or holds only the active mon', async ($, on) => {
   const saved: Record<string, any> = {}
   const { clock } = await startedWith($, on, saved, 0)
@@ -2031,8 +2102,8 @@ test('a half block small band draws whole Zs and a small whole berry instead of 
   expect(zs).toBeLessThanOrEqual(3 * 7)
 })
 
-test('a shrunk mon keeps a pixel of every eye, facing you or walking, line eyes included', () => {
-  const cases = [['charizard', 'idle', 2], ['dragonite', 'idle', 2], ['arcanine', 'idle', 2], ['mewtwo', 'idle', 2], ['snorlax', 'idle', 2], ['snorlax', 'walk', 1], ['abra', 'walk', 1]] as const
+test('a shrunk mon with dot eyes keeps a pixel of every eye, facing you or walking, line eyes included', () => {
+  const cases = [['pikachu', 'idle', 2], ['pidgey', 'idle', 2], ['wartortle', 'idle', 2], ['gyarados', 'idle', 2], ['snorlax', 'idle', 2], ['snorlax', 'walk', 1], ['abra', 'walk', 1]] as const
   for (const [mon, view, eyes] of cases) {
     const sprite = SPRITES[mon]
     const { palette } = sprite.variants.default
@@ -2055,6 +2126,17 @@ test('a shrunk mon keeps a pixel of every eye, facing you or walking, line eyes 
         return t
       }
       for (const [x, y, color] of shifted) expect(at(cellOf(x, columns), cellOf(y, sprite.height))).toBe(color)
+    }
+  }
+})
+
+test('a shrunk mon with eyes bigger than a dot keeps the eyes the votes give it', () => {
+  for (const mon of ['pikachu', 'bulbasaur', 'pidgey', 'snorlax', 'abra']) expect(DOT_EYED.has(mon)).toBe(true)
+  for (const mon of ['jigglypuff', 'machoke', 'charizard', 'gengar']) {
+    expect(DOT_EYED.has(mon)).toBe(false)
+    const { palette } = SPRITES[mon].variants.default
+    for (const view of ['idle', 'walk'] as const) {
+      expect(pupilsOf(SPRITES[mon].variants.default[view][0].rows, palette, keptEyesOf(mon, 'default', view, 0))).toEqual([])
     }
   }
 })
@@ -2165,8 +2247,8 @@ function rowsPainted(cells: string, columns: number, colors: number[]): number {
   return rows.size
 }
 
-test('a small band draws a short foe no shorter than a large Diglett', async ($, on) => {
-  const { clock, blits, widths } = await startedWith($, on, { mon: 'snorlax', wander: false, debug: true }, 0, {}, (e) => (e.source ? DENY_IMAGES : {}))
+test('a half block small band draws a short foe as tall as its own small band, no shorter than a large Diglett', async ($, on) => {
+  const { clock, blits, widths } = await startedWith($, on, { mon: 'snorlax', wander: false, debug: true }, 0, { TERM_PROGRAM: 'Apple_Terminal' })
   const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
   // Diglett's colors from its head to its mound, all but the black and gray Snorlax paints
   const DIGLETT = [0x403010, 0x987838, 0x704820, 0xc8c8c8, 0x707070, 0x680828, 0xd04068, 0xe87098, 0x982048, 0xa8a8a8]
@@ -2182,20 +2264,41 @@ test('a small band draws a short foe no shorter than a large Diglett', async ($,
     await clock.advance(10000)
     await ui.unmount()
   }
-  // At half scale beside Snorlax, a 12 px Diglett would paint 6 rows. It's grown so it
-  // paints as many as at large, give or take a row the shrink rounds off.
+  // At half scale beside Snorlax, a 12 px Diglett would paint 6 rows. A small Diglett on
+  // show stays full size in half blocks, so as a foe it paints as many as at large too,
+  // give or take a row the shrink rounds off.
   expect(tall.small).toBeGreaterThanOrEqual(tall.large - 1)
   expect(tall.large).toBe(12)
 })
 
-test('a small band shrinks a foe taller than the home mon to its height, so the band does not grow', async ($, on) => {
-  const { clock } = await startedWith($, on, { mon: 'pikachu', size: 'small', wander: false, debug: true }, 0, {}, (e) => (e.source ? DENY_IMAGES : {}))
+// A small band's rows with the home mon alone, as the second mon, and then beside a wild first
+async function smallBattleRows($, on, env: Record<string, string>, [first, second]: [string, string]) {
+  const { clock } = await startedWith($, on, { mon: first, size: 'small', wander: false, debug: true }, 0, env)
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: 120 } })
-  await clock.advance(200)
-  const alone = (await ui.find({ key: 'pokemon' })).props.rows
-  expect((await $.command.run({ command: 'pokemon', args: 'wild gyarados' })).text).toBe('A wild Gyarados is on its way.')
+  const rows = async () => {
+    await clock.advance(200)
+    return (await ui.find({ key: 'pokemon' })).props.rows
+  }
+  const alone = await rows()
+  await run(second)
+  const home = await rows()
+  expect(await run('wild ' + first)).toMatch(/^A wild .+ is on its way\.$/)
   await clock.advance(10000)
-  expect((await ui.find({ key: 'pokemon' })).props.rows).toBe(alone)
+  return { alone, home, battle: await rows() }
+}
+
+test('a small band draws a foe as tall as it would be on show, growing the band for a big one', async ($, on) => {
+  const { alone, home, battle } = await smallBattleRows($, on, {}, ['snorlax', 'jigglypuff'])
+  expect(home).toBeLessThan(alone)
+  expect(battle).toBe(alone)
+})
+
+test('a half block small band draws a big foe as tall as it would be on show too', async ($, on) => {
+  const { alone, home, battle } = await smallBattleRows($, on, { TERM_PROGRAM: 'Apple_Terminal' }, ['snorlax', 'jigglypuff'])
+  expect(home).toBeLessThan(alone)
+  // Give or take a row the half blocks round off
+  expect(Math.abs(battle - alone)).toBeLessThanOrEqual(1)
 })
 
 test('a saved small size draws the band small from the start, and a short pane still shrinks it', async ($, on) => {
@@ -3082,7 +3185,7 @@ test('a worn out foe is caught, joins the box parked at its first level, and the
   await clock.advance(6000)
   expect(toasts).toContain('Gotcha! Pidgey was caught! It joined your box.')
   expect(saved.dex.pidgey).toEqual({ seen: expect.any(Number), caught: expect.any(Number) })
-  expect(saved.stats.pidgey).toEqual({ xp: 5 ** 3, parked: true })
+  expect(saved.stats.pidgey).toEqual({ xp: 5 ** 3, caught: true, parked: true })
   expect(widths[widths.length - 1]).toBe(RASTER)
   const status = await $.command.run({ command: 'pokemon', args: '' })
   expect(status.text).not.toContain('wild')
@@ -3488,7 +3591,7 @@ test('a species lost in a nuzlocke comes back only by catching a new one, at its
   await run($, 'catch')
   await clock.advance(6000)
   expect(toasts).toContain('Gotcha! Pidgey was caught! It joined your box.')
-  expect(saved.stats.pidgey).toEqual({ xp: 5 ** 3, parked: true })
+  expect(saved.stats.pidgey).toEqual({ xp: 5 ** 3, caught: true, parked: true })
   expect(await run($, 'dex')).toBe('Pokédex: seen 1, caught 1 of 151.\n#016 Pidgey ◓\nRest well: Pidgey, Lv. 30, on 1970-01-01.')
   expect(await run($, 'pidgey')).toBe('Now showing default Pidgey.')
 })
