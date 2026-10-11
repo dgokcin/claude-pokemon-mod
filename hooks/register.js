@@ -818,7 +818,7 @@ const isFree = () => !working && !attack && !food && !wild && !isAsleep() && !is
 const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack', 'release', 'catch', 'new']
 // While it eats a berry or enjoys a pet, only the commands that just show something run,
 // so nothing changes the record the berry or pet is about to fill
-const SHOWS_ONLY = ['', 'list', 'stats', 'box', 'moves', 'dex']
+const SHOWS_ONLY = ['', 'list', 'help', 'stats', 'box', 'moves', 'dex']
 const waitsForCare = (asked) => (food !== null || isPetted()) && !SHOWS_ONLY.includes(asked.split(' ')[0]) && asked !== 'attack list'
 // What a fainted mon can't do, and what a mon that's gone can't do either
 const DOWN_WAITS = ['pet', 'feed', 'attack', 'catch', 'evolve', 'sleep']
@@ -2401,7 +2401,58 @@ function hopForJoy() {
   }
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'emoji', 'size', 'pane', 'sync', 'autoevolve', 'nuzlocke', 'pet', 'feed', 'sleep', 'revive', 'attack', 'catch', 'run', 'moves', 'evolve', 'stop', 'stats', 'box', 'dex', 'nickname', 'release', 'new', 'list']
+// Every option with what it does, in groups for /pokemon help. A setting's third field
+// reads its current value.
+const onOff = (on) => (on ? 'on' : 'off')
+const HELP = [
+  ['Pick', [
+    ['<mon>', 'Show a mon, like /pokemon charmander'],
+    ['default', 'Show its default colors'],
+    ['shiny', 'Show its shiny colors'],
+    ['new <mon>', 'Fetch a mon from gen 2 to 5, or new random, new gen3'],
+    ['list', 'List every mon name'],
+  ]],
+  ['Care', [
+    ['pet', 'Pet it'],
+    ['feed', 'Toss it a berry'],
+    ['sleep', 'Tuck it in, or wake it'],
+    ['revive [mon]', 'Take a fainted mon to a Pokémon Center'],
+    ['nickname <name>', 'Nickname it, up to 12 characters'],
+  ]],
+  ['Battle', [
+    ['attack [move]', 'Use a random move, or the one named'],
+    ['moves [mon]', 'List its moves, or another mon\'s'],
+    ['catch', 'Throw a Poké Ball at the wild mon'],
+    ['run', 'Send the wild mon away'],
+  ]],
+  ['Evolve', [
+    ['evolve [mon]', 'Evolve with a stone or a trade, or pick what Eevee becomes'],
+    ['stop', 'Cancel an evolution'],
+  ]],
+  ['Records', [
+    ['stats', 'Its level, XP, evolution, and meters'],
+    ['box', "Every mon you've raised"],
+    ['dex [mon]', "The wild mons you've seen and caught"],
+    ['release <mon>', 'Release a mon, so it starts over'],
+  ]],
+  ['Settings', [
+    ['wander', 'Wander while idle', () => onOff(wander)],
+    ['needs', 'Food and happiness', () => onOff(needsOn)],
+    ['emoji', 'Emoji meters', () => onOff(emojiOn)],
+    ['size small|large', 'Band size', () => size],
+    ['pane', 'Show the mon in a docked pane, not the band', () => onOff(paneOn)],
+    ['sync', 'Same mon in every open session', () => onOff(syncOn)],
+    ['autoevolve', 'Evolve on its own at its level', () => onOff(autoEvolve)],
+    ['nuzlocke', 'A fainted mon is lost for good', () => onOff(nuzlockeOn)],
+  ]],
+]
+const OPTIONS = [...HELP.flatMap(([, rows]) => rows.map(([usage]) => usage.split(' ')[0])), 'help']
+const USAGE_WIDTH = Math.max(...HELP.flatMap(([, rows]) => rows.map(([usage]) => usage.length))) + 2
+// A setting shows its value ahead of what it does, so the values line up in a column
+function helpText() {
+  const groups = HELP.map(([title, rows]) => title + '\n' + rows.map(([usage, does, value]) => '  ' + usage.padEnd(USAGE_WIDTH) + (value ? value().padEnd(7) : '') + does).join('\n'))
+  return 'Usage: /pokemon <option>\n\n' + groups.join('\n\n')
+}
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
@@ -3249,6 +3300,8 @@ export function register(on) {
       return result
     } else if (asked === 'list') {
       return { text: MONS.length + ' mons: ' + MONS.join(', ') }
+    } else if (asked === 'help') {
+      return { text: helpText() }
     } else if (asked) {
       return { text: 'Unknown option "' + asked + '". Try one of: ' + OPTIONS.join(', ') + '. See /pokemon list for every mon.' }
     } else {
@@ -3257,7 +3310,7 @@ export function register(on) {
       const mode = (condition ? ', ' + condition : '') + (isTuckedIn() ? ', asleep' : '') + (wander ? ', wandering' : '') + (isHere(wild) ? ', a ' + wildName() + ' is here' : '')
       const levels = 'food ' + Math.round(statNow(mon, 'food')) + '%, happiness ' + Math.round(statNow(mon, 'happiness')) + '%'
       const shown = nameOf(mon) + ' Lv. ' + levelOf(mon)
-      return { text: 'Showing ' + variant + ' ' + shown + mode + ' (' + (needsOn ? levels : 'needs off') + '). Options: ' + OPTIONS.join(', ') + '.' }
+      return { text: 'Showing ' + variant + ' ' + shown + mode + ' (' + (needsOn ? levels : 'needs off') + '). Options: ' + OPTIONS.join(', ') + '. /pokemon help says what each does.' }
     }
     $.ui.invalidate('ui.render')
     return { text: 'Now showing ' + variant + ' ' + nameOf(mon) + '.' }
