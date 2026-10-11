@@ -85,6 +85,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon` | Show the active mon, its variant, level, meters, and the options |
 | `/pokemon <mon>` | Pick the mon for this session, or for every open session with `/pokemon sync` on. A new session starts with the one picked last |
 | `/pokemon list` | List every mon name |
+| `/pokemon help` | List every option and what it does, with each toggle's setting |
 | `/pokemon shiny`, `/pokemon default` | Pick a variant, saved across sessions |
 | `/pokemon wander` | Toggle idle wandering (on by default) |
 | `/pokemon pet` | Pet the mon. A sleeping mon stays asleep. Counts pets across sessions |

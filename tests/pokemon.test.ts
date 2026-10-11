@@ -215,6 +215,22 @@ test('/pokemon rejects an unknown name', async ($, on) => {
   expect(answer.text).not.toContain('bulbasaur')
 })
 
+test('/pokemon help says what every option does', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  const help = await $.command.run({ command: 'pokemon', args: 'help' })
+  const lines = help.text.split('\n')
+  expect(lines[0]).toBe('Options for /pokemon:')
+  expect(lines).toContain('pet: Pet it')
+  expect(lines).toContain('wander: Toggle idle wandering (on)')
+  expect(lines).toContain('size: Draw the band small or large (large)')
+  await $.command.run({ command: 'pokemon', args: 'wander' })
+  expect((await $.command.run({ command: 'pokemon', args: 'help' })).text).toContain('wander: Toggle idle wandering (off)')
+  const status = await $.command.run({ command: 'pokemon', args: '' })
+  const options = status.text.match(/Options: (.*)\. \/pokemon help/)[1].split(', ')
+  expect(lines.slice(1).map((line) => line.split(':')[0])).toEqual(options)
+})
+
 test('/pokemon charmander draws Charmander', async ($, on) => {
   mock.clock(on)
   on('ui.render', () => THEIRS)
@@ -2362,7 +2378,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('env.get', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|size|sync|autoevolve|nuzlocke|pet|feed|sleep|revive|attack|catch|run|moves|evolve|stop|stats|box|dex|nickname|release|new|list]')
+  expect(hint).toBe('[<mon>|default|shiny|wander|needs|emoji|size|sync|autoevolve|nuzlocke|pet|feed|sleep|revive|attack|catch|run|moves|evolve|stop|stats|box|dex|nickname|release|new|list|help]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)

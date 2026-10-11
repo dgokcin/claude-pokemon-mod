@@ -812,7 +812,7 @@ const isFree = () => !working && !attack && !food && !wild && !isAsleep() && !is
 const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack', 'release', 'catch', 'new']
 // While it eats a berry or enjoys a pet, only the commands that just show something run,
 // so nothing changes the record the berry or pet is about to fill
-const SHOWS_ONLY = ['', 'list', 'stats', 'box', 'moves', 'dex']
+const SHOWS_ONLY = ['', 'list', 'help', 'stats', 'box', 'moves', 'dex']
 const waitsForCare = (asked) => (food !== null || isPetted()) && !SHOWS_ONLY.includes(asked.split(' ')[0]) && asked !== 'attack list'
 // What a fainted mon can't do, and what a mon that's gone can't do either
 const DOWN_WAITS = ['pet', 'feed', 'attack', 'catch', 'evolve', 'sleep']
@@ -2383,7 +2383,40 @@ function hopForJoy() {
   }
 }
 
-const OPTIONS = ['<mon>', ...VARIANTS, 'wander', 'needs', 'emoji', 'size', 'sync', 'autoevolve', 'nuzlocke', 'pet', 'feed', 'sleep', 'revive', 'attack', 'catch', 'run', 'moves', 'evolve', 'stop', 'stats', 'box', 'dex', 'nickname', 'release', 'new', 'list']
+// Every option with what it does, for /pokemon help. A toggle also reports its setting.
+const onOff = (on) => (on ? 'on' : 'off')
+const HELP = [
+  ['<mon>', () => 'Pick a mon, like /pokemon charmander'],
+  ['default', () => 'Show the default colors'],
+  ['shiny', () => 'Show the shiny colors'],
+  ['wander', () => 'Toggle idle wandering (' + onOff(wander) + ')'],
+  ['needs', () => 'Toggle food and happiness (' + onOff(needsOn) + ')'],
+  ['emoji', () => 'Toggle emoji meters (' + onOff(emojiOn) + ')'],
+  ['size', () => 'Draw the band small or large (' + size + ')'],
+  ['sync', () => 'Toggle sharing the mon across open sessions (' + onOff(syncOn) + ')'],
+  ['autoevolve', () => 'Toggle evolving on its own at its level (' + onOff(autoEvolve) + ')'],
+  ['nuzlocke', () => 'Toggle losing a fainted mon for good (' + onOff(nuzlockeOn) + ')'],
+  ['pet', () => 'Pet it'],
+  ['feed', () => 'Toss it a berry'],
+  ['sleep', () => 'Tuck it in, or wake it'],
+  ['revive', () => 'Take a fainted mon to a Pokémon Center'],
+  ['attack', () => 'Use a random move, or a named one'],
+  ['catch', () => 'Throw a Poké Ball at the wild mon'],
+  ['run', () => 'Send the wild mon away'],
+  ['moves', () => 'List its moves, or another mon\'s'],
+  ['evolve', () => 'Evolve with a stone or a trade'],
+  ['stop', () => 'Cancel an evolution'],
+  ['stats', () => 'Show its level, XP, evolution, and meters'],
+  ['box', () => "List every mon you've raised"],
+  ['dex', () => "List the wild mons you've seen and caught"],
+  ['nickname', () => 'Nickname it, up to 12 characters'],
+  ['release', () => 'Release a mon from your box'],
+  ['new', () => 'Fetch a mon from gen 2 to 5'],
+  ['list', () => 'List every mon name'],
+  ['help', () => 'Show this list'],
+]
+const OPTIONS = HELP.map(([name]) => name)
+const helpText = () => 'Options for /pokemon:\n' + HELP.map(([name, does]) => name + ': ' + does()).join('\n')
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
 
 const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
@@ -3099,6 +3132,8 @@ export function register(on) {
       return result
     } else if (asked === 'list') {
       return { text: MONS.length + ' mons: ' + MONS.join(', ') }
+    } else if (asked === 'help') {
+      return { text: helpText() }
     } else if (asked) {
       return { text: 'Unknown option "' + asked + '". Try one of: ' + OPTIONS.join(', ') + '. See /pokemon list for every mon.' }
     } else {
@@ -3107,7 +3142,7 @@ export function register(on) {
       const mode = (condition ? ', ' + condition : '') + (isTuckedIn() ? ', asleep' : '') + (wander ? ', wandering' : '') + (isHere(wild) ? ', a ' + wildName() + ' is here' : '')
       const levels = 'food ' + Math.round(statNow(mon, 'food')) + '%, happiness ' + Math.round(statNow(mon, 'happiness')) + '%'
       const shown = nameOf(mon) + ' Lv. ' + levelOf(mon)
-      return { text: 'Showing ' + variant + ' ' + shown + mode + ' (' + (needsOn ? levels : 'needs off') + '). Options: ' + OPTIONS.join(', ') + '.' }
+      return { text: 'Showing ' + variant + ' ' + shown + mode + ' (' + (needsOn ? levels : 'needs off') + '). Options: ' + OPTIONS.join(', ') + '. /pokemon help says what each does.' }
     }
     $.ui.invalidate('ui.render')
     return { text: 'Now showing ' + variant + ' ' + nameOf(mon) + '.' }
