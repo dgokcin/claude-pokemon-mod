@@ -2977,6 +2977,56 @@ test('/pokemon party add and remove pick who comes out, in the order added', asy
   expect(paints(out, PIKACHU)).toBe(false)
 })
 
+test('/pokemon party assign ties a mon to an agent type, and the rest of the party comes out for the others', async ($, on) => {
+  runningAgents(on)
+  const { clock, blits } = await startedWith($, on, { wander: false, stats: PARTY_BOX }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const party = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await party('party assign explore charmander')).toBe('Charmander comes out for every explore subagent.')
+
+  // Charmander comes out for Explore ahead of the higher level Pikachu
+  await $.agent.spawn(spawnOf('t1'))
+  await clock.advance(4000)
+  let out = await shown(ui, blits)
+  expect(paints(out, CHARMANDER)).toBe(true)
+  expect(paints(out, PIKACHU)).toBe(false)
+
+  // Another agent type gets the party, which no longer holds Charmander
+  await $.agent.spawn({ ...spawnOf('t2'), subagentType: 'Plan' })
+  await clock.advance(4000)
+  out = await shown(ui, blits)
+  expect(paints(out, PIKACHU)).toBe(true)
+  expect(await party('party')).toBe(['2 mons in your party, beside Abra:', 'Charmander, Lv. 8, for explore, working for Count files', 'Pikachu, Lv. 12, working for Count files'].join('\n'))
+})
+
+test('a mon assigned to an agent type stays in its ball for other types', async ($, on) => {
+  runningAgents(on)
+  const { clock, blits } = await startedWith($, on, { wander: false, stats: PARTY_BOX, partyAgents: { explore: 'pikachu' } }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.agent.spawn({ ...spawnOf('t1'), subagentType: 'general-purpose' })
+  await clock.advance(4000)
+  const out = await shown(ui, blits)
+  expect(paints(out, CHARMANDER)).toBe(true)
+  expect(paints(out, PIKACHU)).toBe(false)
+})
+
+test('/pokemon party assign and unassign are saved, and a mon works for one agent type at a time', async ($, on) => {
+  const saved: Record<string, any> = { wander: false, stats: PARTY_BOX }
+  await startedWith($, on, saved, 0)
+  const party = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await party('party assign explore')).toBe('Name the agent type and the mon, like /pokemon party assign explore abra.')
+  expect(await party('party assign explore abra')).toBe('Abra is the mon on show. Pick another with /pokemon <mon> first.')
+  expect(await party('party assign explore mew')).toBe('Mew isn\'t in your box. Catch one, or pick it with /pokemon mew.')
+  expect(await party('party assign explore pidgey2')).toBe('Unknown mon "pidgey2". /pokemon box lists yours.')
+  expect(await party('party assign Explore pikachu')).toBe('Pikachu comes out for every explore subagent.')
+  expect(saved.partyAgents).toEqual({ explore: 'pikachu' })
+  expect(await party('party assign code-reviewer pikachu')).toBe('Pikachu comes out for every code-reviewer subagent. It no longer comes out for explore.')
+  expect(saved.partyAgents).toEqual({ 'code-reviewer': 'pikachu' })
+  expect(await party('party unassign explore')).toBe('No mon is assigned to explore.')
+  expect(await party('party unassign code-reviewer')).toBe('Pikachu no longer comes out for code-reviewer.')
+  expect(saved.partyAgents).toEqual({})
+})
+
 test('/pokemon party add refuses a sixth mon, and an emptied party stays empty', async ($, on) => {
   const stats = Object.fromEntries(['pikachu', 'charmander', 'squirtle', 'bulbasaur', 'pidgey', 'rattata'].map((name, i) => [name, { xp: (10 - i) ** 3 }]))
   await startedWith($, on, { wander: false, stats }, 0)
