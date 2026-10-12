@@ -191,6 +191,9 @@ let nuzlockeOn = false
 // The party picked with /pokemon party add and remove, in order, or null for the box's
 // highest level mons
 let partyPicks = null
+// The mon each agent type comes out as, set with /pokemon party assign, keyed by the
+// type in lowercase, like { explore: 'abra' }
+let partyAgents = {}
 // When each mon was first shown in this session, for the grace before its faint clock runs
 const firstShown = new Map()
 // Set while this session checks the shown mon's faint clock or finishes its heal
@@ -2272,8 +2275,14 @@ function stepCrewMons() {
 
 // The box's mons beside the one on show that can work for a subagent: none fainted, run
 // away, or lost. They're the picked party in its order, or the highest level first.
+const canWork = (name) => name !== mon && MONS.includes(name) && stats[name] && typeof stats[name] === 'object' && !isGone(name) && !isFainted(name)
+
+// A mon assigned to an agent type comes out for that type alone, so it stays out of the
+// party the other subagents draw from
+const isAssigned = (name) => Object.values(partyAgents).includes(name)
+
 function partyMons() {
-  const able = (name) => name !== mon && MONS.includes(name) && stats[name] && typeof stats[name] === 'object' && !isGone(name) && !isFainted(name)
+  const able = (name) => canWork(name) && !isAssigned(name)
   if (partyPicks) return partyPicks.filter(able).slice(0, CREW_SIZE)
   return Object.keys(stats)
     .filter(able)
@@ -2284,7 +2293,18 @@ function partyMons() {
 async function loadPartyPicks($) {
   const saved = await $.store.get('partyPicks')
   partyPicks = Array.isArray(saved) ? saved.filter((name) => MONS.includes(name)) : null
+  const agents = await $.store.get('partyAgents')
+  partyAgents = {}
+  if (agents && typeof agents === 'object') {
+    for (const [type, name] of Object.entries(agents)) if (MONS.includes(name)) partyAgents[type] = name
+  }
 }
+
+// The mon assigned to an agent type, or undefined
+const assignedTo = (type) => partyAgents[String(type ?? '').toLowerCase()]
+
+// The agent types a mon is assigned to, as typed
+const typesOf = (name) => Object.keys(partyAgents).filter((type) => partyAgents[type] === name)
 
 // A party mon shows in the variant saved with its record, or shiny when it was caught shiny
 function crewVariant(name, dex) {
@@ -2293,13 +2313,16 @@ function crewVariant(name, dex) {
   return stats[name]?.caught && dex?.[dexKey(name)]?.shiny ? 'shiny' : 'default'
 }
 
-// Give a new subagent the next party mon nobody has, from the box as last saved
-async function joinCrewFor($, id) {
+// Give a new subagent the mon assigned to its agent type, or when that one is busy or
+// can't work, the next party mon nobody has, from the box as last saved
+async function joinCrewFor($, id, type) {
   const saved = await $.store.get('stats')
   if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
   await loadPartyPicks($)
   const dex = await $.store.get('dex')
-  crew = joinCrew(crew, id, partyMons(), (name) => crewVariant(name, dex))
+  const assigned = assignedTo(type)
+  const mons = assigned && canWork(assigned) ? [assigned, ...partyMons()] : partyMons()
+  crew = joinCrew(crew, id, mons, (name) => crewVariant(name, dex))
 }
 
 // Show the mon this one evolved into in another session, once nothing here is mid-move
@@ -2518,14 +2541,16 @@ async function partyText($) {
   const saved = await $.store.get('stats')
   if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
   await loadPartyPicks($)
-  const mons = partyMons()
+  const assigned = [...new Set(Object.values(partyAgents))].filter(canWork)
+  const mons = [...assigned, ...partyMons()]
   if (mons.length === 0 && partyPicks) return 'Your party is empty. Add a mon from your box with /pokemon party add <mon>.'
   if (mons.length === 0) return 'Your party is empty. Raise or catch another mon, and it comes out of a subagent\'s Poké Ball to work beside ' + nameOf(mon) + '.'
   const agents = await $.agent.list().catch(() => [])
   const described = new Map((Array.isArray(agents) ? agents : []).map((agent) => [agent.id, agent.description || agent.id]))
   const lines = mons.map((name) => {
     const member = crew.find((m) => m.mon === name && m.endAt === null)
-    const shown = fullNameOf(name) + ', Lv. ' + levelOf(name)
+    const types = typesOf(name)
+    const shown = fullNameOf(name) + ', Lv. ' + levelOf(name) + (types.length > 0 ? ', for ' + types.join(' and ') : '')
     if (!member) return shown + ', free'
     const waiting = isOut(member, tick) ? '' : ', waiting in its ball for room'
     return shown + ', working for ' + (described.get(member.id) ?? member.id) + waiting
@@ -2561,6 +2586,38 @@ async function partyCommand($, verb, wanted) {
   await $.store.set('partyPicks', partyPicks)
   const resting = isFainted(wanted) ? ' It rests until it\'s revived.' : ''
   return { text: name + ' joins your party.' + resting }
+}
+
+// Assign a box mon to an agent type, so every subagent of that type comes out as it, or
+// take an assignment back. A mon works for one agent type at a time.
+async function assignCommand($, verb, words) {
+  const saved = await $.store.get('stats')
+  if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
+  await loadPartyPicks($)
+  if (verb === 'unassign') {
+    const type = words.join(' ')
+    if (!type) return { text: 'Name the agent type, like /pokemon party unassign explore.' }
+    if (!partyAgents[type]) return { text: 'No mon is assigned to ' + type + '.' }
+    const name = nameOf(partyAgents[type])
+    delete partyAgents[type]
+    await $.store.set('partyAgents', partyAgents)
+    return { text: name + ' no longer comes out for ' + type + '.' }
+  }
+  if (words.length < 2) return { text: 'Name the agent type and the mon, like /pokemon party assign explore abra.' }
+  const wanted = words.at(-1)
+  const type = words.slice(0, -1).join(' ')
+  if (!MONS.includes(wanted)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
+  const name = nameOf(wanted)
+  if (wanted === mon) return { text: name + ' is the mon on show. Pick another with /pokemon <mon> first.' }
+  if (!stats[wanted] || isDead(wanted)) return { text: displayName(wanted) + ' isn\'t in your box. Catch one, or pick it with /pokemon ' + wanted + '.' }
+  if (isGone(wanted)) return { text: name + ' ran away. Catch it in the wild to bring it back.' }
+  const before = typesOf(wanted).filter((other) => other !== type)
+  for (const other of before) delete partyAgents[other]
+  partyAgents[type] = wanted
+  await $.store.set('partyAgents', partyAgents)
+  const moved = before.length > 0 ? ' It no longer comes out for ' + before.join(' or ') + '.' : ''
+  const resting = isFainted(wanted) ? ' It rests until it\'s revived.' : ''
+  return { text: name + ' comes out for every ' + type + ' subagent.' + moved + resting }
 }
 
 const dexLabel = (key) => '#' + String(dexNumber(key)).padStart(3, '0') + ' ' + displayName(key)
@@ -2689,7 +2746,7 @@ const HELP = [
   ['Records', [
     ['stats', 'Its level, XP, evolution, and meters'],
     ['box', "Every mon you've raised"],
-    ['party', 'The mons that come out for subagents. party add or remove <mon> picks them'],
+    ['party', 'The mons that come out for subagents. party add or remove <mon> picks them, party assign <agent> <mon> ties one to an agent type'],
     ['dex [mon]', "The wild mons you've seen and caught"],
     ['release <mon>', 'Release a mon, so it starts over'],
   ]],
@@ -3579,6 +3636,9 @@ export function register(on) {
       return { text: boxText(dex && typeof dex === 'object' ? dex : {}) }
     } else if (asked === 'party') {
       return { text: await partyText($) }
+    } else if (asked.startsWith('party assign') || asked.startsWith('party unassign')) {
+      const [, verb, ...rest] = asked.split(/\s+/)
+      return assignCommand($, verb, rest)
     } else if (asked.startsWith('party add') || asked.startsWith('party remove')) {
       const [, verb, ...rest] = asked.split(/\s+/)
       return partyCommand($, verb, rest.join(' '))
@@ -3815,7 +3875,7 @@ export function register(on) {
     const result = await next(e)
     if (result?.agentId) {
       party = joinParty(party, result.agentId, tick)
-      await joinCrewFor($, result.agentId).catch((err) => logOnce($, err))
+      await joinCrewFor($, result.agentId, e.subagentType).catch((err) => logOnce($, err))
     }
     return result
   })

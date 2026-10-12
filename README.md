@@ -75,6 +75,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon box` | Every mon you've raised |
 | `/pokemon party` | The mons that come out for subagents, and who each works for |
 | `/pokemon party add <mon>` | Put a mon from your box in your party, like `/pokemon party add dratini` |
+| `/pokemon party assign <agent> <mon>` | Send the same mon out for every subagent of a type, like `/pokemon party assign explore abra` |
 | `/pokemon catch` | Throw a Poké Ball at a wild mon |
 | `/pokemon dex` | Every wild mon you've seen and caught |
 | `/pokemon new <mon>` | Fetch a mon from gen 2 to 5, like `/pokemon new mudkip`, or a random one with `/pokemon new gen3` |
@@ -113,6 +114,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon box` | List every mon you've raised, highest level first |
 | `/pokemon party` | List your party, the mons in your box beside the one on show, highest level first, up to 5, and the subagent each one works for. Fainted mons, ones that ran away, and ones lost in a nuzlocke stay out of it |
 | `/pokemon party add <mon>`, `/pokemon party remove <mon>` | Pick your party from your box, up to 5, saved across sessions. Mons come out in the order you added them. The first change starts from the party as it stands, and a mon you take out while it works finishes its subagent first |
+| `/pokemon party assign <agent> <mon>`, `/pokemon party unassign <agent>` | Tie a mon from your box to an agent type, like `explore`, `plan`, or one of your own agents' names, so you can tell which agent is working or done by who steps out (saved across sessions). The mon comes out for that type alone, outside the party of 5, and a mon works for one type at a time, so assigning it again moves it. When it's busy with another subagent of its type, or fainted, that subagent gets the next mon from the party |
 | `/pokemon new <mon>` | Fetch a mon from any generation in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) (gen 1 to 5) and show it. It's saved in the mod's store, so it stays through plugin updates and shows up in every session. Moves come from its types, using gen 1 animations |
 | `/pokemon new random`, `/pokemon new gen<N>` | Fetch a random mon you don't have yet, from gen 2 to 5 or from gen N |
 | `/pokemon nickname <name>` | Nickname the mon, up to 12 characters. It keeps the name when it evolves, and its species name takes the nickname away |
@@ -192,7 +194,10 @@ turn earns, from half when both are empty to one and a half when both are full.
 Each subagent Claude starts drops a Poké Ball on the left of the strip. If your box holds
 other mons than the one on show, the subagent gets the next one free, highest level first,
 in the variant and nickname it was saved with. `/pokemon party add <mon>` and `/pokemon
-party remove <mon>` pick the party yourself, and then mons come out in the order you added them. Once the ball lands it opens in a flash,
+party remove <mon>` pick the party yourself, and then mons come out in the order you added them.
+`/pokemon party assign <agent> <mon>` ties a mon to an agent type, matched by the Agent
+tool's `subagent_type` without minding case, so an `explore` subagent always comes out as
+the same mon and the others never do. Once the ball lands it opens in a flash,
 and the mon hops out of it to work beside yours while the subagent runs, one mon at a
 time when several balls land together. It strolls about on its own, rests 3 to 8 s
 between walks, and shares the room with the other party mons, stepping aside when a
