@@ -1916,23 +1916,27 @@ const METER_STYLES = {
 // A terminal that draws Images gets the text hearts as pixel hearts instead, since some
 // fonts lack ♥ or ♡. Each takes one cell, HEART_CELL pixels wide and twice as tall, and
 // sits where a font like Hack draws ● beside it: the cell's full width, about as tall,
-// from HEART_TOP down. An empty heart is the full one's rim.
+// from HEART_TOP down. An empty heart is the full one's rim, two pixels thick.
+// A retina cell is about 14 device pixels wide and a non-retina one about 7. The
+// terminal scales the PNG to the cell without smoothing, so there it keeps about every
+// other pixel. Every feature is at least two pixels wide, and the lobes sit on even
+// columns, so what's kept is still a heart with a closed rim.
 const HEART_ICON = [
-  '..ppp...ppp..',
-  '.ppppp.ppppp.',
-  'ppppppppppppp',
-  'ppppppppppppp',
-  'ppppppppppppp',
-  'ppppppppppppp',
-  '.ppppppppppp.',
-  '..ppppppppp..',
-  '...ppppppp...',
-  '....ppppp....',
-  '.....ppp.....',
-  '......p......',
+  '..pppp..pppp..',
+  '.ppppp..ppppp.',
+  'pppppppppppppp',
+  'pppppppppppppp',
+  'pppppppppppppp',
+  'pppppppppppppp',
+  '.pppppppppppp.',
+  '..pppppppppp..',
+  '...pppppppp...',
+  '....pppppp....',
+  '.....pppp.....',
+  '......pp......',
 ]
-const HEART_CELL = 13
-const HEART_TOP = 9
+const HEART_CELL = 14
+const HEART_TOP = 10
 const START_STAT = 80
 // One icon's worth, so each berry adds exactly one icon
 const FEED_FOOD = 20
@@ -2224,7 +2228,7 @@ function heartsImage(filled) {
     HEART_ICON.forEach((row, ry) => {
       for (let rx = 0; rx < row.length; rx++) {
         if (!inHeart(rx, ry)) continue
-        const rim = !inHeart(rx - 1, ry) || !inHeart(rx + 1, ry) || !inHeart(rx, ry - 1) || !inHeart(rx, ry + 1)
+        const rim = [1, 2].some((d) => !inHeart(rx - d, ry) || !inHeart(rx + d, ry) || !inHeart(rx, ry - d) || !inHeart(rx, ry + d))
         if (k >= filled && !rim) continue
         for (let py = (HEART_TOP + ry) * IMAGE_UP; py < (HEART_TOP + ry + 1) * IMAGE_UP; py++) {
           for (let px = (k * HEART_CELL + rx) * IMAGE_UP; px < (k * HEART_CELL + rx + 1) * IMAGE_UP; px++) {
