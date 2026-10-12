@@ -631,12 +631,12 @@ test('draws food circles and happiness hearts at the right edge as text', async 
 test('a terminal that draws Images shows the hearts as pixel hearts', async ($, on) => {
   const { clock } = await startedWith($, on, {}, 0)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  // One cell per heart, each 7 pixels wide and 14 tall, 4 image pixels to a pixel
+  // One cell per heart, each 14 pixels wide and 28 tall, 4 image pixels to a pixel
   const hearts = await ui.find({ type: 'Image', key: 'hearts' })
   expect(hearts.props.columns).toBe(5)
   expect(hearts.props.rows).toBe(1)
   expect(hearts.props.alt).toBe('♥♥♥♥♡')
-  expect(pngSize(hearts.props.source.png)).toEqual({ width: 5 * 7 * 4, height: 14 * 4 })
+  expect(pngSize(hearts.props.source.png)).toEqual({ width: 5 * 14 * 4, height: 28 * 4 })
   expect(imageColors(hearts.props.source.png)).toEqual(new Set([0xff5f9e]))
   expect(await ui.find({ type: 'Text', text: '♥♥♥♥♡' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '●●●●○' })).toBeDefined()
