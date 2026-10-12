@@ -1917,22 +1917,19 @@ const METER_STYLES = {
 // fonts lack ♥ or ♡. Each takes one cell, HEART_CELL pixels wide and twice as tall, and
 // sits where a font like Hack draws ● beside it: the cell's full width, about as tall,
 // from HEART_TOP down. An empty heart is the full one's rim.
+// The terminal scales the PNG to the cell without smoothing, so a pixel narrower than a
+// device pixel is dropped. A non-retina cell is about 7 device pixels wide, so the heart
+// keeps to 7 pixels a cell and its one-pixel rim survives there, two pixels wide on retina.
 const HEART_ICON = [
-  '..ppp...ppp..',
-  '.ppppp.ppppp.',
-  'ppppppppppppp',
-  'ppppppppppppp',
-  'ppppppppppppp',
-  'ppppppppppppp',
-  '.ppppppppppp.',
-  '..ppppppppp..',
-  '...ppppppp...',
-  '....ppppp....',
-  '.....ppp.....',
-  '......p......',
+  '.pp.pp.',
+  'ppppppp',
+  'ppppppp',
+  '.ppppp.',
+  '..ppp..',
+  '...p...',
 ]
-const HEART_CELL = 13
-const HEART_TOP = 9
+const HEART_CELL = 7
+const HEART_TOP = 5
 const START_STAT = 80
 // One icon's worth, so each berry adds exactly one icon
 const FEED_FOOD = 20
