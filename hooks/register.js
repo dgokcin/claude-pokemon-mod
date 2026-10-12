@@ -206,6 +206,9 @@ let sentImage = null
 let imagesDrawn = false
 // Set on a terminal that can't show the small band's Image, which gets it in half blocks
 let noImages = false
+// Whether the terminal is one known to draw Images, and /pokemon images, a key of IMAGE_MODES
+let knownImages = false
+let imageMode = 'auto'
 // After a terminal draws an Image's alt, the small band is half blocks until this tick.
 // Each deny in a row doubles the wait, since a terminal without kitty graphics never
 // draws one, while one whose graphics aren't ready yet soon does.
@@ -1825,17 +1828,25 @@ function smallZoom() {
   return zoom?.scale === bandScale() ? zoom : null
 }
 
-// VS Code's terminal, Cursor's included, shows kitty's image placeholders as boxes, even
-// when CLAUDE_CODE_FORCE_TERMINAL_IMAGES has the host send them. macOS Terminal has no
-// kitty graphics, and prints each frame's escape as base64 text. iTerm2 3.7 and older,
-// before the 2026-09-18 nightly, freezes a swapped Image's source.
-function lacksImages(program, version) {
-  if (program === 'vscode' || program === 'Apple_Terminal') return true
+// Only kitty, Ghostty, and newer iTerm2 builds draw kitty's image placeholders. Other
+// terminals print them as boxes, as xterm.js does in VS Code and Obsidian, even when
+// CLAUDE_CODE_FORCE_TERMINAL_IMAGES has the host send them and report them drawn. iTerm2
+// 3.7 and older, before the 2026-09-18 nightly, freezes a swapped Image's source.
+function drawsImages({ program, version, term, kittyWindow }) {
+  if (kittyWindow || term === 'xterm-kitty' || term === 'xterm-ghostty' || program === 'ghostty') return true
   if (program !== 'iTerm.app') return false
   const [major, minor, patch = ''] = String(version ?? '').split('.')
-  if (Number(major) > 3 || (Number(major) === 3 && Number(minor) > 7)) return false
+  if (Number(major) > 3 || (Number(major) === 3 && Number(minor) > 7)) return true
   const nightly = /^(\d{8})-nightly$/.exec(patch)
-  return !(nightly && Number(nightly[1]) >= 20260918)
+  return Boolean(nightly && Number(nightly[1]) >= 20260918)
+}
+
+// /pokemon images auto trusts the terminal list above, and on and off override it
+const IMAGE_MODES = { auto: () => knownImages, on: () => true, off: () => false }
+function applyImageMode() {
+  noImages = !IMAGE_MODES[imageMode]()
+  imageRetryAt = null
+  imageWait = IMAGE_WAIT_TICKS[0]
 }
 
 // The full-size frame, padded on the left and top to fill the zoomed box at its scale, so
@@ -2687,6 +2698,7 @@ const HELP = [
     ['needs', 'Food and happiness', () => onOff(needsOn)],
     ['emoji', 'Emoji meters', () => onOff(emojiOn)],
     ['size small|large', 'Band size', () => size],
+    ['images auto|on|off', 'Pixel images or half blocks', () => imageMode],
     ['pane', 'Show the mon in a docked pane, not the band', () => onOff(paneOn)],
     ['sync', 'Same mon in every open session', () => onOff(syncOn)],
     ['autoevolve', 'Evolve on its own at its level', () => onOff(autoEvolve)],
@@ -3336,6 +3348,8 @@ export function register(on) {
     emojiOn = (await $.store.get('emoji')) === true
     const savedSize = await $.store.get('size')
     if (Object.hasOwn(SIZES, savedSize)) size = savedSize
+    const savedImages = await $.store.get('images')
+    if (Object.hasOwn(IMAGE_MODES, savedImages)) imageMode = savedImages
     autoEvolve = (await $.store.get('autoEvolve')) !== false
     paneOn = (await $.store.get('pane')) === true
     paneShown = false
@@ -3346,11 +3360,14 @@ export function register(on) {
     firstShown.set(mon, nowMs)
     ink = await themeInk($)
     // A refused env read leaves the band as it is on any other terminal
-    const program = await $.env.get('TERM_PROGRAM').catch(() => undefined)
-    const version = await $.env.get('TERM_PROGRAM_VERSION').catch(() => undefined)
-    noImages = lacksImages(program, version)
-    imageRetryAt = null
-    imageWait = IMAGE_WAIT_TICKS[0]
+    const unread = () => undefined
+    knownImages = drawsImages({
+      program: await $.env.get('TERM_PROGRAM').catch(unread),
+      version: await $.env.get('TERM_PROGRAM_VERSION').catch(unread),
+      term: await $.env.get('TERM').catch(unread),
+      kittyWindow: await $.env.get('KITTY_WINDOW_ID').catch(unread),
+    })
+    applyImageMode()
     await beat($, await $.store.get('seenAt')).catch((err) => logOnce($, err))
     // Shown again, a parked mon's meters pick up where they stopped
     if (stats[mon]?.parked && !isGone(mon)) {
@@ -3510,6 +3527,17 @@ export function register(on) {
       await $.store.set('size', size)
       $.ui.invalidate('ui.render')
       return { text: 'The band is ' + size + '.' }
+    } else if (asked === 'images' || asked.startsWith('images ')) {
+      const wanted = asked.slice('images'.length).trim()
+      const modes = Object.keys(IMAGE_MODES).join(', ')
+      const drawn = () => (noImages ? 'half blocks' : 'images')
+      if (!wanted) return { text: 'Images are ' + imageMode + ', so the band draws ' + drawn() + '. Modes: ' + modes + '.' }
+      if (!Object.hasOwn(IMAGE_MODES, wanted)) return { text: 'Unknown mode "' + wanted + '". Try one of: ' + modes + '.' }
+      imageMode = wanted
+      await $.store.set('images', imageMode)
+      applyImageMode()
+      $.ui.invalidate('ui.render')
+      return { text: 'Images are ' + imageMode + ', so the band draws ' + drawn() + '.' }
     } else if (asked === 'pane') {
       return paneCommand($, e.presentation)
     } else if (asked === 'sync') {

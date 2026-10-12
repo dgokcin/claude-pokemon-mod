@@ -222,12 +222,13 @@ test('/pokemon help lists every option in groups, with each setting\'s value', a
   const lines = await help()
   expect(lines[0]).toBe('Usage: /pokemon <option>')
   expect(lines).toContain('Care')
-  expect(lines).toContain('  pet               Pet it')
-  expect(lines).toContain('  attack [move]     Use a random move, or the one named')
-  expect(lines).toContain('  wander            on     Wander while idle')
-  expect(lines).toContain('  size small|large  large  Band size')
+  expect(lines).toContain('  pet                 Pet it')
+  expect(lines).toContain('  attack [move]       Use a random move, or the one named')
+  expect(lines).toContain('  wander              on     Wander while idle')
+  expect(lines).toContain('  size small|large    large  Band size')
+  expect(lines).toContain('  images auto|on|off  auto   Pixel images or half blocks')
   await $.command.run({ command: 'pokemon', args: 'wander' })
-  expect(await help()).toContain('  wander            off    Wander while idle')
+  expect(await help()).toContain('  wander              off    Wander while idle')
   // Every option in the status line is in the help, which leaves out only itself
   const status = await $.command.run({ command: 'pokemon', args: '' })
   const options = status.text.match(/Options: (.*)\. \/pokemon help/)[1].split(', ')
@@ -246,8 +247,8 @@ test('/pokemon help puts the debug options first, only while debug is on', async
     'Usage: /pokemon <option>',
     '',
     'Debug',
-    '  wild [mon]        Call a wild mon now, or the one named; add shiny for its shiny colors',
-    '  kill              Faint the mon now, or lose it under nuzlocke',
+    '  wild [mon]          Call a wild mon now, or the one named; add shiny for its shiny colors',
+    '  kill                Faint the mon now, or lose it under nuzlocke',
     '',
   ])
   expect(lines[6]).toBe('Pick')
@@ -539,8 +540,11 @@ test('/pokemon feed drops a random berry, the mon walks over and eats it, then s
 
 const HOUR = 3600 * 1000
 
+// A terminal known to draw Images, which the band tests run in unless they name another
+const GHOSTTY = { TERM_PROGRAM: 'ghostty' }
+
 // Fire session.start with a saved store and a clock set to a given time
-async function startedWith($, on, saved: Record<string, unknown>, now: number, env: Record<string, string> = {}, answer: (e: any) => object = () => ({}), hooks: (clock) => void = () => {}) {
+async function startedWith($, on, saved: Record<string, unknown>, now: number, env: Record<string, string> = GHOSTTY, answer: (e: any) => object = () => ({}), hooks: (clock) => void = () => {}) {
   const clock = mock.clock(on, { now })
   const blits: string[] = []
   // Each blit's width in columns, and the blit itself, alongside blits
@@ -642,7 +646,7 @@ test('a terminal that draws Images shows the hearts as pixel hearts', async ($, 
 })
 
 test('a terminal that draws an Image as its alt gets the hearts as text', async ($, on) => {
-  const { clock } = await startedWith($, on, {}, 0, {}, (e) => (e.cells ? {} : DENY_IMAGES))
+  const { clock } = await startedWith($, on, {}, 0, GHOSTTY, (e) => (e.cells ? {} : DENY_IMAGES))
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await clock.advance(100)
   expect(await ui.find({ type: 'Image', key: 'hearts' })).toBeUndefined()
@@ -1968,7 +1972,7 @@ async function startedSmall($, on, answer: (e: any) => object) {
   on('ui.blit', ($, e) => ({ value: answer(e) }))
   on('ui.log', () => ({ value: undefined }))
   on('session.start', () => ({ cwd: '/work' }))
-  on('env.get', () => ({ value: undefined }))
+  terminalEnv(on, GHOSTTY)
   on('command.register', () => ({ value: undefined }))
   on('store.get', ($, e) => ({ value: e.key === 'size' ? 'small' : undefined }))
   on('store.set', () => ({ value: undefined }))
@@ -2038,41 +2042,46 @@ test('a terminal whose graphics are not ready yet gets the small band back as an
   expect((await ui.find({ key: 'pokemon' })).type).toBe('Image')
 })
 
-test('VS Code, macOS Terminal and iTerm2 builds whose Image swaps freeze draw the small band in half blocks, no shorter than Diglett', async ($, on) => {
+test('only kitty, Ghostty, and iTerm2 builds whose Image swaps work draw the small band as an Image, and the rest draw half blocks no shorter than Diglett', async ($, on) => {
   const clock = mock.clock(on)
   const blits: any[] = []
-  const env: Record<string, string> = {}
+  let env: Record<string, string> = {}
   on('ui.render', () => THEIRS)
   on('ui.blit', ($, e) => {
     if (e.key === 'pokemon') blits.push(e)
     return { value: {} }
   })
   on('session.start', () => ({ cwd: '/work' }))
-  terminalEnv(on, env)
+  on('env.get', ($, e) => ({ value: env[e.name] }))
   on('command.register', () => ({ value: undefined }))
   on('store.get', ($, e) => ({ value: e.key === 'size' ? 'small' : undefined }))
   on('store.set', () => ({ value: undefined }))
   on('store.keys', () => ({ value: [] }))
   on('store.delete', () => ({ value: undefined }))
-  const cases: [string, string | undefined, boolean][] = [
-    ['iTerm.app', '3.7.3', false],
-    ['iTerm.app', '3.7.20260901-nightly', false],
-    ['iTerm.app', undefined, false],
-    ['iTerm.app', '3.7.20261008-nightly', true],
-    ['iTerm.app', '3.8.0', true],
-    ['ghostty', '1.2.0', true],
-    ['vscode', '1.105.0', false],
-    ['Apple_Terminal', '466', false],
+  const iterm = (version?: string) => (version ? { TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: version } : { TERM_PROGRAM: 'iTerm.app' })
+  const cases: [Record<string, string>, boolean][] = [
+    [iterm('3.7.3'), false],
+    [iterm('3.7.20260901-nightly'), false],
+    [iterm(), false],
+    [iterm('3.7.20261008-nightly'), true],
+    [iterm('3.8.0'), true],
+    [{ TERM_PROGRAM: 'ghostty', TERM_PROGRAM_VERSION: '1.2.0' }, true],
+    [{ TERM: 'xterm-kitty' }, true],
+    [{ KITTY_WINDOW_ID: '1' }, true],
+    [{ TERM_PROGRAM: 'vscode', TERM_PROGRAM_VERSION: '1.105.0' }, false],
+    [{ TERM_PROGRAM: 'Apple_Terminal', TERM_PROGRAM_VERSION: '466' }, false],
+    [{ TERM_PROGRAM: 'WezTerm' }, false],
+    [{ TERM_PROGRAM: 'tmux' }, false],
+    // Obsidian's terminal, xterm.js like VS Code's, sets no TERM_PROGRAM of its own
+    [{ TERM: 'xterm-256color' }, false],
   ]
-  for (const [program, version, image] of cases) {
-    env.TERM_PROGRAM = program
-    if (version === undefined) delete env.TERM_PROGRAM_VERSION
-    else env.TERM_PROGRAM_VERSION = version
+  for (const [terminal, image] of cases) {
+    env = terminal
+    const where = JSON.stringify(terminal)
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
     blits.length = 0
     const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
     await clock.advance(1000)
-    const where = program + ' ' + version
     const band = await ui.find({ key: 'pokemon' })
     expect({ where, type: band.type }).toEqual({ where, type: image ? 'Image' : 'Raster' })
     expect({ where, swaps: blits.length > 0 && blits.every((e) => (image ? e.source : e.cells)) }).toEqual({ where, swaps: true })
@@ -2080,6 +2089,36 @@ test('VS Code, macOS Terminal and iTerm2 builds whose Image swaps freeze draw th
     expect({ where, rows: band.props.rows }).toEqual({ where, rows: image ? 6 : 7 })
     await ui.unmount()
   }
+})
+
+test('/pokemon images on and off override the terminal list, are saved, and auto goes back to it', async ($, on) => {
+  const saved: Record<string, any> = { size: 'small' }
+  const { clock } = await startedWith($, on, saved, 0, { TERM: 'xterm-256color' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const drawn = async () => {
+    await clock.advance(100)
+    return [(await ui.find({ key: 'pokemon' })).type, (await ui.find({ key: 'hearts' }))?.type ?? 'Text']
+  }
+  expect(await drawn()).toEqual(['Raster', 'Text'])
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await run('images')).toBe('Images are auto, so the band draws half blocks. Modes: auto, on, off.')
+
+  expect(await run('images on')).toBe('Images are on, so the band draws images.')
+  expect(saved.images).toBe('on')
+  expect(await drawn()).toEqual(['Image', 'Image'])
+
+  expect(await run('images auto')).toBe('Images are auto, so the band draws half blocks.')
+  expect(await drawn()).toEqual(['Raster', 'Text'])
+  expect(await run('images sixel')).toBe('Unknown mode "sixel". Try one of: auto, on, off.')
+})
+
+test('/pokemon images off draws half blocks and text hearts even where the terminal draws Images', async ($, on) => {
+  const { clock } = await startedWith($, on, { size: 'small', images: 'off' }, 0)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(100)
+  expect((await ui.find({ key: 'pokemon' })).type).toBe('Raster')
+  expect(await ui.find({ type: 'Image' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '♥♥♥♥♡' })).toBeDefined()
 })
 
 test('a half block small band shrinks no shorter than a full-size Diglett', async ($, on) => {
@@ -2401,7 +2440,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('env.get', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|new|list|pet|feed|sleep|revive|nickname|attack|moves|catch|run|evolve|stop|stats|box|party|dex|release|wander|needs|emoji|size|pane|sync|autoevolve|nuzlocke|help]')
+  expect(hint).toBe('[<mon>|default|shiny|new|list|pet|feed|sleep|revive|nickname|attack|moves|catch|run|evolve|stop|stats|box|party|dex|release|wander|needs|emoji|size|images|pane|sync|autoevolve|nuzlocke|help]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)

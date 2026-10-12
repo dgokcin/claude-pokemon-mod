@@ -21,7 +21,7 @@ claude plugin install pokemon@claude-pokemon
 Then pick your partner with `/pokemon <mon>`.
 
 > [!TIP]
-> It works best in iTerm2 or another terminal that draws images, like kitty or Ghostty, where the small band keeps every pixel. Turn images on in the `env` block of `~/.claude/settings.json`:
+> It works best in kitty, Ghostty, or a recent iTerm2, which draw images, so the small band keeps every pixel. iTerm2 also needs images turned on in the `env` block of `~/.claude/settings.json`:
 >
 > ```json
 > {
@@ -107,6 +107,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon autoevolve` | Toggle level evolutions starting on their own once idle (on by default). Off, the mon waits for `/pokemon evolve` |
 | `/pokemon emoji` | Toggle emoji meters, 🍓 and 💗 instead of ● and ♥ (off by default, saved across sessions) |
 | `/pokemon size small`, `/pokemon size large` | Draw the band at half size or full size (large by default, saved across sessions). A short pane still shrinks it further. See [How it works](#how-it-works) for crisp small mons in iTerm2 |
+| `/pokemon images auto`, `on`, `off` | Draw the small band and the hearts as pixel images, or in half blocks and text (auto by default, saved across sessions). `auto` uses images only in kitty, Ghostty, and iTerm2 builds that draw them. `off` fixes a terminal that shows boxes, and `on` tries images in a terminal not on that list |
 | `/pokemon pane` | Move the mon out of the band into a pane half the terminal wide, docked beside the transcript in the fullscreen layout so Claude's replies keep the left half. Run it again, or close the pane, to bring it back to the band (saved across sessions). On the main screen the pane sits above the prompt instead |
 | `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
 | `/pokemon box` | List every mon you've raised, highest level first |
@@ -360,9 +361,12 @@ kitty and Ghostty draw the small band as a real image, so every pixel stays. iTe
 and older can't, because of an iTerm2 bug that freezes the image on its first frame.
 Newer iTerm2 builds, nightlies from 2026-09-18 on included, draw the image once you set
 `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1`, for example in the `env` block of
-`~/.claude/settings.json`. VS Code's terminal, Cursor's included, and macOS Terminal
-can't show the image even with that set. In those terminals the small band is drawn in
-half blocks and shrinks no shorter than a full-size Diglett, since a half-size mon in
+`~/.claude/settings.json`. Every other terminal gets half blocks, because many of them,
+like the xterm.js ones in VS Code, Cursor, and Obsidian, print the image as rows of boxes.
+That flag makes Claude Code send images to every terminal and report them drawn, so the
+mod can't tell, and it goes by the terminal's name instead. `/pokemon images on` or `off`
+overrides that guess. Inside tmux the mod sees only tmux, so it draws half blocks unless
+you turn images on. In half blocks the small band shrinks no shorter than a full-size Diglett, since a half-size mon in
 half blocks is too small to read. In a small band a wild mon stands as tall as it would as
 your mon on show, so a wild Snorlax beside a small Jigglypuff is a small Snorlax, and the
 band grows taller to fit it while your mon keeps its size. At any size, a band too short
