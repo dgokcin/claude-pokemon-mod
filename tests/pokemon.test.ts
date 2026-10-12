@@ -3803,6 +3803,26 @@ test('a wild mon flees when the shown mon faints, here or in another session', a
   expect(toasts).toContain('Wild Pidgey fled!')
 })
 
+test('a heal started in another session during this one\'s gap keeps its five minutes', { timeoutMs: 60000 }, async ($, on) => {
+  // This session last beat three hours ago, and another one has been open since, took Abra
+  // to the Pokémon Center two minutes ago, and marked the store seen moments ago
+  const healing = { from: 3 * HOUR - 2 * MINUTE, until: 3 * HOUR + 3 * MINUTE }
+  const saved: Record<string, any> = { stats: { abra: { food: EMPTY, happiness: EMPTY, fainted: { ms: 0, at: 0 }, healing } }, seenAt: 3 * HOUR - 5000 }
+  await startedWith($, on, saved, 3 * HOUR)
+  expect(saved.stats.abra.healing).toEqual(healing)
+  expect(await run($, 'revive')).toBe('Abra is resting at the Pokémon Center. It\'s back in 3 min.')
+})
+
+test('time off only moves a heal on by the part of the gap it ran through', async ($, on) => {
+  // Claude Code was closed for four hours, and the heal was set an hour before it closed
+  const healing = { from: HOUR, until: HOUR + 5 * MINUTE }
+  const saved: Record<string, any> = { stats: { abra: { food: EMPTY, happiness: EMPTY, fainted: { ms: 0, at: 0 }, healing } }, seenAt: HOUR + MINUTE }
+  await startedWith($, on, saved, 5 * HOUR + MINUTE)
+  const off = 4 * HOUR - 10 * 1000
+  expect(saved.stats.abra.healing).toEqual({ from: HOUR + off, until: HOUR + 5 * MINUTE + off })
+  expect(await run($, 'revive')).toBe('Abra is resting at the Pokémon Center. It\'s back in 4 min.')
+})
+
 test('/pokemon revive heals a fainted mon in five minutes, standing it up at half food and some happiness', { timeoutMs: 60000 }, async ($, on) => {
   const toasts = toastsOf(on)
   const saved: Record<string, any> = { stats: { abra: { food: EMPTY, happiness: EMPTY, fainted: { ms: 0, at: 0 } }, pikachu: { xp: 1000, parked: true } } }

@@ -2908,35 +2908,37 @@ const OFF_DRAIN = 0.25
 const BEAT_MS = 10 * 1000
 const BEAT_TICKS = BEAT_MS / TICK_MS
 const OFF_AFTER_MS = 60 * 1000
-let lastBeat = null
 
-async function slowMeters($, offMs) {
-  const skipped = offMs * (1 - OFF_DRAIN)
+async function slowMeters($, now, offMs) {
   await freshen($, Object.keys(stats))
+  // A stamp set during the gap, by another session, only sees the gap after it
+  const overlap = (at) => Math.min(offMs, Math.max(0, now - at))
   const draining = Object.keys(stats).filter((name) => !stats[name].parked)
   for (const name of draining) {
     const record = { ...stats[name] }
     for (const key of Object.keys(STATS)) {
-      if (record[key]?.at !== undefined) record[key] = { ...record[key], at: record[key].at + skipped }
+      if (record[key]?.at !== undefined) record[key] = { ...record[key], at: record[key].at + overlap(record[key].at) * (1 - OFF_DRAIN) }
     }
     stats[name] = record
   }
-  // A heal takes open time too, so its end moves on by all of the time off
+  // A heal takes open time too, so its end moves on by all of the gap it ran through
   const healing = Object.keys(stats).filter((name) => typeof stats[name].healing?.until === 'number')
   for (const name of healing) {
     const { from, until } = stats[name].healing
-    stats[name] = { ...stats[name], healing: { from: (from ?? until - HEAL_MS) + offMs, until: until + offMs } }
+    const start = from ?? until - HEAL_MS
+    const shift = overlap(start)
+    stats[name] = { ...stats[name], healing: { from: start + shift, until: until + shift } }
   }
   await saveRecords($, [...new Set([...draining, ...healing])])
 }
 
-// At session start, since is the last mark any session left. While running, it's this
-// session's own last beat.
-async function beat($, since) {
+// The gap runs from the last mark any session left, so time another session was open
+// never counts as off, whether this one is starting or its own ticks came late
+async function beat($) {
+  const since = await $.store.get('seenAt')
   const now = await $.clock.now()
   nowMs = now
-  if (typeof since === 'number' && now - since > OFF_AFTER_MS) await slowMeters($, now - since - BEAT_MS)
-  lastBeat = now
+  if (typeof since === 'number' && now - since > OFF_AFTER_MS) await slowMeters($, now, now - since - BEAT_MS)
   await $.store.set('seenAt', now)
 }
 
@@ -3429,7 +3431,7 @@ export function register(on) {
       kittyWindow: await $.env.get('KITTY_WINDOW_ID').catch(unread),
     })
     applyImageMode()
-    await beat($, await $.store.get('seenAt')).catch((err) => logOnce($, err))
+    await beat($).catch((err) => logOnce($, err))
     // Shown again, a parked mon's meters pick up where they stopped
     if (stats[mon]?.parked && !isGone(mon)) {
       unpark(mon)
@@ -3460,7 +3462,7 @@ export function register(on) {
         if (tick % STAT_REDRAW_TICKS === 0) resyncMeters($).catch((err) => logOnce($, err))
         if (tick % SYNC_TICKS === 0) syncSessions($).catch((err) => logOnce($, err))
         if (tick % PARTY_SYNC_TICKS === 0) syncParty($).catch((err) => logOnce($, err))
-        if (tick % BEAT_TICKS === 0) beat($, lastBeat).then(() => checkNeglect($)).catch((err) => logOnce($, err))
+        if (tick % BEAT_TICKS === 0) beat($).then(() => checkNeglect($)).catch((err) => logOnce($, err))
         if (bandId !== null && bandSurface === 'terminal') blitFrame($)
         if (bandId !== null && bandSurface === 'desktop' && tick % DESKTOP_FRAME_TICKS === 0) redrawSvg($)
       } catch (err) {
