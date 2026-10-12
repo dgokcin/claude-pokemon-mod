@@ -540,7 +540,7 @@ test('/pokemon feed drops a random berry, the mon walks over and eats it, then s
 const HOUR = 3600 * 1000
 
 // Fire session.start with a saved store and a clock set to a given time
-async function startedWith($, on, saved: Record<string, unknown>, now: number, env: Record<string, string> = {}, answer: (e: any) => object = () => ({})) {
+async function startedWith($, on, saved: Record<string, unknown>, now: number, env: Record<string, string> = {}, answer: (e: any) => object = () => ({}), hooks: (clock) => void = () => {}) {
   const clock = mock.clock(on, { now })
   const blits: string[] = []
   // Each blit's width in columns, and the blit itself, alongside blits
@@ -568,6 +568,7 @@ async function startedWith($, on, saved: Record<string, unknown>, now: number, e
     delete saved[e.key]
     return { value: undefined }
   })
+  hooks(clock)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   return { clock, blits, widths, sent }
 }
@@ -2842,8 +2843,7 @@ test('the desktop draws a party mon in its Svg too', async ($, on) => {
 
 test('a party mon shows its own agent\'s tool in its bubble', async ($, on) => {
   runningAgents(on)
-  const { clock, blits } = await startedWith($, on, { wander: false, stats: PARTY_BOX }, 0)
-  slowTools(on, clock)
+  const { clock, blits } = await startedWith($, on, { wander: false, stats: PARTY_BOX }, 0, {}, undefined, (clock) => slowTools(on, clock))
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await $.agent.spawn(spawnOf('t1'))
   await clock.advance(4000)
@@ -2867,13 +2867,14 @@ test('a party mon shows its own agent\'s tool in its bubble', async ($, on) => {
 
 test('a party mon shows dots while its agent thinks', async ($, on) => {
   runningAgents(on)
-  const { clock, blits } = await startedWith($, on, { wander: false, stats: PARTY_BOX }, 0)
-  on('turn.step', async function* (_, e) {
-    yield { kind: 'thinking', index: 0, text: 'Counting' }
-    await clock.sleep(2000)
-    yield { kind: 'text', index: 1, text: 'Done' }
-    yield { kind: 'stop', stopReason: 'end_turn', usage: null }
-    return { turnId: e.turnId, index: e.index, answer: 'Done', toolUses: [], stopReason: 'end_turn', usage: null }
+  const { clock, blits } = await startedWith($, on, { wander: false, stats: PARTY_BOX }, 0, {}, undefined, (clock) => {
+    on('turn.step', async function* (_, e) {
+      yield { kind: 'thinking', index: 0, text: 'Counting' }
+      await clock.sleep(2000)
+      yield { kind: 'text', index: 1, text: 'Done' }
+      yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+      return { turnId: e.turnId, index: e.index, answer: 'Done', toolUses: [], stopReason: 'end_turn', usage: null }
+    })
   })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await $.agent.spawn(spawnOf('t1'))
