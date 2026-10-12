@@ -1,4 +1,8 @@
 import { aimsAhead, attackFrame, attackPose, prepareAttack } from './attacks.js'
+import {
+  ballOpen, cheerCrew, CREW_SIZE, crewFit, crewFlash, crewHidden, crewHopping, crewLanes, crewPhase, crewRed, crewThinking, crewTool,
+  crewToolEnds, crewToolStarts, crewWalking, endedCrew, isOut, isShown, joinCrew, spanOf, stepCrew,
+} from './crew.js'
 import { CUSTOM_PREFIX, fetchMon, monsOfGen } from './custom.js'
 import { DEX, TIERS, dexKey, dexNumber, isCaught, mergedDexEntry, pickWild, tierOf } from './dex.js'
 import { evolutionsOf, levelEvolutionOf, startLevel } from './evolutions.js'
@@ -10,7 +14,7 @@ import { MAX_LEVEL, careOf, levelAt, turnXp, xpAt } from './levels.js'
 import { MOVES, movesOf } from './moves.js'
 import { displayName } from './names.js'
 import { encodePng } from './png.js'
-import { BALL, BALL_COLORS, FLASH, LEANS, LIGHT_COLORS, OPEN, joinParty, leaveParty, partyStamps, prunedParty } from './party.js'
+import { BALL, BALL_COLORS, FLASH, LEANS, LIGHT_COLORS, OPEN, PARTY_SIZE, ballReady, joinParty, leaveParty, partyStamps, prunedParty } from './party.js'
 import {
   ATTACK_GAP_MS, ATTACK_JITTER_MS, THROW_TICKS, WILD_STAY_MS, WILD_TURNS, WORN_OUT_MS, battleColumns, chargedWild, damageOf,
   foeBlinks, foeJolt, foeSpotX, foeX, fleeingWild, HP_BAR, hpBar, isHere, isOnStage, newWild, stepWild, thrownWild, throwStage,
@@ -28,7 +32,8 @@ import { SIZES, zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 // /pokemon sleep tucks it in, so both meters drain slower until Claude starts working.
 // /pokemon attack plays one of its moves, with the animations in attacks.js.
 // While a tool runs, the bubble shows it, with a TM disc for a skill from any agent, and
-// when Claude waits on you the mon stops and shows a "!". Each running subagent is a Poké Ball along the left of the strip.
+// when Claude waits on you the mon stops and shows a "!". Each running subagent is a Poké Ball along the left of the strip,
+// and while the band has room a mon from your box steps out of it and works beside yours, as in crew.js.
 // A main-loop tool call that fails makes it flinch, with a sweat drop by its head.
 // Answered turns earn XP, and the mon evolves at the levels from the games.
 // Now and then a wild mon walks in from the left, and the strip widens to fit both.
@@ -122,6 +127,10 @@ const alertTools = new Set()
 let alertUntil = 0
 let idleAlertAt = null
 let party = []
+// The party mons of running subagents, as in crew.js, and the strip columns at the left
+// they walk in, 0 while none is out
+let crew = []
+let crewWidth = 0
 let bandId = null
 // /pokemon pane moves the scene from the band into a pane, docked beside the transcript in
 // the fullscreen layout so Claude's replies keep the rest of the screen. It's drawn there
@@ -179,6 +188,12 @@ let syncOn = false
 let seenPick = null
 // With /pokemon nuzlocke on, a mon that faints is gone for good
 let nuzlockeOn = false
+// The party picked with /pokemon party add and remove, in order, or null for the box's
+// highest level mons
+let partyPicks = null
+// The mon each agent type comes out as, set with /pokemon party assign, keyed by the
+// type in lowercase, like { explore: 'abra' }
+let partyAgents = {}
 // When each mon was first shown in this session, for the grace before its faint clock runs
 const firstShown = new Map()
 // Set while this session checks the shown mon's faint clock or finishes its heal
@@ -329,8 +344,9 @@ const homeRows = () => {
   if (attack?.move.effect === 'transform') return Math.max(rowsOf(mon), rowsOf(attack.swap))
   return rowsOf(mon)
 }
-// A foe on stage makes the band tall enough for it too
-const bandRows = () => (isOnStage(wild) ? Math.max(homeRows(), rowsOf(foeName())) : homeRows())
+// A foe on stage makes the band tall enough for it too, and so does a party mon out
+const crewRows = () => Math.max(0, ...crew.filter((m) => m.outAt !== null).map((m) => rowsOf(m.mon)))
+const bandRows = () => Math.max(isOnStage(wild) ? Math.max(homeRows(), rowsOf(foeName())) : homeRows(), crewRows())
 // The band's size on screen, shrunk to fit a short pane, or null when only the badge fits
 // A terminal known to lack Images draws the small band in half blocks, where a mon at
 // half size loses too much to read. It shrinks no shorter than a full-size Diglett. The
@@ -364,6 +380,8 @@ const gapRightOf = (name) => Math.max(0, homeGap() - RIGHT_GAP[name][variant])
 const homeXOf = (name) => Math.max(0, columns - SPRITES[name].width - gapRightOf(name))
 const homeX = () => homeXOf(mon)
 const isHome = () => x >= homeX()
+// The lead keeps to the strip right of the party mons' columns
+const leadFloor = () => Math.min(crewWidth, homeX())
 
 const isHopping = () => tick - hopStart < HOP_TICKS
 const isPetted = () => tick < petUntil
@@ -396,7 +414,7 @@ function berryUnderBody() {
 // Where the sprite stands to eat: with the berry in front of the middle of its body,
 // kept inside the strip
 function foodTarget() {
-  return Math.max(0, Math.min(homeX(), food.x - berryUnderBody()))
+  return Math.max(leadFloor(), Math.min(homeX(), food.x - berryUnderBody()))
 }
 
 // Where the idle sprite is headed. Pacing while working is handled in step().
@@ -495,6 +513,8 @@ const TOOL_KINDS = {
   ball: ['Agent', 'Task', 'SendMessage', 'Workflow'],
   disc: ['Skill'],
 }
+// The turn.step chunks that start or end a subagent's thinking
+const THOUGHT_KINDS = new Set(['thinking', 'text', 'tool', 'stop'])
 // Tools that ask you something, and notifications that wait on you
 const QUESTION_TOOLS = ['AskUserQuestion', 'ExitPlanMode']
 const ALERT_NOTIFICATIONS = ['permission_prompt', 'worker_permission_prompt', 'agent_needs_input', 'elicitation_dialog']
@@ -531,11 +551,14 @@ async function markSkillCommand($, command) {
   if (found && found.source !== 'builtin') discUntil = tick + DISC_TICKS
 }
 
-// The icon of the main loop's most recently started tool that is still running. A
-// skill in use anywhere, in the main loop or a subagent, shows as a TM disc instead.
-function toolIcon() {
-  const name = [...runningTools.values()].pop()
-  const kind = skillInUse() ? 'disc' : (Object.keys(TOOL_KINDS).find((k) => TOOL_KINDS[k].includes(name)) ?? 'wrench')
+const toolKind = (name) => Object.keys(TOOL_KINDS).find((k) => TOOL_KINDS[k].includes(name)) ?? 'wrench'
+
+// The kind of the main loop's most recently started tool that is still running. A skill
+// in use anywhere, in the main loop or a subagent, shows as a TM disc instead.
+const leadToolKind = () => (skillInUse() ? 'disc' : toolKind([...runningTools.values()].pop()))
+
+// A tool kind's icon in the bubble
+function toolIcon(kind) {
   const colors = {
     p: ink.pencil, e: 0xe06888, t: 0xb88048, g: 0x767688,
     l: ink.lens, h: 0xb07040,
@@ -552,8 +575,8 @@ function bubbleIcon() {
   if (attack || isDown()) return null
   if (isAlerted()) return ALERT_ICON
   if (tick < yumUntil) return { rows: STAR, small: SMALL_STAR, colors: { s: ink.star } }
-  if (skillInUse()) return toolIcon()
-  if (working && runningTools.size > 0) return toolIcon()
+  if (skillInUse()) return toolIcon(leadToolKind())
+  if (working && runningTools.size > 0) return toolIcon(leadToolKind())
   if (working && thinking) return dotsIcon()
   const need = needsOn && needNow()
   return need ? BUBBLE_ICONS[need] : null
@@ -653,11 +676,11 @@ function flinchJolt(baseX, width) {
 }
 
 // The sweat drop sliding down the corner of the head away from the bubble, which leads
-// on side when there's room
-function sweatStamps(head, y, side) {
+// on side when there's room, since ticks into the flinch
+function sweatStamps(head, y, side, { since = tick - flinchStart, room } = {}) {
   const width = SWEAT[0].length
-  const sx = bubbleOnLeft(head, side) ? Math.min(columns - width, head[1] - 1) : Math.max(0, head[0] - 2)
-  const drip = Math.floor((tick - flinchStart) / DRIP_TICKS)
+  const sx = bubbleOnLeft(head, side, room) ? Math.min(columns - width, head[1] - 1) : Math.max(0, head[0] - 2)
+  const drip = Math.floor(since / DRIP_TICKS)
   return [stamp(sx, y + drip, SWEAT, { d: ink.sweat, h: ink.sweatShine })]
 }
 
@@ -690,7 +713,7 @@ function feed() {
   const width = SPRITES[mon].width
   const gap = 3 + Math.floor(Math.random() * 6)
   const under = berryUnderBody()
-  const lowest = Math.max(0, under)
+  const lowest = Math.max(leadFloor(), leadFloor() + under)
   const highest = Math.min(columns - BERRY_SIZE, homeX() + under)
   const right = x + width + gap
   const fx = Math.max(lowest, Math.min(highest, right <= highest ? right : x - gap - BERRY_SIZE))
@@ -769,7 +792,7 @@ function heartStamps() {
 }
 
 // The strip edge behind a mon aiming at side, where it backs up to before the move
-const edgeBehind = (side) => (side === 'left' ? homeX() : 0)
+const edgeBehind = (side) => (side === 'left' ? homeX() : leadFloor())
 
 const isBackingUp = () => attack !== null && attack.backing === true
 
@@ -782,7 +805,7 @@ function startAttack(move, { foe = false } = {}) {
   clampX()
   wanderTarget = null
   hopStart = -HOP_TICKS
-  const side = foe || x >= homeX() - x ? 'left' : 'right'
+  const side = foe || x - leadFloor() >= homeX() - x ? 'left' : 'right'
   const seed = Math.floor(Math.random() * 0x7fffffff)
   const others = MONS.filter((name) => name !== mon)
   const aimed = attackPose(prepareAttack(move, { side, seed, x, home: homeX() }), 0).view === 'side'
@@ -821,7 +844,7 @@ const isFree = () => !working && !attack && !food && !wild && !isAsleep() && !is
 const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack', 'release', 'catch', 'new']
 // While it eats a berry or enjoys a pet, only the commands that just show something run,
 // so nothing changes the record the berry or pet is about to fill
-const SHOWS_ONLY = ['', 'list', 'help', 'stats', 'box', 'moves', 'dex']
+const SHOWS_ONLY = ['', 'list', 'help', 'stats', 'box', 'party', 'moves', 'dex']
 const waitsForCare = (asked) => (food !== null || isPetted()) && !SHOWS_ONLY.includes(asked.split(' ')[0]) && asked !== 'attack list'
 // What a fainted mon can't do, and what a mon that's gone can't do either
 const DOWN_WAITS = ['pet', 'feed', 'attack', 'catch', 'evolve', 'sleep']
@@ -1027,7 +1050,11 @@ let releasedAt = null
 const RELEASE_BEAT = 3
 function flashStamps(heal, body) {
   const k = releasedAt === null ? -1 : Math.floor((tick - releasedAt) / RELEASE_BEAT)
-  const art = heal ? recallFlash(heal, tick) : k >= 0 && k < FLASH.length ? FLASH[k] : null
+  return flashAt(heal ? recallFlash(heal, tick) : k >= 0 && k < FLASH.length ? FLASH[k] : null, body)
+}
+
+// A FLASH frame over the middle of a body, or nothing without one
+function flashAt(art, body) {
   if (!art) return []
   const half = Math.floor(art.length / 2)
   const x = Math.round((body.left + body.right) / 2) - half
@@ -1152,13 +1179,46 @@ function sceneRoom(bodyColumns) {
 
 const battleFits = (foe, foeVariant) => battleNeeds(foeAs(foe), foeVariant) <= sceneRoom(lastBodyColumns)
 
-// The strip's width in a band bodyColumns wide, grown on the left while a foe is on stage
-// or the mon heals at the Pokémon Center
-function stripTarget(bodyColumns) {
-  const room = sceneRoom(bodyColumns)
+// The lead's strip in room scene columns, grown on the left while a foe is on stage or
+// the mon heals at the Pokémon Center
+function baseStrip(room) {
   const strip = Math.max(SPRITES[mon].width, Math.min(STRIP_COLUMNS, room))
   if (isOnStage(wild)) return Math.max(strip, Math.min(battleNeeds(foeName(), wild.variant), room))
   return isHealing(mon) ? Math.max(strip, Math.min(healNeeds(), room)) : strip
+}
+
+// The strip's width in a band bodyColumns wide. While a party mon is out, or one is due
+// out and fits, it takes all the room the band has, the lead's strip and any foe's first.
+function stripTarget(bodyColumns) {
+  const room = sceneRoom(bodyColumns)
+  const base = baseStrip(room)
+  const crewing = crew.some((m) => m.outAt !== null) || crewWanted(room - base).length > 0
+  return crewing ? Math.max(base, room) : base
+}
+
+const crewBox = (m) => idleBox(m.mon, m.variant)
+
+// The party mons that may come out, in ball order: a running agent's, its ball in one
+// of the first five slots, not the mon on show, and no taller than the band can grow for
+function crewHopefuls() {
+  const slot = (m) => party.findIndex((ball) => ball.id === m.id)
+  return crew
+    .filter((m) => {
+      const i = slot(m)
+      return m.endAt === null && m.mon !== mon && SPRITES[m.mon] && i >= 0 && i < PARTY_SIZE - 1 && party[i].popStart === null && rowsOf(m.mon) <= foeRoom()
+    })
+    .sort((a, b) => slot(a) - slot(b))
+}
+
+// The party mons that keep a lane in width columns, in ball order: the ones whose agents
+// finished, until they're back in their balls, then as many hopefuls as fit beside them
+// at full size
+function crewWanted(width) {
+  const slot = (m) => party.findIndex((ball) => ball.id === m.id)
+  const leaving = crew.filter((m) => m.endAt !== null && isOut(m, tick))
+  const room = width - leaving.reduce((sum, m) => sum + spanOf(crewBox(m)), 0)
+  const hopefuls = crewHopefuls()
+  return [...leaving, ...hopefuls.slice(0, crewFit(hopefuls, crewBox, room))].sort((a, b) => slot(a) - slot(b))
 }
 
 // The foe's spot facing the home mon, and the column just out of sight past the scene's left edge
@@ -1508,6 +1568,61 @@ async function killCommand($) {
   return { text: name + (nuzlockeOn ? ' fainted for good.' : ' fainted.') }
 }
 
+// What a party mon's bubble shows: its agent's running tool, or dots while it thinks
+function crewIcon(m) {
+  if (crewPhase(m, tick) !== 'out') return null
+  const tool = crewTool(m)
+  if (tool !== null) return toolIcon(toolKind(tool))
+  return m.thinking ? dotsIcon() : null
+}
+
+// Each party mon on stage as drawn this tick, its feet on the ground of a band rows tall:
+// its pixels, its frame's pupils, its head and body, where its bubble leads, and its
+// stamps in front of the scene, the sweat of a flinch and the flash it comes and goes in.
+// Inside the flash its body stays out of sight, so the flash reads as it coming and going.
+// Its bubble keeps between its neighbors' heads, the last one's short of limit.
+function crewDrawn(rows, limit) {
+  const mates = crew
+    .filter((m) => isShown(m, tick))
+    .map((m) => {
+      const sprite = SPRITES[m.mon]
+      const walking = crewWalking(m, tick, FLINCH_TICKS)
+      const view = walking ? 'walk' : 'idle'
+      const frame = frameAt(sprite.variants[m.variant][view], tick * TICK_MS)
+      const colors = COLORS[m.mon][m.variant]
+      const flip = walking && m.facing === 'left'
+      const red = crewRed(m, tick)
+      const hidden = crewHidden(m, tick)
+      const since = m.flinchAt === null ? Infinity : tick - m.flinchAt
+      const shaking = since < SHAKE_TICKS ? (Math.floor(since / 2) % 2 === 0 ? -1 : 1) : 0
+      const left = m.x + shaking
+      const top = rows * 2 - sprite.height + (walking ? WALK_DROP[m.mon][m.variant] : 0) - (crewHopping(m, tick) ? 2 : 0)
+      const local = (px, py) => {
+        const row = frame[py]
+        if (!row || px < 0 || px >= sprite.width) return null
+        return colors[row[flip ? sprite.width - 1 - px : px]] ?? null
+      }
+      const pixel = (cx, py) => {
+        if (hidden) return null
+        const c = local(cx - left, py - top)
+        return c === null || red === 0 ? c : mixed(c, RECALL_RED, red * 0.8)
+      }
+      const box = boxOf(frame, colors)
+      const [boxLeft, boxRight] = flip ? [sprite.width - 1 - box.right, sprite.width - 1 - box.left] : [box.left, box.right]
+      const body = { left: left + boxLeft, right: left + boxRight, top: top + box.top, bottom: top + box.bottom }
+      const head = headColumns(local, sprite.width, left)
+      const pupils = red === 0 && !hidden ? pupilsAt(m.mon, m.variant, view, frame, { left, top, mirrored: flip }) : []
+      return { m, pixel, pupils, head, body, side: walking ? m.facing : 'left', since, icon: crewIcon(m) }
+    })
+    .sort((a, b) => a.head[0] - b.head[0])
+  return mates.map((mate, i) => {
+    const room = [i > 0 ? mates[i - 1].head[1] + 1 : -margin, i + 1 < mates.length ? mates[i + 1].head[0] : limit]
+    const wincing = mate.since < FLINCH_TICKS && crewPhase(mate.m, tick) === 'out'
+    const sweat = wincing ? sweatStamps(mate.head, mate.body.top, mate.side, { since: mate.since, room }) : []
+    return { ...mate, room, front: [...sweat, ...flashAt(crewFlash(mate.m, tick), mate.body)] }
+  })
+}
+
 // The current frame, zoomed to the band or at full size: a color or null per pixel, two
 // pixel rows per cell, and the effects' glyphs by cell
 function frameNow(full = false) {
@@ -1569,6 +1684,8 @@ function frameNow(full = false) {
   // With a foe on stage the bubble has no room, so only the "!" shows, over the foe
   const onStage = isOnStage(wild)
   const foe = onStage ? foePixel(rows) : null
+  // A party mon's bubble stops short of the foe's columns, or else the lead's head
+  const mates = crewDrawn(rows, onStage ? crewWidth : head[0] - 1)
   const wanted = bubbleIcon()
   const icon = onStage && wanted !== ALERT_ICON ? null : wanted
   // The frame's box as drawn, mirrored along with the sprite
@@ -1585,19 +1702,24 @@ function frameNow(full = false) {
   const zoom = (!full && bandZoom()) || { scale: 1, columns: scene, rows }
   const shrunk = zoom.scale < 1
   const bubble = icon && !shrunk ? bubbleStamps(icon, head, bubbleSide) : []
+  const mateBubbles = shrunk ? [] : mates.flatMap((m) => (m.icon ? bubbleStamps(m.icon, m.head, m.side, m.room) : []))
   const ball = throwStamps(rows, { x: Math.round((head[0] + head[1]) / 2), y: top + box.top })
   const over = [
     ...ball.over,
     ...(onStage ? [...bubble, ...hpStamps(rows)] : []),
     ...heartStamps(),
     ...(isWincing() ? sweatStamps(head, top + box.top, bubbleSide) : []),
+    ...mates.flatMap((m) => m.front),
+    ...mateBubbles,
     ...(asleep && !shrunk ? sleepStamps(sleeper) : []),
     ...(dizzy && !shrunk ? dizzyStamps(tick, sleeper, { light: ink === INKS.light }) : []),
     ...flashStamps(heal, sleeper),
     ...(away && !shrunk ? sparkleStamps(heal, tick, center, { light: ink === INKS.light }) : []),
     ...(away ? centerStamps(heal, tick, center) : []),
   ]
-  const balls = partyStamps(party, tick, { columns, ground: rows * 2 - 1, label: ink.party })
+  const still = new Set(crew.filter((m) => m.outAt !== null).map((m) => m.id))
+  const open = new Set(crew.filter((m) => ballOpen(m, tick)).map((m) => m.id))
+  const balls = partyStamps(party, tick, { columns, ground: rows * 2 - 1, label: ink.party, still, open })
   const under = [...ball.under, ...(onStage ? [] : bubble), ...balls]
   const pixels = rows * 2
   const width = stripColumns()
@@ -1614,6 +1736,10 @@ function frameNow(full = false) {
     if (f !== null) return f
     const c = effect.hidden ? null : body(cx, py)
     if (c !== null) return c
+    for (const m of mates) {
+      const p = m.pixel(cx, py)
+      if (p !== null) return p
+    }
     const w = foe ? foe(cx, py) : null
     if (w !== null) return w
     if (effect.ghosts.length > 0) {
@@ -1636,7 +1762,7 @@ function frameNow(full = false) {
   const reshaped = effect.hidden || effect.sx !== 1 || effect.sy !== 1 || effect.skew || effect.flipY
   // A fainted mon's eyes are Xs, with no pupils to keep
   const own = shrunk && !reshaped && !knockedOut ? pupilsAt(shown, variant, sideOn ? 'walk' : 'idle', frame, { left, top, mirrored }) : []
-  const pupils = [...own, ...(shrunk ? (foe?.pupils ?? []) : [])].map(([px, py, c, eye]) => [px + margin + shakeX, py + shakeY, c, eye && [eye[0] + margin + shakeX, eye[1] + shakeY, ...eye.slice(2)]])
+  const pupils = [...own, ...(shrunk ? [...(foe?.pupils ?? []), ...mates.flatMap((m) => m.pupils)] : [])].map(([px, py, c, eye]) => [px + margin + shakeX, py + shakeY, c, eye && [eye[0] + margin + shakeX, eye[1] + shakeY, ...eye.slice(2)]])
   const zoomed = zoomedPixel(shaken, { columns: scene, pixels, scale: zoom.scale, pupils })
   // The head's zoomed columns, from the first its left column covers to the last its right one does
   const [headLeft, headRight] = head.map((c) => c + margin)
@@ -1644,6 +1770,10 @@ function frameNow(full = false) {
   // It keeps clear of the meters drawn over the small band's right end
   const bubbleRoom = [0, zoom.columns - (isSmall() ? Math.round(panel * zoom.scale) : 0)]
   const zoomedBubble = shrunk && icon ? bubbleStamps(icon, zoomedHead, bubbleSide, bubbleRoom, shrunkBubble(icon)) : []
+  const zoomedSpan = ([l, r]) => [zoomedAt(l + margin, zoom.scale), Math.max(zoomedAt(r + margin, zoom.scale), zoomedAt(r + margin + 1, zoom.scale) - 1)]
+  const zoomedMates = shrunk
+    ? mates.flatMap((m) => (m.icon ? bubbleStamps(m.icon, zoomedSpan(m.head), m.side, zoomedSpan(m.room), shrunkBubble(m.icon)) : []))
+    : []
   // The Zs and the berry, in front of the shrunk scene as they are at full size
   const zoomedX = (c) => zoomedAt(c + margin + shakeX, zoom.scale)
   const zoomedY = (py) => zoomedAt(py + shakeY, zoom.scale)
@@ -1662,11 +1792,13 @@ function frameNow(full = false) {
     }
     return null
   }
-  const bubbleAt = stampsAt(zoomedBubble)
   const frontAt = stampsAt(front)
   const sceneAt = front.length === 0 ? zoomed : (tx, ty) => frontAt(tx, ty) ?? zoomed(tx, ty)
-  // As at full size, the bubble sits behind the scene, and over it while a foe is on stage
-  const drawn = zoomedBubble.length === 0 ? sceneAt : onStage ? (tx, ty) => bubbleAt(tx, ty) ?? sceneAt(tx, ty) : (tx, ty) => sceneAt(tx, ty) ?? bubbleAt(tx, ty)
+  // As at full size, the lead's bubble sits behind the scene, and over it while a foe is
+  // on stage, and the party mons' sit over it, where a cramped one can't hide behind a neighbor
+  const overAt = stampsAt(onStage ? [...zoomedMates, ...zoomedBubble] : zoomedMates)
+  const behindAt = stampsAt(onStage ? [] : zoomedBubble)
+  const drawn = zoomedBubble.length + zoomedMates.length === 0 ? sceneAt : (tx, ty) => overAt(tx, ty) ?? sceneAt(tx, ty) ?? behindAt(tx, ty)
   // A small band of an odd number of rows has a half row to spare, left on top so the
   // mon keeps its feet on the band's bottom edge
   const spare = zoom.rows * 2 - Math.round(pixels * zoom.scale)
@@ -1839,17 +1971,17 @@ function svgNow() {
 
 // Where a mon pacing right while Claude works turns back: before its bubble, which leads
 // on the right, would run past the panel, or at home if it never would
-const workTurnX = () => Math.max(0, Math.min(homeX(), stripColumns() - BUBBLE_SPAN - 1 - WALK_HEAD_RIGHT[mon][variant]))
+const workTurnX = () => Math.max(leadFloor(), Math.min(homeX(), stripColumns() - BUBBLE_SPAN - 1 - WALK_HEAD_RIGHT[mon][variant]))
 
-// Keep the sprite inside the strip
+// Keep the sprite inside the strip, right of any party mons
 function clampX() {
-  x = Math.max(0, Math.min(homeX(), x))
+  x = Math.max(leadFloor(), Math.min(homeX(), x))
 }
 
 // Pick the next spot to stroll to once the rest is over
 function planWander() {
   if (wild || !wander || working || wanderTarget !== null || tick < restUntil) return
-  wanderTarget = Math.floor(Math.random() * (homeX() + 1))
+  wanderTarget = leadFloor() + Math.floor(Math.random() * (homeX() - leadFloor() + 1))
 }
 
 // Advance the clock and move one column every few ticks: pacing while
@@ -1859,6 +1991,8 @@ function step() {
   nowMs += TICK_MS
   hearts = hearts.filter((heart) => tick - heart.born <= (heart.y + heart.rows.length) * HEART_RISE_TICKS)
   party = prunedParty(party, tick)
+  // A party mon leaves the crew once its ball has popped
+  if (crew.length > 0) crew = crew.filter((m) => party.some((ball) => ball.id === m.id))
   stepIdleAlert()
   if (isDown()) return
   if (attack) return stepAttack()
@@ -1872,7 +2006,7 @@ function step() {
   if (tick % moveTicks() !== 0) return
 
   if (working && !wild) {
-    if (facing === 'left' && x <= 0) facing = 'right'
+    if (facing === 'left' && x <= leadFloor()) facing = 'right'
     else if (facing === 'right' && x >= workTurnX()) facing = 'left'
   } else {
     const target = idleTarget()
@@ -2109,7 +2243,90 @@ async function syncParty($) {
     live.add(agent.id)
     if (agent.teammateId) live.add(agent.teammateId)
   }
-  for (const ball of open) if (!live.has(ball.id)) party = leaveParty(party, ball.id, tick)
+  for (const ball of open) if (!live.has(ball.id)) endAgent(ball.id)
+}
+
+// A subagent finished. Its ball pops now, or once its party mon has hopped and gone back in.
+function endAgent(id) {
+  const member = crew.find((m) => m.id === id)
+  if (member && crewPhase(member, tick) !== 'ball') crew = endedCrew(crew, id, tick)
+  else party = leaveParty(party, id, tick)
+}
+
+// The lead's last hop the party hopped along with
+let cheeredAt = -HOP_TICKS
+
+// The party mons out walk, and the ones due out come out, in lanes across the crew's
+// columns. They hop along when the lead hops, and jump when a wild mon walks in behind them.
+function stepCrewMons() {
+  if (crew.length === 0) return
+  const ground = bandRows() * 2 - 1
+  const rows = bandRows()
+  const lanes = crewWidth > 0 ? crewLanes(crewWanted(crewWidth), crewBox, crewWidth) : new Map()
+  const ready = (m) => ballReady(party, m.id, tick, ground)
+  const bubbleOf = (m) => (crewIcon(m) ? BUBBLE_SPAN : 0)
+  const foe = wild?.phase === 'entering' ? { id: wild.seed, ...foeBox(rows) } : null
+  if (hopStart > cheeredAt) {
+    cheeredAt = hopStart
+    crew = cheerCrew(crew, tick)
+  }
+  const result = stepCrew(crew, {
+    tick, lanes, width: crewWidth, ready, boxOf: crewBox, bubbleOf, foe, moveTicks: MOVE_TICKS, flinchTicks: FLINCH_TICKS, rand: Math.random,
+  })
+  crew = result.crew
+  for (const id of result.done) party = leaveParty(party, id, tick)
+}
+
+// The box's mons beside the one on show that can work for a subagent: none fainted, run
+// away, or lost. They're the picked party in its order, or the highest level first.
+const canWork = (name) => name !== mon && MONS.includes(name) && stats[name] && typeof stats[name] === 'object' && !isGone(name) && !isFainted(name)
+
+// A mon assigned to an agent type comes out for that type alone, so it stays out of the
+// party the other subagents draw from
+const isAssigned = (name) => Object.values(partyAgents).includes(name)
+
+function partyMons() {
+  const able = (name) => canWork(name) && !isAssigned(name)
+  if (partyPicks) return partyPicks.filter(able).slice(0, CREW_SIZE)
+  return Object.keys(stats)
+    .filter(able)
+    .sort((a, b) => levelOf(b) - levelOf(a) || displayName(a).localeCompare(displayName(b)) || a.localeCompare(b))
+    .slice(0, CREW_SIZE)
+}
+
+async function loadPartyPicks($) {
+  const saved = await $.store.get('partyPicks')
+  partyPicks = Array.isArray(saved) ? saved.filter((name) => MONS.includes(name)) : null
+  const agents = await $.store.get('partyAgents')
+  partyAgents = {}
+  if (agents && typeof agents === 'object') {
+    for (const [type, name] of Object.entries(agents)) if (MONS.includes(name)) partyAgents[type] = name
+  }
+}
+
+// The mon assigned to an agent type, or undefined
+const assignedTo = (type) => partyAgents[String(type ?? '').toLowerCase()]
+
+// The agent types a mon is assigned to, as typed
+const typesOf = (name) => Object.keys(partyAgents).filter((type) => partyAgents[type] === name)
+
+// A party mon shows in the variant saved with its record, or shiny when it was caught shiny
+function crewVariant(name, dex) {
+  const saved = stats[name]?.variant
+  if (VARIANTS.includes(saved)) return saved
+  return stats[name]?.caught && dex?.[dexKey(name)]?.shiny ? 'shiny' : 'default'
+}
+
+// Give a new subagent the mon assigned to its agent type, or when that one is busy or
+// can't work, the next party mon nobody has, from the box as last saved
+async function joinCrewFor($, id, type) {
+  const saved = await $.store.get('stats')
+  if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
+  await loadPartyPicks($)
+  const dex = await $.store.get('dex')
+  const assigned = assignedTo(type)
+  const mons = assigned && canWork(assigned) ? [assigned, ...partyMons()] : partyMons()
+  crew = joinCrew(crew, id, mons, (name) => crewVariant(name, dex))
 }
 
 // Show the mon this one evolved into in another session, once nothing here is mid-move
@@ -2321,6 +2538,92 @@ function boxText(dex = {}) {
   return count + ' in your box:\n' + lines.join('\n') + alone
 }
 
+// The box's mons beside the one on show that come out of subagents' balls, one a line,
+// like "Sparky (Pikachu), Lv. 12, working for Count files", with the agent named by its
+// description in the agent list
+async function partyText($) {
+  const saved = await $.store.get('stats')
+  if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
+  await loadPartyPicks($)
+  const assigned = [...new Set(Object.values(partyAgents))].filter(canWork)
+  const mons = [...assigned, ...partyMons()]
+  if (mons.length === 0 && partyPicks) return 'Your party is empty. Add a mon from your box with /pokemon party add <mon>.'
+  if (mons.length === 0) return 'Your party is empty. Raise or catch another mon, and it comes out of a subagent\'s Poké Ball to work beside ' + nameOf(mon) + '.'
+  const agents = await $.agent.list().catch(() => [])
+  const described = new Map((Array.isArray(agents) ? agents : []).map((agent) => [agent.id, agent.description || agent.id]))
+  const lines = mons.map((name) => {
+    const member = crew.find((m) => m.mon === name && m.endAt === null)
+    const types = typesOf(name)
+    const shown = fullNameOf(name) + ', Lv. ' + levelOf(name) + (types.length > 0 ? ', for ' + types.join(' and ') : '')
+    if (!member) return shown + ', free'
+    const waiting = isOut(member, tick) ? '' : ', waiting in its ball for room'
+    return shown + ', working for ' + (described.get(member.id) ?? member.id) + waiting
+  })
+  const count = mons.length + (mons.length === 1 ? ' mon' : ' mons')
+  return count + ' in your party, beside ' + nameOf(mon) + ':\n' + lines.join('\n')
+}
+
+// Add a box mon to the party or take one out. The first change starts from the party as
+// it stands, and a mon taken out while it works finishes its subagent first.
+async function partyCommand($, verb, wanted) {
+  const saved = await $.store.get('stats')
+  if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
+  await loadPartyPicks($)
+  const example = verb === 'add' ? 'dratini' : (partyMons()[0] ?? 'pikachu')
+  if (!wanted) return { text: 'Name the mon, like /pokemon party ' + verb + ' ' + example + '. /pokemon box lists yours.' }
+  if (!MONS.includes(wanted)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
+  const picks = partyPicks ?? partyMons()
+  const name = nameOf(wanted)
+  if (verb === 'remove') {
+    if (!picks.includes(wanted)) return { text: name + ' isn\'t in your party.' }
+    partyPicks = picks.filter((pick) => pick !== wanted)
+    await $.store.set('partyPicks', partyPicks)
+    const working = crew.some((m) => m.mon === wanted && m.endAt === null)
+    return { text: name + ' leaves your party.' + (working ? ' It finishes its subagent\'s work first.' : '') }
+  }
+  if (wanted === mon) return { text: name + ' is the mon on show. Pick another with /pokemon <mon> first.' }
+  if (!stats[wanted] || isDead(wanted)) return { text: displayName(wanted) + ' isn\'t in your box. Catch one, or pick it with /pokemon ' + wanted + '.' }
+  if (isGone(wanted)) return { text: name + ' ran away. Catch it in the wild to bring it back.' }
+  if (picks.includes(wanted)) return { text: name + ' is already in your party.' }
+  if (picks.length >= CREW_SIZE) return { text: 'Your party is full at ' + CREW_SIZE + '. Take one out with /pokemon party remove <mon> first.' }
+  partyPicks = [...picks, wanted]
+  await $.store.set('partyPicks', partyPicks)
+  const resting = isFainted(wanted) ? ' It rests until it\'s revived.' : ''
+  return { text: name + ' joins your party.' + resting }
+}
+
+// Assign a box mon to an agent type, so every subagent of that type comes out as it, or
+// take an assignment back. A mon works for one agent type at a time.
+async function assignCommand($, verb, words) {
+  const saved = await $.store.get('stats')
+  if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
+  await loadPartyPicks($)
+  if (verb === 'unassign') {
+    const type = words.join(' ')
+    if (!type) return { text: 'Name the agent type, like /pokemon party unassign explore.' }
+    if (!partyAgents[type]) return { text: 'No mon is assigned to ' + type + '.' }
+    const name = nameOf(partyAgents[type])
+    delete partyAgents[type]
+    await $.store.set('partyAgents', partyAgents)
+    return { text: name + ' no longer comes out for ' + type + '.' }
+  }
+  if (words.length < 2) return { text: 'Name the agent type and the mon, like /pokemon party assign explore abra.' }
+  const wanted = words.at(-1)
+  const type = words.slice(0, -1).join(' ')
+  if (!MONS.includes(wanted)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
+  const name = nameOf(wanted)
+  if (wanted === mon) return { text: name + ' is the mon on show. Pick another with /pokemon <mon> first.' }
+  if (!stats[wanted] || isDead(wanted)) return { text: displayName(wanted) + ' isn\'t in your box. Catch one, or pick it with /pokemon ' + wanted + '.' }
+  if (isGone(wanted)) return { text: name + ' ran away. Catch it in the wild to bring it back.' }
+  const before = typesOf(wanted).filter((other) => other !== type)
+  for (const other of before) delete partyAgents[other]
+  partyAgents[type] = wanted
+  await $.store.set('partyAgents', partyAgents)
+  const moved = before.length > 0 ? ' It no longer comes out for ' + before.join(' or ') + '.' : ''
+  const resting = isFainted(wanted) ? ' It rests until it\'s revived.' : ''
+  return { text: name + ' comes out for every ' + type + ' subagent.' + moved + resting }
+}
+
 const dexLabel = (key) => '#' + String(dexNumber(key)).padStart(3, '0') + ' ' + displayName(key)
 
 // † marks a species lost for good until a new one is caught, and a mon that ran away says so
@@ -2447,6 +2750,7 @@ const HELP = [
   ['Records', [
     ['stats', 'Its level, XP, evolution, and meters'],
     ['box', "Every mon you've raised"],
+    ['party', 'The mons that come out for subagents. party add or remove <mon> picks them, party assign <agent> <mon> ties one to an agent type'],
     ['dex [mon]', "The wild mons you've seen and caught"],
     ['release <mon>', 'Release a mon, so it starts over'],
   ]],
@@ -3007,12 +3311,19 @@ function drawScene($, e, site) {
   lastBodyColumns = site.bodyColumns
   columns = stripTarget(site.bodyColumns)
   drawnColumns = columns
+  // The party mons' columns open up on the strip's left, so the lead keeps its spot on screen
+  const hadCrew = crewWidth
+  crewWidth = Math.max(0, columns - baseStrip(sceneRoom(site.bodyColumns)))
   margin = fullSize ? Math.max(0, Math.min(BUBBLE_SPAN, site.bodyColumns - panel - columns)) : 0
   if (small) {
     const room = Math.floor((site.bodyColumns - (panel > 0 ? 0 : panelColumns)) / small.scale) - columns - panel - 1
     margin = Math.max(0, Math.min(BUBBLE_SPAN, room))
   }
+  const shift = crewWidth - hadCrew
   if (wasHome) x = homeX()
+  else x += shift
+  if (shift !== 0 && wanderTarget !== null) wanderTarget = Math.max(leadFloor(), Math.min(homeX(), wanderTarget + shift))
+  if (food) food.x += shift
   clampX()
 
   const zoom = bandZoom()
@@ -3089,6 +3400,7 @@ export function register(on) {
     seenPick = savedMon ?? null
     syncOn = (await $.store.get('sync')) === true
     nuzlockeOn = (await $.store.get('nuzlocke')) === true
+    await loadPartyPicks($)
     forgetOldKeys($).catch((err) => logOnce($, err))
     const savedVariant = await $.store.get('variant')
     if (VARIANTS.includes(savedVariant)) variant = savedVariant
@@ -3132,6 +3444,7 @@ export function register(on) {
         step()
         stepEvolution($)
         stepWildPhase($)
+        stepCrewMons()
         stepWake($)
         stepOwed($)
         // The band grows and shrinks back around a Transform
@@ -3325,6 +3638,14 @@ export function register(on) {
       if (healed.length > 0) await saveRecords($, healed)
       const dex = await $.store.get('dex')
       return { text: boxText(dex && typeof dex === 'object' ? dex : {}) }
+    } else if (asked === 'party') {
+      return { text: await partyText($) }
+    } else if (asked.startsWith('party assign') || asked.startsWith('party unassign')) {
+      const [, verb, ...rest] = asked.split(/\s+/)
+      return assignCommand($, verb, rest)
+    } else if (asked.startsWith('party add') || asked.startsWith('party remove')) {
+      const [, verb, ...rest] = asked.split(/\s+/)
+      return partyCommand($, verb, rest.join(' '))
     } else if (asked === 'dex' || asked.startsWith('dex ')) {
       const saved = await $.store.get('stats')
       if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
@@ -3389,11 +3710,11 @@ export function register(on) {
 
   // The main agent's turn ending answers any "!" and starts the idle minute. The mon
   // hops unless the turn was interrupted, and earns XP when it answered. A subagent's
-  // turn ending pops its Poké Ball.
+  // turn ending sends its party mon back and pops its Poké Ball.
   on('turn.complete', async ($, e, next) => {
     thinking = false
     markActive()
-    if (e.agentId) party = leaveParty(party, e.agentId, tick)
+    if (e.agentId) endAgent(e.agentId)
     if (!e.agentId) {
       turnRunning = false
       clearAlert()
@@ -3476,6 +3797,9 @@ export function register(on) {
     toolCalls += 1
     const skillId = name === 'Skill' ? (e.tool_use_id ?? toolCalls) : null
     if (skillId !== null) runningSkills.add(skillId)
+    // A subagent's call shows in its party mon's bubble
+    const crewCall = e.agentId && crew.some((m) => m.id === e.agentId) ? (e.tool_use_id ?? toolCalls) : null
+    if (crewCall !== null) crew = crewToolStarts(crew, e.agentId, crewCall, name)
     if (!e.agentId) {
       await maybeSpawn($).catch((err) => logOnce($, err))
       id = e.tool_use_id ?? toolCalls
@@ -3490,6 +3814,10 @@ export function register(on) {
     } finally {
       wild = chargedWild(wild)
       if (skillId !== null) runningSkills.delete(skillId)
+      if (crewCall !== null) {
+        crew = crewToolEnds(crew, e.agentId, crewCall, failed && !next.signal?.aborted && verdicts.get(crewCall) !== 'deny', tick)
+        verdicts.delete(crewCall)
+      }
       if (id !== null) {
         runningTools.delete(id)
         if (failed && !next.signal?.aborted && verdicts.get(id) !== 'deny') flinch()
@@ -3520,7 +3848,8 @@ export function register(on) {
   // denies isn't taken for a tool failing
   on('tool.check', async ($, e, next) => {
     const result = await next(e)
-    if (e.tool_use_id !== undefined && runningTools.has(e.tool_use_id)) verdicts.set(e.tool_use_id, result?.decision)
+    const crewCall = crew.some((m) => m.tools.some((t) => t.call === e.tool_use_id))
+    if (e.tool_use_id !== undefined && (runningTools.has(e.tool_use_id) || crewCall)) verdicts.set(e.tool_use_id, result?.decision)
     return result
   })
 
@@ -3544,10 +3873,30 @@ export function register(on) {
   })
 
   // Each subagent the Agent tool starts is a Poké Ball in the party along the left of
-  // the strip, until its turn ends or the agent list stops reporting it at work
+  // the strip, until its turn ends or the agent list stops reporting it at work, and the
+  // next mon from the box waits in it to step out
   on('agent.spawn', async ($, e, next) => {
     const result = await next(e)
-    if (result?.agentId) party = joinParty(party, result.agentId, tick)
+    if (result?.agentId) {
+      party = joinParty(party, result.agentId, tick)
+      await joinCrewFor($, result.agentId, e.subagentType).catch((err) => logOnce($, err))
+    }
     return result
+  })
+
+  // A subagent's model thinking shows as dots in its party mon's bubble, until it writes,
+  // calls a tool, or stops
+  on('turn.step', async function* ($, e, next) {
+    const stream = next(e)
+    try {
+      while (true) {
+        const { value, done } = await stream.next()
+        if (done) return value
+        if (e.agentId && THOUGHT_KINDS.has(value?.kind)) crew = crewThinking(crew, e.agentId, value.kind === 'thinking')
+        yield value
+      }
+    } finally {
+      if (e.agentId) crew = crewThinking(crew, e.agentId, false)
+    }
   })
 }

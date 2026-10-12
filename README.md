@@ -34,7 +34,7 @@ Then pick your partner with `/pokemon <mon>`.
 ## Why you'll keep it on
 
 - 🔎 **It watches Claude work.** A pencil for edits, a magnifier for reads, `>_` for shell commands, a TM disc for skills.
-- ⚪ **Every subagent is a Poké Ball.** It drops when the subagent starts and pops when it reports back.
+- ⚪ **Every subagent is a Poké Ball.** It drops when the subagent starts, a mon from your box steps out to work beside yours, and it goes back in when the subagent reports back.
 - ❗ **It tells you when Claude needs you.** A red "!" for questions, plan approvals, and permission prompts.
 - 💦 **It flinches when a tool fails.** A shake and a sweat drop, so you notice.
 - 📈 **It levels up as you ship.** Every answered turn earns XP, and mons evolve at their levels from the games.
@@ -73,6 +73,9 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon evolve` | Evolve with a stone or a trade |
 | `/pokemon stats` | Level, XP, evolution, and meters |
 | `/pokemon box` | Every mon you've raised |
+| `/pokemon party` | The mons that come out for subagents, and who each works for |
+| `/pokemon party add <mon>` | Put a mon from your box in your party, like `/pokemon party add dratini` |
+| `/pokemon party assign <agent> <mon>` | Send the same mon out for every subagent of a type, like `/pokemon party assign explore abra` |
 | `/pokemon catch` | Throw a Poké Ball at a wild mon |
 | `/pokemon dex` | Every wild mon you've seen and caught |
 | `/pokemon new <mon>` | Fetch a mon from gen 2 to 5, like `/pokemon new mudkip`, or a random one with `/pokemon new gen3` |
@@ -109,6 +112,9 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon pane` | Move the mon out of the band into a pane half the terminal wide, docked beside the transcript in the fullscreen layout so Claude's replies keep the left half. Run it again, or close the pane, to bring it back to the band (saved across sessions). On the main screen the pane sits above the prompt instead |
 | `/pokemon stats` | Show the level, XP to the next one, how it evolves, the meters, and your pets and feeds |
 | `/pokemon box` | List every mon you've raised, highest level first |
+| `/pokemon party` | List your party, the mons in your box beside the one on show, highest level first, up to 5, and the subagent each one works for. Fainted mons, ones that ran away, and ones lost in a nuzlocke stay out of it |
+| `/pokemon party add <mon>`, `/pokemon party remove <mon>` | Pick your party from your box, up to 5, saved across sessions. Mons come out in the order you added them. The first change starts from the party as it stands, and a mon you take out while it works finishes its subagent first |
+| `/pokemon party assign <agent> <mon>`, `/pokemon party unassign <agent>` | Tie a mon from your box to an agent type, like `explore`, `plan`, or one of your own agents' names, so you can tell which agent is working or done by who steps out (saved across sessions). The mon comes out for that type alone, outside the party of 5, and a mon works for one type at a time, so assigning it again moves it. When it's busy with another subagent of its type, or fainted, that subagent gets the next mon from the party |
 | `/pokemon new <mon>` | Fetch a mon from any generation in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) (gen 1 to 5) and show it. It's saved in the mod's store, so it stays through plugin updates and shows up in every session. Moves come from its types, using gen 1 animations |
 | `/pokemon new random`, `/pokemon new gen<N>` | Fetch a random mon you don't have yet, from gen 2 to 5 or from gen N |
 | `/pokemon nickname <name>` | Nickname the mon, up to 12 characters. It keeps the name when it evolves, and its species name takes the nickname away |
@@ -140,7 +146,7 @@ Then pick your partner with `/pokemon <mon>`.
 | A skill is used | Shows a TM disc in its bubble while a Skill call runs in any agent, and for 3 s when you type a skill as `/name`. Skills from your own files, plugins, and MCP servers count; Claude Code's built-in commands don't | `tool.call` (any agent), `command.run`, `skill.prompt` |
 | A tool call fails | Shakes, then holds still with a blue sweat drop. Calls you deny or interrupt don't count. It skips the flinch while a move or a "!" is showing | `tool.call` (main agent only), `tool.check` |
 | Claude needs you | Stops, faces you, and shows a red "!" until you answer. If you don't reply within a minute of a turn ending, it shows the "!" for 2 minutes | AskUserQuestion, ExitPlanMode, `turn.complete`, `classic.PermissionRequest`, `classic.Notification` |
-| A subagent runs | Drops a Poké Ball that wobbles while the subagent works and pops when it ends, or when the agent list stops reporting it at work, as for a teammate in its own pane. Past six, the last slot shows `+n` | `agent.spawn`, `turn.complete`, `$.agent.list()` |
+| A subagent runs | Drops a Poké Ball that wobbles while the subagent works and pops when it ends, or when the agent list stops reporting it at work, as for a teammate in its own pane. Past six, the last slot shows `+n`. With other mons in your box, the ball opens and one steps out to work beside yours, showing that subagent's thinking and tools in its own bubble, flinching when its calls fail, and hopping when it finishes before it goes back in | `agent.spawn`, `turn.step`, `tool.call` (that agent), `turn.complete`, `$.agent.list()` |
 | A turn ends | Hops twice, unless you interrupted it | `turn.complete` (main agent only) |
 | A turn ends with an answer | Earns XP, and may level up or evolve | `turn.complete` (main agent only) |
 | A wild mon is due | Walks home, and the strip widens as the foe walks in from the left | `tool.call` (main agent only), the shared `wildAt` store key |
@@ -179,6 +185,36 @@ sessions showing the same one share them. Asleep with `/pokemon sleep`, food dra
 half speed and happiness at a quarter. A new mon starts at 80%. The meters scale the XP a
 turn earns, from half when both are empty to one and a half when both are full.
 `/pokemon needs` turns them off, and XP then ignores them.
+
+</details>
+
+<details>
+<summary>Your party and subagents</summary>
+
+Each subagent Claude starts drops a Poké Ball on the left of the strip. If your box holds
+other mons than the one on show, the subagent gets the next one free, highest level first,
+in the variant and nickname it was saved with. `/pokemon party add <mon>` and `/pokemon
+party remove <mon>` pick the party yourself, and then mons come out in the order you added them.
+`/pokemon party assign <agent> <mon>` ties a mon to an agent type, matched by the Agent
+tool's `subagent_type` without minding case, so an `explore` subagent always comes out as
+the same mon and the others never do. Once the ball lands it opens in a flash,
+and the mon hops out of it to work beside yours while the subagent runs, one mon at a
+time when several balls land together. It strolls about on its own, rests 3 to 8 s
+between walks, and shares the room with the other party mons, stepping aside when a
+neighbor's bubble needs it. Its bubble shows its own subagent's thinking dots and tools,
+a sweat drop shows when one of that subagent's calls fails, it hops along whenever your
+mon hops, jumps when a wild mon walks in behind it, and hops when the subagent finishes.
+Then it turns red, goes back into its ball in a flash, and the ball pops. `/pokemon party`
+lists the party and the subagent each one works for.
+
+Party mons stand as tall as your mon and never shrink to fit. While one is out, the strip
+grows to the whole band, the same way it grows for a wild mon, and the party gets the
+room left of your mon's own 40 columns. As many come out as fit there side by side, each
+mon's width plus a gap, so an 80 column band fits one or two and a 160 column one up to
+five. The rest keep their balls closed and wobbling, with `+n` past six as before, and
+step out when room frees up. A wild mon gets its room first, so a party mon it crowds
+out goes back into its ball until the foe leaves. The strip shrinks back once the last
+party mon's ball pops. `/pokemon pane` follows the same rule in the pane's width.
 
 </details>
 
@@ -406,6 +442,8 @@ node scripts/preview-wild.mjs <mon> <foe>        # a battle in /tmp/<mon>-vs-<fo
 node scripts/preview-wild.mjs <mon> <foe> --move ember   # one move at the foe
 node scripts/preview-wild.mjs <mon> <foe> --throw catch  # a ball that holds, or --throw fail
 node scripts/preview-heal.mjs <mon>              # a revive with Nurse Joy in /tmp/<mon>-heal.png
+node scripts/preview-party.mjs <lead> <mon>...   # a party at work in /tmp/<lead>-party-80.png
+node scripts/preview-party.mjs <lead> <mon>... --columns 160 --wild onix   # a wider band, and a foe
 node scripts/check-data.mjs                      # moves, evolutions, and sprites agree
 npx @biomejs/biome@2.5.15 ci --error-on-warnings .   # lint, same as CI
 claude plugin validate .
@@ -423,6 +461,7 @@ claude --plugin-dir .                            # live-reloading session
 | `hooks/levels.js` | The XP curve, and the XP a turn earns |
 | `hooks/evolutions.js` | Gen 1 evolutions, and each mon's start level |
 | `hooks/party.js` | The Poké Balls of running subagents |
+| `hooks/crew.js` | The party mons out of those balls: lanes, strolling, coming out, and going back in |
 | `hooks/dex.js` | The Pokédex, and how rare each mon is in the wild |
 | `hooks/wild.js` | A wild mon's visit: walking in, battle, throws, and fleeing |
 | `hooks/zoom.js` | Shrinks the band to its size and to fit a short pane |
@@ -432,7 +471,7 @@ claude --plugin-dir .                            # live-reloading session
 | `hooks/joy.js` | Nurse Joy and her sparkles while a fainted mon heals |
 | `hooks/frames.js` | Generated pixel frames. Don't edit by hand |
 | `sprites/<mon>/*.gif` | Source GIFs, 32x32 |
-| `scripts/` | Frame builder, attack, sleep, and battle previewers on a stand-in host, data check |
+| `scripts/` | Frame builder, attack, sleep, battle, heal, and party previewers on a stand-in host, data check |
 | `tests/pokemon.test.ts` | `claude plugin test` suite |
 
 CI runs the lint, the data check, and the tests on every pull request and push to `main`.
