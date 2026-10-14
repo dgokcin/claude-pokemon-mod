@@ -1442,6 +1442,21 @@ function catchCommand() {
   return { text: 'You threw a Poké Ball!' }
 }
 
+// The desktop app stops the running turn when you send it a message, and a foe only
+// fights mid-turn, so the desktop band attacks and throws the ball from buttons instead
+function battleButtons($, { Box, Button }) {
+  if (wild?.phase !== 'battle') return []
+  const press = (reply) => {
+    markActive()
+    $.ui.toast(reply.text)
+    $.ui.invalidate('ui.render')
+  }
+  return [Box({ flexDirection: 'row', gap: 1, children: [
+    Button({ key: 'catch', label: 'Catch', variant: 'primary', onPress: () => press(catchCommand()) }),
+    Button({ key: 'attack', label: 'Attack', onPress: () => press(attackCommand('')) }),
+  ] })]
+}
+
 // The moves that can reach a foe in front of the mon
 function foeMoves() {
   const moves = movesOf(mon).filter(aimsAhead)
@@ -3366,7 +3381,7 @@ function drawScene($, e, site) {
       sentCells = cellsNow()
       sprite = elements.Raster({ key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells: sentCells })
     }
-    const meterLines = needsOn ? [level, meter('food'), meter('happiness')] : [level]
+    const meterLines = [...(needsOn ? [level, meter('food'), meter('happiness')] : [level]), ...(desktop ? battleButtons($, elements) : [])]
     if (panel > 0) {
       const meters = Box({ position: 'absolute', right: 0, bottom: 0, width: panelColumns, paddingLeft: 1, flexDirection: 'column', children: meterLines })
       corner = [Box({ position: 'relative', children: [sprite, meters] })]
