@@ -3596,6 +3596,18 @@ test('the desktop band attacks and throws a ball from buttons while a foe is in 
   expect(toasts.slice(before).some((text) => / used .+!/.test(text))).toBe(true)
 })
 
+test('the desktop battle buttons draw dim and only say why while the mon is busy', async ($, on) => {
+  const { toasts } = await inBattle($, on, {})
+  await $.command.run({ command: 'pokemon', args: 'pet' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await ui.find({ key: 'catch' })).props.dimColor).toBe(true)
+  await ui.press({ key: 'catch' })
+  expect(toasts).toContain('Abra is enjoying the pets. Try again in a moment.')
+  expect(toasts).not.toContain('You threw a Poké Ball!')
+  await ui.press({ key: 'attack' })
+  expect(toasts.filter((text) => / used .+!/.test(text))).toEqual([])
+})
+
 test('the terminal band has no battle buttons, as /pokemon catch runs there mid-turn', async ($, on) => {
   const { band } = await inBattle($, on, {})
   expect(await band.find({ key: 'catch' })).toBeUndefined()

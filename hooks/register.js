@@ -849,6 +849,8 @@ const waitsForCare = (asked) => (food !== null || isPetted()) && !SHOWS_ONLY.inc
 // What a fainted mon can't do, and what a mon that's gone can't do either
 const DOWN_WAITS = ['pet', 'feed', 'attack', 'catch', 'evolve', 'sleep']
 const GONE_WAITS = [...DOWN_WAITS, ...VARIANTS, 'nickname']
+const evolvingReply = () => ({ text: nameOf(mon) + ' is evolving! /pokemon stop cancels it.' })
+const careReply = () => ({ text: nameOf(mon) + (food ? ' is busy eating.' : ' is enjoying the pets.') + ' Try again in a moment.' })
 const waitsForEvolution = (asked) => evolving !== null && (MONS.includes(asked) || WAITS_FOR_EVOLUTION.includes(asked.split(' ')[0]))
 
 // Play the evolve effect with the evolved mon swapped in, in a band grown to fit both
@@ -1444,17 +1446,30 @@ function catchCommand() {
 
 // The desktop app stops the running turn when you send it a message, and a foe only
 // fights mid-turn, so the desktop band attacks and throws the ball from buttons instead
+// They can't be disabled, so while the mon is evolving, busy or down they draw dim and a
+// press only says why, as /pokemon catch and attack would.
 function battleButtons($, { Box, Button }) {
   if (wild?.phase !== 'battle') return []
-  const press = (reply) => {
+  const wait = battleWait()
+  const press = (act) => {
+    const reply = battleWait() ?? act()
     markActive()
     $.ui.toast(reply.text)
     $.ui.invalidate('ui.render')
   }
+  const dimColor = wait !== null
   return [Box({ flexDirection: 'row', gap: 1, children: [
-    Button({ key: 'catch', label: 'Catch', variant: 'primary', onPress: () => press(catchCommand()) }),
-    Button({ key: 'attack', label: 'Attack', onPress: () => press(attackCommand('')) }),
+    Button({ key: 'catch', label: 'Catch', variant: 'primary', dimColor, onPress: () => press(catchCommand) }),
+    Button({ key: 'attack', label: 'Attack', dimColor, onPress: () => press(() => attackCommand('')) }),
   ] })]
+}
+
+// What stops the mon fighting now, as the command's reply, or null when it's free
+function battleWait() {
+  if (evolving !== null) return evolvingReply()
+  if (food !== null || isPetted()) return careReply()
+  if (isDown()) return downReply()
+  return null
 }
 
 // The moves that can reach a foe in front of the mon
@@ -3506,8 +3521,8 @@ export function register(on) {
     if (asked !== 'pet' || !isAsleep()) markActive()
     clearAlert()
     nowMs = await $.clock.now()
-    if (waitsForEvolution(asked)) return { text: nameOf(mon) + ' is evolving! /pokemon stop cancels it.' }
-    if (waitsForCare(asked)) return { text: nameOf(mon) + (food ? ' is busy eating.' : ' is enjoying the pets.') + ' Try again in a moment.' }
+    if (waitsForEvolution(asked)) return evolvingReply()
+    if (waitsForCare(asked)) return careReply()
     const verb = asked.split(' ')[0]
     const blocked = DOWN_WAITS.includes(verb) || (isGone(mon) && GONE_WAITS.includes(verb))
     if (asked !== 'attack list' && isDown() && blocked) {
