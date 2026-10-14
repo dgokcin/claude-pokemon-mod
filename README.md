@@ -453,7 +453,24 @@ claude --plugin-dir .                            # live-reloading session
 
 | Path | Contents |
 | --- | --- |
-| `hooks/register.js` | Band renderer, animation timer, `/pokemon` command |
+| `hooks/register.js` | The hooks, the tick, `/pokemon`, and every function that calls the engine through `$` |
+| `hooks/state.js` | The session's band state, shared by the modules below |
+| `hooks/constants.js` | The tick, and the timings and sizes the band's parts share |
+| `hooks/art.js` | Pixel art for hearts, berries, bubbles, and tool icons, and the theme inks |
+| `hooks/sprites.js` | Each mon's sprite measured, and its frames asleep, fainted, or resized |
+| `hooks/layout.js` | The band's rows, columns, and scale, and where the mon, crew, and foe stand |
+| `hooks/status.js` | Whether the mon is asleep, petted, fainted, gone, and so on |
+| `hooks/motion.js` | Walking, hopping, eating, petting, flinching, and moves along the strip |
+| `hooks/bubble.js` | The thought bubble, the "!", Zs, and the sweat drop |
+| `hooks/scene.js` | One frame of the scene put together, party mons included |
+| `hooks/paint.js` | A frame as Raster cells, an Image PNG, or an Svg, and the pixel hearts |
+| `hooks/band.js` | The scene laid out in the band or pane with its meters |
+| `hooks/meters.js` | Food and happiness: drain, fill, park, and icons |
+| `hooks/records.js` | A mon's name, level, and condition as read from its record |
+| `hooks/encounter.js` | The wild mon on show as the home mon faces it |
+| `hooks/team.js` | Which boxed mons work for subagents, and the crew's walk each tick |
+| `hooks/texts.js` | The stats, box, Pokédex, and help replies |
+| `hooks/commands.js` | The `/pokemon` options that need nothing from the engine |
 | `hooks/attacks.js` | Attack registry: each move's pose, aim, and frame |
 | `hooks/effects/*.js` | Attack animations, one file per family |
 | `hooks/moves.js` | Each move's effect, and each mon's moveset |

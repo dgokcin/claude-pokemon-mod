@@ -1,25 +1,40 @@
-import { aimsAhead, attackFrame, attackPose, prepareAttack } from './attacks.js'
+import { INKS } from './art.js'
+import { drawScene, inkFor } from './band.js'
+import { clearAlert, isAlerted, raiseAlert } from './bubble.js'
 import {
-  ballOpen, cheerCrew, CREW_SIZE, crewFit, crewFlash, crewHidden, crewHopping, crewLanes, crewPhase, crewRed, crewThinking, crewTool,
-  crewToolEnds, crewToolStarts, crewWalking, endedCrew, isOut, isShown, joinCrew, spanOf, stepCrew,
-} from './crew.js'
+  attackCommand, moveKey, movesText, nicknameCommand, releaseCommand, waitsForCare, waitsForEvolution,
+} from './commands.js'
+import { IMAGE_WAIT_TICKS, TICK_MS } from './constants.js'
+import { CREW_SIZE, crewThinking, crewToolEnds, crewToolStarts, isOut, joinCrew } from './crew.js'
 import { CUSTOM_PREFIX, fetchMon, monsOfGen } from './custom.js'
-import { DEX, TIERS, dexKey, dexNumber, isCaught, mergedDexEntry, pickWild, tierOf } from './dex.js'
-import { evolutionsOf, levelEvolutionOf, startLevel } from './evolutions.js'
-import { closedEyes, eyesOf, keptEyesOf, pupilsOf } from './eyes.js'
-import { DIZZY_ROOM, dizzyStamps, faintedPalette, faintedRows } from './faint.js'
-import { atCenter, CENTER_ROWS, centerSpan, centerStamps, RECALL_RED, recallFlash, recallTint, sparkleStamps } from './joy.js'
+import { dexKey, mergedDexEntry, pickWild, tierOf } from './dex.js'
+import { catchCommand, foeMoves, runawayFoe, wildName } from './encounter.js'
+import { evolutionsOf, startLevel } from './evolutions.js'
 import { SPRITES } from './frames.js'
-import { MAX_LEVEL, careOf, levelAt, turnXp, xpAt } from './levels.js'
-import { MOVES, movesOf } from './moves.js'
+import { bandRows, bandZoom, battleFits, clampX, homeX, isHome, stripTarget, wildAt } from './layout.js'
+import { careOf, turnXp, xpAt } from './levels.js'
+import { bumpStat, filledIcons, iconsFor, isFull, isHappiest, park, STAT_ICONS, statNow, STATS, unpark } from './meters.js'
+import { feed, flinch, pet, startAttack, step } from './motion.js'
 import { displayName } from './names.js'
-import { encodePng } from './png.js'
-import { BALL, BALL_COLORS, FLASH, LEANS, LIGHT_COLORS, OPEN, PARTY_SIZE, ballReady, joinParty, leaveParty, partyStamps, prunedParty } from './party.js'
 import {
-  ATTACK_GAP_MS, ATTACK_JITTER_MS, THROW_TICKS, WILD_STAY_MS, WILD_TURNS, WORN_OUT_MS, battleColumns, chargedWild, damageOf,
-  foeBlinks, foeJolt, foeSpotX, foeX, fleeingWild, HP_BAR, hpBar, isHere, isOnStage, newWild, stepWild, thrownWild, throwStage,
+  applyImageMode, cellsNow, drawsHearts, drawsImage, drawsImages, heartsImage, IMAGE_MODES, imageNow, svgNow,
+} from './paint.js'
+import { joinParty } from './party.js'
+import {
+  conditionOf, downReply, fullNameOf, goneLine, HEAL_MS, healingReply, levelOf, nameOf, readyToEvolve, revivedMeters,
+  settleHeal, xpOf,
+} from './records.js'
+import { addCustom, MONS, VARIANTS } from './sprites.js'
+import { S } from './state.js'
+import {
+  hasRunAway, isAsleep, isDead, isDown, isFainted, isFlinching, isFree, isGone, isHealing, isPetted, isTuckedIn, markActive,
+} from './status.js'
+import { assignedTo, canWork, crewVariant, endAgent, partyMons, stepCrewMons, typesOf } from './team.js'
+import { andList, boxText, dexText, evolutionText, HELP, helpText, orList, statsText } from './texts.js'
+import {
+  chargedWild, damageOf, fleeingWild, isHere, isOnStage, newWild, stepWild, WILD_STAY_MS, WILD_TURNS, WORN_OUT_MS,
 } from './wild.js'
-import { SIZES, zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
+import { SIZES } from './zoom.js'
 
 // One pixel Pokémon lives in a strip at the right of the band above the prompt.
 // While Claude works it paces, with a thought bubble while Claude thinks. It
@@ -43,476 +58,17 @@ import { SIZES, zoomFor, zoomedAt, zoomedPixel } from './zoom.js'
 // With /pokemon nuzlocke on, a mon that faints is gone for good.
 // The mon, hearts, berries, bubbles, balls, and Zs are pixels in one Raster, two per cell.
 // The desktop app has no Raster, so there the same pixels are one Svg.
+//
+// Every function handed $ lives in this file, since the engine follows $ only into
+// functions declared in the hooks module itself. The rest of the band is in the modules
+// imported above, sharing its state through S in state.js.
 
-const TICK_MS = 50
-// CSS pixels per sprite pixel on the desktop
-const PIXEL_PX = 4
-// Image pixels per sprite pixel. The terminal scales the Image to its box, so sending
-// each pixel as a block keeps its edges sharp.
-const IMAGE_UP = 4
-// How long a terminal that drew an Image's alt gets half blocks before the Image is asked
-// for again, from the first wait to the longest
-const IMAGE_WAIT_TICKS = [(2 * 1000) / TICK_MS, (5 * 60 * 1000) / TICK_MS]
-const MOVE_TICKS = 3
-const HOP_TICKS = 12
-const SLEEP_AFTER_MS = 5 * 60 * 1000
-const REST_TICKS = [60, 160]
-const STRIP_COLUMNS = 40
-const HEAD_ROWS = 1
-const HEAD_PIXELS = 8
-const DEFAULT_COLOR = 0x01000000
-const HEART_COLORS = [0xff4f8b, 0xff9ec4]
-const HEART_COUNT = 7
-const HEART_GAP_TICKS = 7
-const HEART_RISE_TICKS = 3
-// Pixel hearts, big and small in turn: p body, h highlight
-const HEARTS = [['pp.pp', 'phppp', '.ppp.', '..p..'], ['p.p', 'ppp', '.p.']]
-const HEART_SHINE = 0xffe0ec
-const PET_TICKS = 60
-const FALL_TICKS = 2
-const EAT_TICKS = 30
-const YUM_TICKS = 30
-const FLINCH_TICKS = 24
 // How long the TM disc stays up after a skill is typed as /name
 const DISC_TICKS = 60
-const SHAKE_TICKS = 12
-const DRIP_TICKS = 8
-// A 4x4 pixel berry: k leaf, b rim, B body, h highlight. Each kind recolors it.
-const BERRY = ['.kk.', 'bBBb', 'bBhb', '.bb.']
-const BERRY_SIZE = 4
-const LEAF_COLOR = 0x3a7a2a
-const BERRIES = [
-  { name: 'oran berry', emoji: '🫐', colors: { k: LEAF_COLOR, b: 0x2c3f9e, B: 0x4a63d8, h: 0x9fb4ff } },
-  { name: 'pecha berry', emoji: '🍑', colors: { k: LEAF_COLOR, b: 0xc2477a, B: 0xf48fb1, h: 0xffd1e3 } },
-  { name: 'razz berry', emoji: '🍓', colors: { k: LEAF_COLOR, b: 0x8e1240, B: 0xd81b60, h: 0xff7aa8 } },
-  { name: 'sitrus berry', emoji: '🍋', colors: { k: LEAF_COLOR, b: 0xc9a400, B: 0xfdd835, h: 0xfff59d } },
-]
-// Colors the band draws straight on the terminal background, one set per theme
-const INKS = {
-  dark: {
-    bubble: 0xf0f0f0, dots: 0x9a9ab0, z: 0xe8e8ff, star: 0xffd54f, silhouette: 0xf8f8ff,
-    pencil: 0xffc83d, lens: 0x6cc4ff, shell: 0x5fe08a, ball: 0xeeeef6, disc: 0xd4d4e0, wrench: 0xb8b8c8, party: 0xb4b4c8,
-    discShade: 0x8e8ea0, sweat: 0x6ec8ff, sweatShine: 0xe6f7ff, hpEmpty: 0x404048,
-  },
-  light: {
-    bubble: 0x4a4a58, dots: 0x70708a, z: 0x5a5aa8, star: 0xe0a000, silhouette: 0x2e2e3a,
-    pencil: 0xe08a00, lens: 0x2a7ad0, shell: 0x1f9a4a, ball: 0xa8a8b4, disc: 0x6e6e88, wrench: 0x6a6a80, party: 0x5c5c74,
-    discShade: 0x44445a, sweat: 0x2b8fe0, sweatShine: 0xbfe4ff, hpEmpty: 0xc8c8d0,
-  },
-}
-const UPPER_HALF = 0x2580
-const LOWER_HALF = 0x2584
-const SPACE = 0x20
-// Every mon that can be shown: the bundled ones, then any fetched with /pokemon new
-const MONS = []
-const VARIANTS = ['default', 'shiny']
-
-let mon = 'abra'
-let variant = 'default'
-let wander = true
-let working = false
-// Whether a model turn of the main agent is running, from the turn events alone. The
-// band's isWorking can read true while no turn runs, as when a slash command runs.
-let turnRunning = false
-let thinking = false
-const runningTools = new Map()
-// Skill calls in flight from any agent, main loop or subagent, by tool_use_id
-const runningSkills = new Set()
-// The tick a typed skill's TM disc shows until
-let discUntil = 0
-let toolCalls = 0
-const verdicts = new Map()
-let flinchStart = -FLINCH_TICKS
-const alertTools = new Set()
-let alertUntil = 0
-let idleAlertAt = null
-let party = []
-// The party mons of running subagents, as in crew.js, and the strip columns at the left
-// they walk in, 0 while none is out
-let crew = []
-let crewWidth = 0
-let bandId = null
 // /pokemon pane moves the scene from the band into a pane, docked beside the transcript in
 // the fullscreen layout so Claude's replies keep the rest of the screen. It's drawn there
 // once the surface places it; until then the band goes on drawing it.
 const PANE_ID = 'pokemon'
-let paneOn = false
-let paneShown = false
-// The surface the band is drawn on, terminal or desktop
-let bandSurface = 'terminal'
-let columns = STRIP_COLUMNS
-// The columns behind the level and meters at the strip's right, 0 when they sit beside
-// a band shrunk to fit instead. The scene runs on under them, so a bubble, hearts, and Zs
-// can float over the meters, but the mon stays in the strip.
-let panel = 0
-// Empty columns drawn left of the strip, so a bubble always fits on the left of the head.
-// They take only band width that's free, and none in a band shrunk to fit.
-let margin = 0
-let tick = 0
-let x = STRIP_COLUMNS
-let facing = 'left'
-let lastActive = 0
-let hopStart = -HOP_TICKS
-let wanderTarget = null
-let restUntil = 0
-let petUntil = 0
-let hearts = []
-let food = null
-// Meter gains a berry or a pet has earned, paid once its animation ends
-const owed = []
-// The pet whose hearts are still floating, while it has a gain to pay
-let pettingFills = null
-let yumUntil = 0
-let attack = null
-let drawnRows = null
-let drawnColumns = null
-// The band's width as last drawn, for whether a battle fits
-let lastBodyColumns = 0
-// The wild mon visiting this session, as in wild.js
-let wild = null
-// Marks this session's claims on the shared encounter gate
-let sessionToken = null
-let lastSpawnCheck = -Infinity
-// The mon this session claimed the gate for, spawned once the claim proves to have stuck
-let claimedPick = null
-let nowMs = 0
-let stats = {}
-let needsOn = true
-let emojiOn = false
-// The band's size from /pokemon size, a key of SIZES
-let size = 'large'
-let autoEvolve = true
-// With /pokemon sync on, every open session follows the last mon picked in any of them
-let syncOn = false
-// The saved pick this session last read or wrote, so a sync follows only a newer pick
-let seenPick = null
-// With /pokemon nuzlocke on, a mon that faints is gone for good
-let nuzlockeOn = false
-// The party picked with /pokemon party add and remove, in order, or null for the box's
-// highest level mons
-let partyPicks = null
-// The mon each agent type comes out as, set with /pokemon party assign, keyed by the
-// type in lowercase, like { explore: 'abra' }
-let partyAgents = {}
-// When each mon was first shown in this session, for the grace before its faint clock runs
-const firstShown = new Map()
-// Set while this session checks the shown mon's faint clock or finishes its heal
-let checkingNeglect = false
-let finishingHeal = false
-let evolving = null
-let evolveDue = null
-let joyHopAt = null
-let sentCells = null
-let sentImage = null
-// Set once a blit swaps the Image's source, so the terminal draws Images and a redraw
-// needn't ask again
-let imagesDrawn = false
-// Set on a terminal that can't show the small band's Image, which gets it in half blocks
-let noImages = false
-// Whether the terminal is one known to draw Images, and /pokemon images, a key of IMAGE_MODES
-let knownImages = false
-let imageMode = 'auto'
-// After a terminal draws an Image's alt, the small band is half blocks until this tick.
-// Each deny in a row doubles the wait, since a terminal without kitty graphics never
-// draws one, while one whose graphics aren't ready yet soon does.
-let imageRetryAt = null
-let imageWait = IMAGE_WAIT_TICKS[0]
-// Whether the band as last drawn holds the Image, or else Raster cells
-let drawnImage = false
-// The pixel hearts' PNG last sent or drawn, and whether the band as last drawn holds them
-let sentHearts = null
-let drawnHearts = false
-let sentSvg = null
-// Counts the distinct frames drawn on the desktop. Each one goes under a new key, since
-// the desktop keeps showing an Svg's first frame while its place in the tree holds.
-let svgFrame = 0
-let maxRows = Infinity
-let ink = INKS.dark
-
-// Palette letter to 0xRRGGBB, per mon and variant
-const COLORS = {}
-const spriteRows = (name) => Math.ceil(SPRITES[name].height / 2)
-
-// The empty pixel rows under the feet in a frame, and the fewest across an animation's frames
-const gapOf = (rows) => rows.length - 1 - rows.findLastIndex((row) => /[^.]/.test(row))
-const gapUnder = (anim) => Math.min(...anim.map(({ rows }) => gapOf(rows)))
-// How far to lower the walk frames so the feet stand where the idle frames' do,
-// per mon and variant. Some sheets leave more empty rows under a walking mon.
-const WALK_DROP = {}
-// The empty columns right of a mon, the fewest across its idle frames and its walk frames
-// facing either way, per variant, so no frame steps closer to the meters than home allows.
-// Many sheets draw the mon right up to the frame's edge.
-const RIGHT_GAP = {}
-// The rightmost head column of a mon walking right, across its walk frames, per variant
-const WALK_HEAD_RIGHT = {}
-
-// Measure a mon's sprite into the tables above, and list it unless it's a resized foe.
-// Fetched mons join here too.
-function addSprite(name, sprite, listed = true) {
-  SPRITES[name] = sprite
-  if (listed && !MONS.includes(name)) MONS.push(name)
-  const perVariant = (fn) => Object.fromEntries(VARIANTS.map((v) => [v, fn(sprite.variants[v])]))
-  COLORS[name] = perVariant(({ palette }) =>
-    Object.fromEntries(palette.map((hex, i) => [String.fromCharCode(97 + i), parseInt(hex.slice(1), 16)])),
-  )
-  WALK_DROP[name] = perVariant(({ walk, idle }) => gapUnder(walk) - gapUnder(idle))
-  RIGHT_GAP[name] = perVariant(({ idle, walk }) => {
-    const rights = [...idle, ...walk].flatMap(({ rows }) => rows.map((row) => row.search(/[^.]\.*$/)))
-    // Facing left, a walk frame is mirrored, so its empty columns on the left end up on the right
-    const lefts = walk.flatMap(({ rows }) => rows.map((row) => row.search(/[^.]/)).filter((left) => left >= 0))
-    return Math.min(sprite.width - 1 - Math.max(...rights), ...lefts)
-  })
-  WALK_HEAD_RIGHT[name] = perVariant(({ walk }) =>
-    Math.max(...walk.flatMap(({ rows }) => rows.slice(0, HEAD_PIXELS).map((row) => row.search(/[^.]\.*$/)))),
-  )
-}
-for (const name of Object.keys(SPRITES)) addSprite(name, SPRITES[name])
-
-// Along one axis of size pixels resized to count, the pixels that full-size pixels lo up
-// to hi land on: blocks voted down to one when shrinking, copies spread out when growing
-function resizedSpan(lo, hi, size, count) {
-  if (count >= size) return [Math.ceil((lo * count) / size - 0.5), Math.ceil(((hi + 1) * count) / size - 0.5) - 1]
-  const cell = (v) => {
-    let t = 0
-    while (t + 1 < count && Math.ceil(((t + 1) * size) / count) <= v) t++
-    return t
-  }
-  return [cell(lo), cell(hi)]
-}
-
-// A mon's sprite resized to height pixels, the same scale both ways. A shrinking one takes
-// the band's votes, eyes kept, and a growing one copies each pixel into a block. Each frame
-// carries its pupils, moved with it, as eyes.js has no boxes for it.
-function resizedSprite(name, height) {
-  const sprite = SPRITES[name]
-  const scale = height / sprite.height
-  const width = Math.max(1, Math.round(sprite.width * scale))
-  const at = (v, size, count) => (count >= size ? Math.floor(((v + 0.5) * count) / size) : resizedSpan(v, v, size, count)[0])
-  const variants = {}
-  for (const v of VARIANTS) {
-    const sheet = sprite.variants[v]
-    const colors = COLORS[name][v]
-    const letters = new Map(Object.entries(colors).map(([l, c]) => [c, l]))
-    const resize = (view) =>
-      sheet[view].map((frame, index) => {
-        const source = frame.rows
-        const pupils = pupilsOf(source, sheet.palette, keptEyesOf(name, v, view, index))
-        const colorAt = (x, y) => colors[source[y]?.[x]] ?? null
-        const kept = pupils.map(([x, y, box, skin, inked]) => [x, y, colorAt(x, y), box && [...box, colors[skin], [...inked].map((l) => colors[l])]])
-        const shrunk = scale < 1 && zoomedPixel(colorAt, { columns: sprite.width, pixels: sprite.height, scale, pupils: kept })
-        const pixel = shrunk
-          ? (x, y) => letters.get(shrunk(x, y)) ?? '.'
-          : (x, y) => source[Math.floor(((y + 0.5) * sprite.height) / height)]?.[Math.floor(((x + 0.5) * sprite.width) / width)] ?? '.'
-        const rows = Array.from({ length: height }, (_, y) => Array.from({ length: width }, (_, x) => pixel(x, y)).join(''))
-        const moved = pupils.map(([x, y, box, skin, inked]) => {
-          const point = [at(x, sprite.width, width), at(y, sprite.height, height)]
-          if (!box) return point
-          const [left, right] = resizedSpan(box[0], box[0] + box[2] - 1, sprite.width, width)
-          const [top, bottom] = resizedSpan(box[1], box[1] + box[3] - 1, sprite.height, height)
-          return [...point, [left, top, right - left + 1, bottom - top + 1], skin, inked]
-        })
-        return { ...frame, rows, pupils: moved }
-      })
-    variants[v] = { ...sheet, idle: resize('idle'), walk: resize('walk') }
-  }
-  return { ...sprite, width, height, variants }
-}
-
-// The foe as drawn. In a small band it stands as tall on screen as it would as the mon on
-// show, so a big foe makes the band taller rather than shrinking to the home mon. Only a
-// half block band, whose scale goes by the mon, resizes it. Each size is resized once and
-// kept under its own name, unlisted. A foe too tall for the room the home mon leaves in a
-// short band, as on desktop, shrinks to fit it rather than shrinking the home mon with it.
-function foeAs(name) {
-  const own = SPRITES[name].height
-  const shown = SIZES[size] >= 1 ? own : Math.max(1, Math.round((own * bandScale(rowsOf(name))) / bandScale()))
-  const height = Math.max(1, Math.min(shown, 2 * (foeRoom() - HEAD_ROWS)))
-  if (height === own) return name
-  const sized = name + '@' + height
-  if (!SPRITES[sized]) addSprite(sized, resizedSprite(name, height), false)
-  return sized
-}
-const foeName = () => foeAs(wild.mon)
-
-const rowsOf = (name) => HEAD_ROWS + spriteRows(name)
-// While a mon evolves or transforms, the band is tall enough for both shapes, while it
-// heals, for the Pokémon Center, and while it's fainted, for the stars over its head
-const homeRows = () => {
-  if (isHealing(mon)) return Math.max(rowsOf(mon), CENTER_ROWS)
-  if (isFainted(mon)) return Math.max(rowsOf(mon), dizzyRows(mon))
-  if (evolving) return Math.max(rowsOf(evolving.from), rowsOf(evolving.into))
-  if (attack?.move.effect === 'transform') return Math.max(rowsOf(mon), rowsOf(attack.swap))
-  return rowsOf(mon)
-}
-// A foe on stage makes the band tall enough for it too, and so does a party mon out
-const crewRows = () => Math.max(0, ...crew.filter((m) => m.outAt !== null).map((m) => rowsOf(m.mon)))
-const bandRows = () => Math.max(isOnStage(wild) ? Math.max(homeRows(), rowsOf(foeName())) : homeRows(), crewRows())
-// The band's size on screen, shrunk to fit a short pane, or null when only the badge fits
-// A terminal known to lack Images draws the small band in half blocks, where a mon at
-// half size loses too much to read. It shrinks no shorter than a full-size Diglett. The
-// scale goes by the home mon, so a foe never shrinks it.
-const HALF_BLOCK_MIN_ROWS = rowsOf('diglett')
-const bandScale = (rows = homeRows()) => {
-  const scale = SIZES[size]
-  if (scale >= 1 || !noImages || bandSurface !== 'terminal') return scale
-  return Math.min(1, Math.max(scale, HALF_BLOCK_MIN_ROWS / rows))
-}
-const bandZoom = () => zoomFor({ columns: sceneColumns(), rows: bandRows(), maxRows, size: bandScale() })
-// The scene rows a foe can take without the band shrinking past the home mon's own fit
-const foeRoom = () => {
-  const home = zoomFor({ columns: 1, rows: homeRows(), maxRows, size: bandScale() })
-  return home ? Math.floor(maxRows / home.scale + 1e-9) : Infinity
-}
-// The strip and the panel, in the strip's own columns, and the whole scene with the margin
-const stripColumns = () => columns + panel
-const sceneColumns = () => margin + columns + panel
-// The rows the level and meters take at the bottom of the panel
-const panelRows = () => (needsOn ? 3 : 1)
-
-// The fewest empty columns on screen between a mon at home and the level and meters beside
-// it. A small band shows the scene at its scale, so the gap takes more of its columns.
-const HOME_GAP = 3
-const homeGap = () => Math.ceil(HOME_GAP / bandScale() - 1e-9)
-// The columns a mon's frame adds right of its body to keep the gap, past what it leaves empty
-const gapRightOf = (name) => Math.max(0, homeGap() - RIGHT_GAP[name][variant])
-// The right edge of the strip, where the sprite idles, kept the gap clear of the meters
-// whatever empty space the sprite's frame leaves on its right
-const homeXOf = (name) => Math.max(0, columns - SPRITES[name].width - gapRightOf(name))
-const homeX = () => homeXOf(mon)
-const isHome = () => x >= homeX()
-// The lead keeps to the strip right of the party mons' columns
-const leadFloor = () => Math.min(crewWidth, homeX())
-
-const isHopping = () => tick - hopStart < HOP_TICKS
-const isPetted = () => tick < petUntil
-const isFlinching = () => tick - flinchStart < FLINCH_TICKS
-// Put to bed with /pokemon sleep, saved with the mon's meters so it stays asleep across sessions.
-const isTuckedIn = () => stats[mon]?.asleep === true
-// Five quiet minutes make it drowsy, in this session only
-const isDrowsy = () => (tick - lastActive) * TICK_MS >= SLEEP_AFTER_MS
-// Tucked in or drowsy, it walks home first and falls asleep once it gets there
-const isAsleep = () => !working && (isTuckedIn() || isDrowsy()) && isHome() && !isDown()
-
-// A mon that ran away keeps its record, marked ranAway, and a dead one keeps only its
-// dead mark, so the species stays locked until a new one is caught. A fainted one keeps
-// fainted until it's healed, with healing set while it's at the Pokémon Center.
-const isDead = (name) => Boolean(stats[name]?.dead)
-const hasRunAway = (name) => Boolean(stats[name]?.ranAway) && !isDead(name)
-const isGone = (name) => isDead(name) || hasRunAway(name)
-const isFainted = (name) => Boolean(stats[name]?.fainted) && !isGone(name)
-const isHealing = (name) => isFainted(name) && typeof stats[name].healing?.until === 'number'
-// The shown mon is fainted or gone, so it stays still and nothing it does runs
-const isDown = () => isFainted(mon) || isGone(mon)
-
-// How far right of the sprite's left edge a berry lies when it sits under the middle of
-// the body, which can be off the middle of the frame. An eating mon stands unmirrored.
-function berryUnderBody() {
-  const box = boxOf(SPRITES[mon].variants[variant].idle[0].rows, COLORS[mon][variant])
-  return Math.round((box.left + box.right + 1 - BERRY_SIZE) / 2)
-}
-
-// Where the sprite stands to eat: with the berry in front of the middle of its body,
-// kept inside the strip
-function foodTarget() {
-  return Math.max(leadFloor(), Math.min(homeX(), food.x - berryUnderBody()))
-}
-
-// Where the idle sprite is headed. Pacing while working is handled in step().
-function idleTarget() {
-  if (food) return food.eatStart === null ? foodTarget() : x
-  if (isAsleep() || isHopping() || isPetted()) return x
-  if (wild || !wander || isTuckedIn() || isDrowsy()) return homeX()
-  return wanderTarget ?? x
-}
-
-function isWalking() {
-  if (attack || isAlerted() || isFlinching() || isDown()) return false
-  return food ? idleTarget() !== x : (working && !wild) || idleTarget() !== x
-}
-
-function markActive() {
-  lastActive = tick
-}
-
-// The frame showing after elapsed milliseconds, looping over each frame's own duration
-function frameAt(anim, elapsed) {
-  const total = anim.reduce((sum, f) => sum + f.ms, 0)
-  let t = elapsed % total
-  for (const f of anim) {
-    if (t < f.ms) return f.rows
-    t -= f.ms
-  }
-  return anim[0].rows
-}
-
-// Pixel art stamps: rows of letters, each letter a color, '.' transparent
-// The thought bubble is an outline with no fill, drawn in the theme's bubble ink
-const BUBBLE = ['.OOOOOOO.', 'O.......O', 'O.......O', 'O.......O', 'O.......O', 'O.......O', 'O.......O', '.OOOOOOO.']
-const BUBBLE_WIDTH = BUBBLE[0].length
-// The columns a bubble and its tail take beside the head
-const BUBBLE_SPAN = BUBBLE_WIDTH + 3
-const BUBBLE_TAIL_ROW = 2
-// Each icon has small art too, for a shrunk band's bubble
-const BUBBLE_ICONS = {
-  food: { rows: ['.rgr.', 'rrrrr', '.rrr.', '..r..'], small: ['.g.', 'rrr', '.r.'], colors: { r: 0xd84040, g: 0x58a040 } },
-  happiness: { rows: ['pp.pp', 'ppppp', '.ppp.', '..p..'], small: ['p.p', 'ppp', '.p.'], colors: { p: 0xf0609a } },
-}
-const STAR = ['..s..', 'sssss', '.sss.', '.s.s.']
-const SMALL_STAR = ['.s.', 'sss', 's.s']
-const SMALL_Z = ['zzz', '.z.', 'zzz']
-const BIG_Z = ['zzzz', '..z.', '.z..', 'zzzz']
-const ZZZ_EVERY_MS = 1100
-const ZZZ_LIFE_MS = 2200
-// The gap between a new Z and the side of the body, and how far out it drifts from there, in pixels
-const ZZZ_GAP = 0
-const ZZZ_DRIFT = 4
-// A shrunk band draws the bubble, Zs, and berry at its own pixel size, from art made for
-// it, instead of shrinking the full-size art down to specks. Its bubble is the full-size
-// one's shape a size down, holding the icons' small art with a pixel of room around it.
-const SMALL_ZS = { glyphs: [SMALL_Z, SMALL_Z], drift: 3 }
-const SMALL_BERRY = ['.k.', 'BhB', '.b.']
-// The bubble drawn: the full-size one, with the icon's columns and rows in from its corner
-const FULL_BUBBLE = { frame: BUBBLE, inset: [2, 2], small: false }
-// A shrunk band's bubble, with the icon's small art in the middle of it
-const SMALL_BUBBLE = ['.OOOOO.', 'O.....O', 'O.....O', 'O.....O', 'O.....O', 'O.....O', '.OOOOO.']
-function shrunkBubble(icon) {
-  const room = SMALL_BUBBLE.length - 2
-  const inset = [1 + Math.floor((room - icon.small[0].length) / 2), 1 + Math.floor((room - icon.small.length) / 2)]
-  return { frame: SMALL_BUBBLE, inset, small: true }
-}
-// The columns a bubble and its tail take beside the head
-const bubbleSpan = (look) => look.frame[0].length + 3
-// A sweat drop on the head when a tool call fails: d drop, h shine
-const SWEAT = ['..d.', '.dd.', 'dhdd', 'dddd', '.dd.']
-// The "!" of a trainer who spots you, shown while Claude waits on you
-const ALERT_ICON = { rows: ['..a..', '..a..', '.....', '..a..'], small: ['a', 'a', '.', 'a'], colors: { a: 0xff3d3d } }
-// What the bubble shows while a tool runs: a pencil (p body, e eraser, t wood, g lead),
-// a magnifier (l rim, h handle), a shell prompt (s), a Poké Ball (r top, k band,
-// w button, b bottom), a TM disc (c disc, d shade, n shine) for a skill, or a wrench (m) for
-// every other tool, MCP tools included
-const TOOL_ICONS = {
-  pencil: ['...pe', '..pp.', '.pp..', 'gt...'],
-  lens: ['.ll..', 'l..l.', '.llh.', '....h'],
-  shell: ['s....', '.s...', 's....', '..sss'],
-  ball: ['.rrr.', 'rrrrr', 'kkwkk', '.bbb.'],
-  disc: ['.ncc.', 'nc.cc', 'ccccd', '.cdd.'],
-  wrench: ['..m.m', '..mmm', '.m...', 'm....'],
-}
-const SMALL_TOOL_ICONS = {
-  pencil: ['..e', '.p.', 'g..'],
-  lens: ['.l.', 'l.l', '.lh'],
-  shell: ['s..', '.s.', 's..'],
-  ball: ['rrr', 'kwk', 'bbb'],
-  disc: ['ncc', 'c.c', 'ccd'],
-  wrench: ['m.m', 'mmm', '.m.'],
-}
-const TOOL_KINDS = {
-  pencil: ['Edit', 'Write', 'NotebookEdit', 'MultiEdit'],
-  lens: ['Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch', 'LSP'],
-  shell: ['Bash', 'PowerShell', 'Monitor', 'BashOutput', 'KillShell'],
-  ball: ['Agent', 'Task', 'SendMessage', 'Workflow'],
-  disc: ['Skill'],
-}
 // The turn.step chunks that start or end a subagent's thinking
 const THOUGHT_KINDS = new Set(['thinking', 'text', 'tool', 'stop'])
 // Tools that ask you something, and notifications that wait on you
@@ -520,359 +76,42 @@ const QUESTION_TOOLS = ['AskUserQuestion', 'ExitPlanMode']
 const ALERT_NOTIFICATIONS = ['permission_prompt', 'worker_permission_prompt', 'agent_needs_input', 'elicitation_dialog']
 // A minute after a turn with no word from you, the "!" shows for two
 const IDLE_WAIT_MS = 60 * 1000
-const IDLE_ALERT_MS = 2 * 60 * 1000
 // What core tells the model when you turn a call down at its dialog or interrupt it.
 // Nothing else marks a refusal there, so the wording is the one sign.
 const REFUSED = /The user doesn't want to (proceed with this tool use|take this action)|\[Request interrupted by user/
 
-const stamp = (x, y, rows, colors) => ({ x, y, rows, colors })
-
-// A stamp's color at a strip column and pixel row, or null
-function stampPixel(s, cx, py) {
-  const row = s.rows[py - s.y]
-  if (!row) return null
-  const ch = row[cx - s.x]
-  return ch === undefined ? null : (s.colors[ch] ?? null)
-}
-
-// The thinking dots: one to three grey pixels, growing in turn
-function dotsIcon() {
-  const dots = 1 + (Math.floor((tick * TICK_MS) / 400) % 3)
-  const row = ['d', '.', 'd', '.', 'd'].map((ch, i) => (i / 2 < dots ? ch : '.')).join('')
-  return { rows: ['.....', '.....', row, '.....'], small: [row], colors: { d: ink.dots } }
-}
-
-// A skill is in use: a Skill call runs in some agent, or a skill was typed as /name
-const skillInUse = () => runningSkills.size > 0 || tick < discUntil
-
 // Hold the disc when a command that ran is a skill, by its source in the command list
 async function markSkillCommand($, command) {
   const found = (await $.command.list()).find((c) => c.name === command)
-  if (found && found.source !== 'builtin') discUntil = tick + DISC_TICKS
+  if (found && found.source !== 'builtin') S.discUntil = S.tick + DISC_TICKS
 }
 
-const toolKind = (name) => Object.keys(TOOL_KINDS).find((k) => TOOL_KINDS[k].includes(name)) ?? 'wrench'
-
-// The kind of the main loop's most recently started tool that is still running. A skill
-// in use anywhere, in the main loop or a subagent, shows as a TM disc instead.
-const leadToolKind = () => (skillInUse() ? 'disc' : toolKind([...runningTools.values()].pop()))
-
-// A tool kind's icon in the bubble
-function toolIcon(kind) {
-  const colors = {
-    p: ink.pencil, e: 0xe06888, t: 0xb88048, g: 0x767688,
-    l: ink.lens, h: 0xb07040,
-    s: ink.shell,
-    r: 0xee4444, k: 0x60606c, w: 0xc0c0cc, b: ink.ball,
-    c: ink.disc, d: ink.discShade, n: 0xf6f6fc,
-    m: ink.wrench,
-  }
-  return { rows: TOOL_ICONS[kind], small: SMALL_TOOL_ICONS[kind], colors }
-}
-
-// What the bubble beside the head shows, if anything
-function bubbleIcon() {
-  if (attack || isDown()) return null
-  if (isAlerted()) return ALERT_ICON
-  if (tick < yumUntil) return { rows: STAR, small: SMALL_STAR, colors: { s: ink.star } }
-  if (skillInUse()) return toolIcon(leadToolKind())
-  if (working && runningTools.size > 0) return toolIcon(leadToolKind())
-  if (working && thinking) return dotsIcon()
-  const need = needsOn && needNow()
-  return need ? BUBBLE_ICONS[need] : null
-}
-
-// The mon calls you over while a dialog waits on a call to one of alertTools,
-// or until a notification's alert runs out at alertUntil
-const isAlerted = () => alertTools.size > 0 || tick < alertUntil
-
-// Wake up, stand still facing you, and show the "!" until a call to the tool
-// resolves or the ticks run out, or until you answer first
-function raiseAlert({ tool, ticks }) {
-  markActive()
-  if (tool !== undefined) alertTools.add(tool)
-  if (ticks !== undefined) alertUntil = Math.max(alertUntil, tick + ticks)
-}
-
-// Typing, sending, any /pokemon command, or the end of Claude's turn answers the "!",
-// and the idle "!" waiting to show
-function clearAlert() {
-  alertTools.clear()
-  alertUntil = 0
-  idleAlertAt = null
-}
-
-// Raise the idle "!" once its minute is up, unless a turn is running by then
-function stepIdleAlert() {
-  if (idleAlertAt === null || tick < idleAlertAt) return
-  idleAlertAt = null
-  if (!working) raiseAlert({ ticks: IDLE_ALERT_MS / TICK_MS })
-}
-
-// A framed thought bubble beside the head, with a single pixel of tail between it and
-// the head. It leads on the side a walking mon heads for, and sits on the left of a
-// standing one, unless that side has no room for it. room is the columns it may take,
-// the margin and the strip, or a shrunk band's own columns, and look the bubble drawn.
-function bubbleOnLeft(head, side, room = [-margin, stripColumns()], look = FULL_BUBBLE) {
-  const span = bubbleSpan(look)
-  const fitsLeft = head[0] - span >= room[0]
-  const fitsRight = head[1] + span + 1 <= room[1]
-  return side === 'left' ? fitsLeft : fitsLeft && !fitsRight
-}
-
-function bubbleStamps(icon, head, side, room, look = FULL_BUBBLE) {
-  const { frame, inset, small } = look
-  const onLeft = bubbleOnLeft(head, side, room, look)
-  const left = onLeft ? head[0] - bubbleSpan(look) : head[1] + 4
-  const tail = onLeft ? head[0] - 2 : head[1] + 2
-  // The first stamp with a pixel wins, so the icon goes before the bubble
-  return [
-    stamp(left + inset[0], inset[1], small ? icon.small : icon.rows, icon.colors),
-    stamp(left, 0, frame, { O: ink.bubble }),
-    stamp(tail, BUBBLE_TAIL_ROW, ['O'], { O: ink.bubble }),
-  ]
-}
-
-// Zs rising from just left of the middle of a sleeping body and drifting out and up until
-// they float off the top of the band, small and big in turn, a new one every ZZZ_EVERY_MS.
-// body is the sprite's drawn pixels in strip columns and pixel rows, so every mon's Zs
-// start at the same spot on it whatever its shape. With no room on the left, they start
-// from the right edge instead. look is the Zs drawn, and a shrunk band passes its own.
-function sleepStamps(body, { glyphs, drift: reach } = { glyphs: [SMALL_Z, BIG_Z], drift: ZZZ_DRIFT }) {
-  const elapsed = tick * TICK_MS
-  const middleY = Math.floor((body.top + body.bottom) / 2)
-  const onLeft = body.left - ZZZ_GAP - glyphs[1][0].length - reach >= 0
-  const newest = Math.floor(elapsed / ZZZ_EVERY_MS)
-  const zs = []
-  for (let i = Math.max(0, newest - 2); i <= newest; i++) {
-    const p = (elapsed - i * ZZZ_EVERY_MS) / ZZZ_LIFE_MS
-    if (p >= 1) continue
-    const glyph = glyphs[i % 2]
-    const drift = Math.round(p * reach)
-    const x = onLeft ? body.left - ZZZ_GAP - glyph[0].length - drift : body.right + 1 + ZZZ_GAP + drift
-    const startY = middleY - Math.floor(glyph.length / 2)
-    zs.push(stamp(x, startY - Math.round(p * (startY + glyph.length)), glyph, { z: ink.z }))
-  }
-  return zs
-}
-
-// A tool call that failed makes the mon wince: it shakes in place, then holds still
-// with a sweat drop. Another failure starts it over, and a move or evolution ignores it.
-function flinch() {
-  if (attack || isDown()) return
-  markActive()
-  flinchStart = tick
-}
-
-// The flinch shows unless a move plays or the mon is calling you over
-const isWincing = () => isFlinching() && !attack && !isAlerted()
-const isShaking = () => isWincing() && tick - flinchStart < SHAKE_TICKS
-
-// A pixel to either side in turn while the flinch shakes, kept inside the strip
-function flinchJolt(baseX, width) {
-  if (!isShaking()) return 0
-  const side = Math.floor((tick - flinchStart) / 2) % 2 === 0 ? -1 : 1
-  return Math.max(-baseX, Math.min(columns - width - baseX, side))
-}
-
-// The sweat drop sliding down the corner of the head away from the bubble, which leads
-// on side when there's room, since ticks into the flinch
-function sweatStamps(head, y, side, { since = tick - flinchStart, room } = {}) {
-  const width = SWEAT[0].length
-  const sx = bubbleOnLeft(head, side, room) ? Math.min(columns - width, head[1] - 1) : Math.max(0, head[0] - 2)
-  const drip = Math.floor(since / DRIP_TICKS)
-  return [stamp(sx, y + drip, SWEAT, { d: ink.sweat, h: ink.sweatShine })]
-}
-
-// Stop to enjoy it, hop, and send a stream of hearts up around the sprite
-// Asleep, it stays asleep: the hearts still float up, but it doesn't hop
-function pet() {
-  if (!isAsleep()) {
-    markActive()
-    hopStart = tick
-  }
-  petUntil = tick + PET_TICKS
-  const width = SPRITES[mon].width
-  const lowest = bandRows() * 2 - 6
-  for (let k = 0; k < HEART_COUNT; k++) {
-    hearts.push({
-      x: x - 2 + Math.floor(Math.random() * (width + 2)),
-      y: lowest - Math.floor(Math.random() * 6),
-      born: tick + k * HEART_GAP_TICKS,
-      rows: HEARTS[k % HEARTS.length],
-      colors: { p: HEART_COLORS[k % HEART_COLORS.length], h: HEART_SHINE },
-    })
-  }
-}
-
-// Drop a random berry a few columns away, on whichever side has room, for the sprite to
-// walk to. It lands where the sprite can stand over it, not so near an edge that the
-// body would leave the strip.
-function feed() {
-  markActive()
-  const width = SPRITES[mon].width
-  const gap = 3 + Math.floor(Math.random() * 6)
-  const under = berryUnderBody()
-  const lowest = Math.max(leadFloor(), leadFloor() + under)
-  const highest = Math.min(columns - BERRY_SIZE, homeX() + under)
-  const right = x + width + gap
-  const fx = Math.max(lowest, Math.min(highest, right <= highest ? right : x - gap - BERRY_SIZE))
-  const berry = BERRIES[Math.floor(Math.random() * BERRIES.length)]
-  food = { x: fx, born: tick, eatStart: null, berry, fills: null }
-  wanderTarget = null
-  return berry
-}
-
-// The berry's top pixel row: falling a pixel every few ticks until it rests on the ground
-function foodTop() {
-  const ground = bandRows() * 2 - BERRY_SIZE
-  return Math.min(ground, -BERRY_SIZE + Math.floor((tick - food.born) / FALL_TICKS))
-}
-
-// Whether column fx of a berry size pixels wide is eaten yet. Bites take a column at a
-// time from either edge in turn, until the middle is gone too.
-function bitten(fx, size) {
-  if (food.eatStart === null) return false
-  const bites = Math.floor(((tick - food.eatStart) / EAT_TICKS) * size)
-  return fx < Math.ceil(bites / 2) || size - 1 - fx < Math.floor(bites / 2)
-}
-
-// The berry's color at a strip column and pixel row, or null
-function foodPixel(cx, py) {
-  if (!food) return null
-  const fx = cx - food.x
-  const fy = py - foodTop()
-  if (fx < 0 || fx >= BERRY_SIZE || fy < 0 || fy >= BERRY_SIZE || bitten(fx, BERRY_SIZE)) return null
-  return food.berry.colors[BERRY[fy][fx]] ?? null
-}
-
-// The berry as a shrunk band draws it, in its own pixels: centred where the full-size one
-// is, a scene column offset from the strip's, and falling and bitten as it is
-function smallBerryStamp(scale, offset) {
-  const size = SMALL_BERRY.length
-  const left = Math.round((offset + food.x + BERRY_SIZE / 2) * scale - size / 2)
-  const top = Math.round((foodTop() + BERRY_SIZE) * scale) - size
-  const rows = SMALL_BERRY.map((row) => [...row].map((ch, fx) => (bitten(fx, size) ? '.' : ch)).join(''))
-  return stamp(left, top, rows, food.berry.colors)
-}
-
-// Walk to the berry once it lands, eat it, then hop with a "yum!"
-function stepFood() {
-  markActive()
-  const landed = foodTop() === bandRows() * 2 - BERRY_SIZE
-  if (food.eatStart !== null) {
-    if (tick - food.eatStart < EAT_TICKS) return
-    if (food.fills) owed.push({ name: food.fills, food: FEED_FOOD, happiness: FEED_HAPPINESS })
-    food = null
-    yumUntil = tick + YUM_TICKS
-    hopStart = tick
-    return
-  }
-  if (!landed || tick % MOVE_TICKS !== 0) return
-  const target = foodTarget()
-  if (target === x) {
-    food.eatStart = tick
-    return
-  }
-  facing = target < x ? 'left' : 'right'
-  x += facing === 'left' ? -1 : 1
-  clampX()
-}
-
-// Each heart where it is now: rising a pixel every few ticks with a slight sway
-function heartStamps() {
-  const out = []
-  for (const heart of hearts) {
-    const age = tick - heart.born
-    if (age < 0) continue
-    const sway = Math.floor(age / (HEART_RISE_TICKS * 3)) % 2
-    out.push(stamp(heart.x + sway, heart.y - Math.floor(age / HEART_RISE_TICKS), heart.rows, heart.colors))
-  }
-  return out
-}
-
-// The strip edge behind a mon aiming at side, where it backs up to before the move
-const edgeBehind = (side) => (side === 'left' ? homeX() : leadFloor())
-
-const isBackingUp = () => attack !== null && attack.backing === true
-
-// Start one of the mon's moves, aimed at the roomier side. A move aimed ahead first
-// backs the mon up to the edge behind it, so it plays with the whole strip ahead, the
-// way it was tuned. A move on itself plays where the mon stands. The move takes over
-// the body, so a hop in progress stops. A move at a foe plays from home, facing left at it.
-function startAttack(move, { foe = false } = {}) {
-  markActive()
-  clampX()
-  wanderTarget = null
-  hopStart = -HOP_TICKS
-  const side = foe || x - leadFloor() >= homeX() - x ? 'left' : 'right'
-  const seed = Math.floor(Math.random() * 0x7fffffff)
-  const others = MONS.filter((name) => name !== mon)
-  const aimed = attackPose(prepareAttack(move, { side, seed, x, home: homeX() }), 0).view === 'side'
-  attack = { move, side, seed, start: tick, backing: !foe, swap: others[Math.floor(Math.random() * others.length)], atFoe: foe, landed: false }
-  if (foe) wild = { ...wild, nextAttackAt: tick + Math.round((ATTACK_GAP_MS + Math.random() * ATTACK_JITTER_MS) / TICK_MS) }
-  if (foe || !aimed || x === edgeBehind(side)) playMove()
-}
-
-// Settle the move from where the mon stands now, and start it
-function playMove() {
-  const { move, side, seed } = attack
-  Object.assign(attack, prepareAttack(move, { side, seed, x, home: homeX() }), { start: tick, backing: false })
-}
-
-// Back up a pixel a tick and start the move at the edge, hold still while it plays,
-// then land wherever it left the mon
-function stepAttack() {
-  markActive()
-  if (isBackingUp()) {
-    x += Math.sign(edgeBehind(attack.side) - x)
-    if (x === edgeBehind(attack.side)) playMove()
-    return
-  }
-  if (tick - attack.start < attack.ticks) return
-  if (attack.toX !== null) x = attack.toX
-  facing = attack.side
-  attack = null
-  clampX()
-}
-
-// A due evolution waits until the mon is idle, awake, not calling you over, done with
-// any move or berry, and rid of any wild mon
-const isFree = () => !working && !attack && !food && !wild && !isAsleep() && !isAlerted() && !isDown()
-
-// Petting, feeding, sleeping, attacking, releasing, and switching mons wait while it evolves
-const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack', 'release', 'catch', 'new']
-// While it eats a berry or enjoys a pet, only the commands that just show something run,
-// so nothing changes the record the berry or pet is about to fill
-const SHOWS_ONLY = ['', 'list', 'help', 'stats', 'box', 'party', 'moves', 'dex']
-const waitsForCare = (asked) => (food !== null || isPetted()) && !SHOWS_ONLY.includes(asked.split(' ')[0]) && asked !== 'attack list'
 // What a fainted mon can't do, and what a mon that's gone can't do either
 const DOWN_WAITS = ['pet', 'feed', 'attack', 'catch', 'evolve', 'sleep']
 const GONE_WAITS = [...DOWN_WAITS, ...VARIANTS, 'nickname']
-const waitsForEvolution = (asked) => evolving !== null && (MONS.includes(asked) || WAITS_FOR_EVOLUTION.includes(asked.split(' ')[0]))
 
 // Play the evolve effect with the evolved mon swapped in, in a band grown to fit both
 function startEvolution($, into) {
-  $.ui.toast('What? ' + nameOf(mon) + ' is evolving!')
-  startAttack({ effect: 'evolve', color: ink.silhouette })
-  attack.swap = into
-  evolving = { from: mon, into }
-  evolveDue = null
+  $.ui.toast('What? ' + nameOf(S.mon) + ' is evolving!')
+  startAttack({ effect: 'evolve', color: S.ink.silhouette })
+  S.attack.swap = into
+  S.evolving = { from: S.mon, into }
+  S.evolveDue = null
   $.ui.invalidate('ui.render')
 }
 
 // Start a due evolution once the mon is free, and finish one whose effect is over
 function stepEvolution($) {
-  if (evolving && !attack) finishEvolution($)
-  else if (evolveDue && isFree()) startEvolution($, evolveDue)
+  if (S.evolving && !S.attack) finishEvolution($)
+  else if (S.evolveDue && isFree()) startEvolution($, S.evolveDue)
 }
 
 // The evolved mon takes over the record as last saved, so XP earned elsewhere comes along.
 // 'evolved' tells another session showing the old mon that it evolved rather than being released.
 async function moveRecord($, from, into) {
   await freshen($, [from])
-  stats[into] = { ...stats[from], xp: xpOf(from) }
-  delete stats[from]
+  S.stats[into] = { ...S.stats[from], xp: xpOf(from) }
+  delete S.stats[from]
   await saveStats($, [from, into])
   const evolved = (await $.store.get('evolved')) ?? {}
   await $.store.set('evolved', { ...evolved, [from]: into })
@@ -880,11 +119,11 @@ async function moveRecord($, from, into) {
 
 // The mon becomes the evolved one. Its record moves along, so level, XP, and meters carry over.
 function finishEvolution($) {
-  const { from, into } = evolving
+  const { from, into } = S.evolving
   const wasHome = isHome()
-  evolving = null
-  mon = into
-  if (wasHome) x = homeX()
+  S.evolving = null
+  S.mon = into
+  if (wasHome) S.x = homeX()
   clampX()
   const name = nameOf(from)
   saveMon($).catch((err) => logOnce($, err))
@@ -895,39 +134,29 @@ function finishEvolution($) {
 
 // Call off an evolution under way or due. The mon stays as it is.
 function stopEvolution($) {
-  const name = nameOf(mon)
-  if (!evolving && !evolveDue) return { text: name + ' isn\'t evolving.' }
-  if (evolving) attack = null
-  evolving = null
-  evolveDue = null
+  const name = nameOf(S.mon)
+  if (!S.evolving && !S.evolveDue) return { text: name + ' isn\'t evolving.' }
+  if (S.evolving) S.attack = null
+  S.evolving = null
+  S.evolveDue = null
   $.ui.invalidate('ui.render')
   return { text: 'Huh? ' + name + ' stopped evolving!' }
-}
-
-// Joins items as "A", "A or B", or "A, B, or C"
-const orList = (items) => (items.length < 3 ? items.join(' or ') : items.slice(0, -1).join(', ') + ', or ' + items.at(-1))
-
-// How one entry evolves the mon, like "Jolteon with a Thunder Stone"
-function evolutionText(entry) {
-  const into = displayName(entry.into)
-  if (entry.item) return into + ' with a ' + entry.item
-  return entry.trade ? into + ' by trade' : into + ' at Lv. ' + entry.level
 }
 
 // A stone, a trade, or a level the mon has reached starts its evolution now. Several
 // ways and none named get a list.
 function evolveCommand($, wanted) {
-  const name = nameOf(mon)
-  const entries = evolutionsOf(mon)
+  const name = nameOf(S.mon)
+  const entries = evolutionsOf(S.mon)
   if (entries.length === 0) return { text: name + ' doesn\'t evolve.' }
-  if (attack || food) return { text: name + ' is busy right now.' }
+  if (S.attack || S.food) return { text: name + ' is busy right now.' }
   const picked = wanted ? entries.filter((entry) => moveKey(entry.into) === moveKey(wanted)) : entries
   if (picked.length !== 1) {
     const example = entries[Math.floor(Math.random() * entries.length)].into
     return { text: name + ' can become ' + orList(entries.map(evolutionText)) + '. Try /pokemon evolve ' + example + '.' }
   }
   const [entry] = picked
-  const level = levelOf(mon)
+  const level = levelOf(S.mon)
   if (entry.level && level < entry.level) {
     return { text: name + ' evolves into ' + displayName(entry.into) + ' at Lv. ' + entry.level + '. It\'s Lv. ' + level + '.' }
   }
@@ -937,440 +166,11 @@ function evolveCommand($, wanted) {
   return { text: 'You let ' + name + ' evolve.' }
 }
 
-// The first and last opaque pixel columns and rows of a frame, cached per frame
-const boxes = new WeakMap()
-function boxOf(rows, colors) {
-  let box = boxes.get(rows)
-  if (box) return box
-  box = { left: Infinity, right: -1, top: Infinity, bottom: -1 }
-  rows.forEach((row, py) => {
-    for (let px = 0; px < row.length; px++) {
-      if (colors[row[px]] === undefined) continue
-      box.left = Math.min(box.left, px)
-      box.right = Math.max(box.right, px)
-      box.top = Math.min(box.top, py)
-      box.bottom = Math.max(box.bottom, py)
-    }
-  })
-  if (box.right < 0) box = { left: 0, right: rows[0].length - 1, top: 0, bottom: rows.length - 1 }
-  boxes.set(rows, box)
-  return box
-}
-
-// The strip columns the top of the sprite covers, so a bubble can sit right beside it
-function headColumns(pixel, width, x) {
-  let left = width
-  let right = -1
-  for (let py = 0; py < HEAD_PIXELS; py++) {
-    for (let px = 0; px < width; px++) {
-      if (pixel(px, py) === null) continue
-      left = Math.min(left, px)
-      right = Math.max(right, px)
-    }
-  }
-  return right < 0 ? [x, x + width - 1] : [x + left, x + right]
-}
-
-// What the idle mon is asking for, if anything. With both low it takes turns.
-function needNow() {
-  if (working || food || attack || isPetted() || isAsleep() || tick < yumUntil) return null
-  const needs = Object.keys(STATS).filter((key) => statNow(mon, key) < NEEDY_BELOW)
-  if (needs.length === 0) return null
-  return needs[Math.floor((tick * TICK_MS) / 3000) % needs.length]
-}
-
-// Where a frame's pupils land in strip pixels, as [x, y, color, eye], for a sprite drawn
-// unscaled at left and top, mirrored or not, with eye the box around it as [x, y, width,
-// height, skin color, the box's other colors], or null for a line. Each frame's pupils
-// are cached.
-const framePupils = new WeakMap()
-function pupilsAt(name, shade, view, rows, { left, top, mirrored }) {
-  const sheet = SPRITES[name].variants[shade]
-  if (!framePupils.has(rows)) {
-    const index = Math.max(0, sheet[view].findIndex((f) => f.rows === rows))
-    framePupils.set(rows, sheet[view][index].pupils ?? pupilsOf(rows, sheet.palette, keptEyesOf(name, shade, view, index)))
-  }
-  const { width } = SPRITES[name]
-  const colors = COLORS[name][shade]
-  return framePupils.get(rows).map(([px, py, box, skin, inked]) => {
-    const eye = box && [left + (mirrored ? width - box[0] - box[2] : box[0]), top + box[1], box[2], box[3], colors[skin], [...inked].map((l) => colors[l])]
-    return [left + (mirrored ? width - 1 - px : px), top + py, colors[rows[py][px]], eye]
-  })
-}
-
-// A sleeping mon's frame with its eyes shut, cached per frame
-const sleepingFrames = new Map()
-function sleepingFrame(shown, view) {
-  const sheet = SPRITES[shown].variants[variant]
-  const rows = sheet[view][0].rows
-  if (!sleepingFrames.has(rows)) sleepingFrames.set(rows, closedEyes(rows, sheet.palette, eyesOf(shown, variant, view, 0)))
-  return sleepingFrames.get(rows)
-}
-
-// A fainted mon's first idle frame with X eyes, cached per frame. Eyes drawn as lines get
-// their X too.
-const faintedFrames = new Map()
-function faintedFrame(shown) {
-  const sheet = SPRITES[shown].variants[variant]
-  const rows = sheet.idle[0].rows
-  if (!faintedFrames.has(rows)) {
-    const open = eyesOf(shown, variant, 'idle', 0)
-    const boxes = open?.length ? open : keptEyesOf(shown, variant, 'idle', 0).boxes
-    faintedFrames.set(rows, faintedRows(rows, sheet.palette, boxes))
-  }
-  return faintedFrames.get(rows)
-}
-
-// The band rows a fainted mon takes, its feet where the idle ones rest and the stars
-// over its head
-function dizzyRows(name) {
-  const box = boxOf(faintedFrame(name), faintedColors(name))
-  return Math.ceil((DIZZY_ROOM + box.bottom - box.top + 1 + gapUnder(SPRITES[name].variants[variant].idle)) / 2)
-}
-
-// The fainted palette as letter to 0xRRGGBB, per mon and variant
-const FAINTED_COLORS = {}
-function faintedColors(shown) {
-  FAINTED_COLORS[shown] ??= {}
-  FAINTED_COLORS[shown][variant] ??= Object.fromEntries(
-    faintedPalette(SPRITES[shown].variants[variant].palette).map((hex, i) => [String.fromCharCode(97 + i), parseInt(hex.slice(1), 16)]),
-  )
-  return FAINTED_COLORS[shown][variant]
-}
-
-// Going to the Pokémon Center, the fainted mon turns red on its way into its ball, as in joy.js
-const mixed = (c, to, k) => {
-  const at = (shift) => Math.round(((c >> shift) & 255) * (1 - k) + ((to >> shift) & 255) * k)
-  return (at(16) << 16) | (at(8) << 8) | at(0)
-}
-
-// It goes into its ball in a flash, and back from the Pokémon Center its ball bursts open
-// in one where it stands
-let releasedAt = null
-const RELEASE_BEAT = 3
-function flashStamps(heal, body) {
-  const k = releasedAt === null ? -1 : Math.floor((tick - releasedAt) / RELEASE_BEAT)
-  return flashAt(heal ? recallFlash(heal, tick) : k >= 0 && k < FLASH.length ? FLASH[k] : null, body)
-}
-
-// A FLASH frame over the middle of a body, or nothing without one
-function flashAt(art, body) {
-  if (!art) return []
-  const half = Math.floor(art.length / 2)
-  const x = Math.round((body.left + body.right) / 2) - half
-  const y = Math.round((body.top + body.bottom) / 2) - half
-  return [stamp(x, Math.max(0, y), art, LIGHT_COLORS)]
-}
-
-const NO_POSE = { view: 'front', stride: false, swap: false, asleep: false }
-// Backing up for a move: side on and striding, facing the target
-const BACKING_POSE = { ...NO_POSE, view: 'side', stride: true }
-const NO_EFFECT = {
-  dots: [], under: [], chars: [], ghosts: [], hidden: false,
-  dx: 0, dy: 0, sx: 1, sy: 1, flipX: false, flipY: false, skew: null, shade: null, shake: [0, 0],
-}
-const STRIDE_TICKS = 2
-
-// The most common color of a frame, leaving out dark outlines and shading, cached per frame
-const bodies = new WeakMap()
-function bodyOf(rows, colors) {
-  if (bodies.has(rows)) return bodies.get(rows)
-  const counts = new Map()
-  for (const row of rows) {
-    for (const ch of row) if (colors[ch] !== undefined) counts.set(ch, (counts.get(ch) ?? 0) + 1)
-  }
-  let body = 0xffffff
-  let most = 0
-  for (const [ch, n] of counts) {
-    const c = colors[ch]
-    const luma = 0.3 * (c >> 16) + 0.59 * ((c >> 8) & 255) + 0.11 * (c & 255)
-    if (luma >= 72 && n > most) [body, most] = [c, n]
-  }
-  bodies.set(rows, body)
-  return body
-}
-
-// Where the sprite stands in strip pixels, for aiming an attack
-function attackGeometry(sprite, frame, colors, flip, at, top, rows, pixel) {
-  const box = boxOf(frame, colors)
-  return {
-    x: at,
-    left: at + (flip ? sprite.width - 1 - box.right : box.left),
-    right: at + (flip ? sprite.width - 1 - box.left : box.right),
-    top: top + box.top,
-    bottom: top + box.bottom,
-    columns,
-    pixels: rows * 2,
-    side: attack.side === 'left' ? -1 : 1,
-    body: bodyOf(frame, colors),
-    solid: (cx, py) => pixel(cx - at, py - top) !== null,
-    foe: attack.atFoe && isHere(wild) ? foeBox(rows) : null,
-  }
-}
-
-// The attack's pixels as one color per strip pixel, -1 where it draws nothing
-function overlayOf(dots, rows) {
-  if (dots.length === 0) return null
-  const pixels = rows * 2
-  const width = stripColumns()
-  const overlay = new Int32Array(width * pixels).fill(-1)
-  for (let k = 0; k < dots.length; k += 3) {
-    const cx = dots[k]
-    const py = dots[k + 1]
-    if (cx >= 0 && cx < width && py >= 0 && py < pixels) overlay[py * width + cx] = dots[k + 2]
-  }
-  return overlay
-}
-
-// The sprite as the effect left it: moved to left, top, each row slid by skew, then
-// scaled around the middle of its feet, turned upside down, and recolored. A color
-// per strip pixel, or null.
-function bodyPixel(effect, pixel, box, width, mirrored, left, top) {
-  const scaled = effect.sx !== 1 || effect.sy !== 1
-  const sx = Math.max(0.01, effect.sx)
-  const sy = Math.max(0.01, effect.sy)
-  const ax = mirrored ? width - (box.left + box.right + 1) / 2 : (box.left + box.right + 1) / 2
-  const ay = box.bottom + 1
-  return (cx, py) => {
-    let px = cx - left - (effect.skew ? Math.round(effect.skew(py)) : 0)
-    let qy = py - top
-    if (scaled) {
-      px = Math.floor(ax + (px + 0.5 - ax) / sx)
-      qy = Math.floor(ay + (qy + 0.5 - ay) / sy)
-    }
-    if (effect.flipY) qy = box.top + box.bottom - qy
-    const c = pixel(px, qy)
-    return c === null || !effect.shade ? c : effect.shade(cx, py, c)
-  }
-}
-
-// The effect's afterimages, a color per strip pixel or null. A flipped ghost mirrors
-// within the sprite's opaque box, so at dx 0 it covers the body.
-function ghostPixel(ghosts, pixel, box, width, flip, baseX, baseTop) {
-  const span = flip ? 2 * width - 2 - box.left - box.right : box.left + box.right
-  return (cx, py) => {
-    for (const g of ghosts) {
-      const px = cx - baseX - g.dx
-      const c = pixel(g.flip ? span - px : px, py - baseTop - g.dy)
-      const k = c === null || !g.shade ? c : g.shade(c, cx, py)
-      if (k !== null) return k
-    }
-    return null
-  }
-}
-
-const idleBox = (name, v) => boxOf(SPRITES[name].variants[v].idle[0].rows, COLORS[name][v])
-
-// The home mon's columns from its opaque left edge to the strip's right
-const homeSpan = () => SPRITES[mon].width + gapRightOf(mon) - idleBox(mon, variant).left
-
-// The strip columns a battle with this foe takes, beside the home mon at the strip's right
-const battleNeeds = (foe, foeVariant) => battleColumns(homeSpan(), idleBox(foe, foeVariant))
-
-// The strip columns a heal takes, with the Pokémon Center in place of the home mon
-const healNeeds = () => centerSpan()
-
-// The scene columns left of the panel in a band bodyColumns wide. The small band shows
-// the scene at its scale, so each band column holds more than one of the scene's.
-function sceneRoom(bodyColumns) {
-  const small = smallZoom()
-  return (small ? Math.floor(bodyColumns / small.scale) : bodyColumns) - panel
-}
-
-const battleFits = (foe, foeVariant) => battleNeeds(foeAs(foe), foeVariant) <= sceneRoom(lastBodyColumns)
-
-// The lead's strip in room scene columns, grown on the left while a foe is on stage or
-// the mon heals at the Pokémon Center
-function baseStrip(room) {
-  const strip = Math.max(SPRITES[mon].width, Math.min(STRIP_COLUMNS, room))
-  if (isOnStage(wild)) return Math.max(strip, Math.min(battleNeeds(foeName(), wild.variant), room))
-  return isHealing(mon) ? Math.max(strip, Math.min(healNeeds(), room)) : strip
-}
-
-// The strip's width in a band bodyColumns wide. While a party mon is out, or one is due
-// out and fits, it takes all the room the band has, the lead's strip and any foe's first.
-function stripTarget(bodyColumns) {
-  const room = sceneRoom(bodyColumns)
-  const base = baseStrip(room)
-  const crewing = crew.some((m) => m.outAt !== null) || crewWanted(room - base).length > 0
-  return crewing ? Math.max(base, room) : base
-}
-
-const crewBox = (m) => idleBox(m.mon, m.variant)
-
-// The party mons that may come out, in ball order: a running agent's, its ball in one
-// of the first five slots, not the mon on show, and no taller than the band can grow for
-function crewHopefuls() {
-  const slot = (m) => party.findIndex((ball) => ball.id === m.id)
-  return crew
-    .filter((m) => {
-      const i = slot(m)
-      return m.endAt === null && m.mon !== mon && SPRITES[m.mon] && i >= 0 && i < PARTY_SIZE - 1 && party[i].popStart === null && rowsOf(m.mon) <= foeRoom()
-    })
-    .sort((a, b) => slot(a) - slot(b))
-}
-
-// The party mons that keep a lane in width columns, in ball order: the ones whose agents
-// finished, until they're back in their balls, then as many hopefuls as fit beside them
-// at full size
-function crewWanted(width) {
-  const slot = (m) => party.findIndex((ball) => ball.id === m.id)
-  const leaving = crew.filter((m) => m.endAt !== null && isOut(m, tick))
-  const room = width - leaving.reduce((sum, m) => sum + spanOf(crewBox(m)), 0)
-  const hopefuls = crewHopefuls()
-  return [...leaving, ...hopefuls.slice(0, crewFit(hopefuls, crewBox, room))].sort((a, b) => slot(a) - slot(b))
-}
-
-// The foe's spot facing the home mon, and the column just out of sight past the scene's left edge
-const wildAt = () => ({
-  spot: foeSpotX(homeX() + idleBox(mon, variant).left, idleBox(foeName(), wild.variant)),
-  offLeft: -margin - SPRITES[foeName()].width,
-})
-
-// The foe's opaque box in strip pixels, as it stands in battle
-function foeBox(rows) {
-  const foe = foeName()
-  const box = idleBox(foe, wild.variant)
-  const left = foeX(wild, wildAt())
-  const top = rows * 2 - SPRITES[foe].height
-  return { left: left + box.left, right: left + box.right, top: top + box.top, bottom: top + box.bottom }
-}
-
-// A mon's head in its first idle frame, as the columns of its top HEAD_PIXELS opaque rows
-const heads = new Map()
-function headOf(name, v) {
-  const key = name + ':' + v
-  if (heads.has(key)) return heads.get(key)
-  const rows = SPRITES[name].variants[v].idle[0].rows
-  const colors = COLORS[name][v]
-  const { top } = idleBox(name, v)
-  const head = { left: Infinity, right: -1 }
-  for (const row of rows.slice(top, top + HEAD_PIXELS)) {
-    for (let px = 0; px < row.length; px++) {
-      if (colors[row[px]] === undefined) continue
-      head.left = Math.min(head.left, px)
-      head.right = Math.max(head.right, px)
-    }
-  }
-  heads.set(key, head)
-  return head
-}
-
-// The HP bar, a pixel row centred over the standing foe's head with a row of space
-// between, so a tail or an arm out to one side doesn't pull it off. It takes a pixel more
-// over a head an odd number of pixels wide, so it can sit exactly in the middle.
-function hpStamps(rows) {
-  if (wild.phase !== 'battle') return []
-  const box = foeBox(rows)
-  const head = headOf(foeName(), wild.variant)
-  const at = foeX(wild, wildAt())
-  const span = head.right - head.left + 1
-  const bar = hpBar(wild, ink.hpEmpty, HP_BAR + ((span - HP_BAR) & 1))
-  const left = at + head.left + (span - bar.width) / 2
-  return [stamp(left, Math.max(0, box.top - 2), bar.rows, bar.colors)]
-}
-
-// The foe as a color per strip pixel or null: walk frames on the way in, idle frames in
-// battle, and walk frames mirrored on the way out. A hit jolts it and makes it blink.
-// A ball that opens on it shades it red and shrinks it into the ball, and it stays
-// inside until it breaks out.
-function foePixel(rows) {
-  if (foeBlinks(wild, tick)) return () => null
-  const held = wild.phase === 'throw' ? throwStage(wild.throw, tick) : null
-  if (held && !['arc', 'open'].includes(held.stage) && !(held.stage === 'breakout' && held.t >= THROW_TICKS.open)) return () => null
-  const foe = foeName()
-  const sprite = SPRITES[foe]
-  const sheet = sprite.variants[wild.variant]
-  const walking = wild.phase === 'entering' || wild.phase === 'fleeing'
-  const frame = frameAt(walking ? sheet.walk : sheet.idle, tick * TICK_MS)
-  const colors = COLORS[foe][wild.variant]
-  const flip = wild.phase === 'fleeing'
-  const top = rows * 2 - sprite.height + (walking ? WALK_DROP[foe][wild.variant] : 0)
-  const left = foeX(wild, wildAt()) + foeJolt(wild, tick)
-  const pixel = (cx, py) => {
-    const px = cx - left
-    const row = frame[py - top]
-    if (!row || px < 0 || px >= sprite.width) return null
-    return colors[row[flip ? sprite.width - 1 - px : px]] ?? null
-  }
-  if (held?.stage !== 'open') {
-    pixel.pupils = pupilsAt(foe, wild.variant, walking ? 'walk' : 'idle', frame, { left, top, mirrored: flip })
-    return pixel
-  }
-  const scale = 1 - (held.t + 1) / (THROW_TICKS.open + 1)
-  const { x: bx, y: by } = foeMiddle(rows)
-  return (cx, py) => {
-    const c = pixel(Math.floor(bx + (cx + 0.5 - bx) / scale), Math.floor(by + (py + 0.5 - by) / scale))
-    return c === null ? null : reddened(c)
-  }
-}
-
-// A color pulled most of the way to red, as a ball's beam takes the foe in
-const reddened = (c) => (((c >> 16) * 0.3 + 0xff * 0.7) << 16) | (((c >> 8) & 255) * 0.3 + 0x30 * 0.7) << 8 | ((c & 255) * 0.3 + 0x30 * 0.7)
-
-function foeMiddle(rows) {
-  const box = foeBox(rows)
-  return { x: Math.round((box.left + box.right) / 2), y: Math.round((box.top + box.bottom) / 2) }
-}
-
-const BALL_HALF = Math.floor(BALL[0].length / 2)
-const ARC_PIXELS = 8
-const SPARKLE = { s: 0xfff2a0, w: 0xffffff }
-const SPARKLES = [[-2, -2], [8, -1], [-3, 3], [9, 4], [3, -3]]
-
-// The ball's stamps this tick of a throw: flying in an arc from
-// the home mon's head to the foe, opening on it, dropping to the ground with a bounce,
-// rocking a shake at a time, then still with sparkles or bursting open in a flash.
-// The ball in the air goes over the scene, and on the ground under it.
-function throwStamps(rows, from) {
-  if (wild?.phase !== 'throw') return { over: [], under: [] }
-  const { stage, t } = throwStage(wild.throw, tick)
-  const mid = foeMiddle(rows)
-  const rest = rows * 2 - BALL.length
-  const top = mid.y - Math.floor(BALL.length / 2)
-  const at = (y, art, colors = BALL_COLORS) => stamp(mid.x - BALL_HALF, y, art, colors)
-  if (stage === 'arc') {
-    const u = (t + 1) / THROW_TICKS.arc
-    const x = Math.round(from.x + (mid.x - from.x) * u)
-    const y = Math.round(from.y + (top - from.y) * u - ARC_PIXELS * 4 * u * (1 - u))
-    return { over: [stamp(x - BALL_HALF, Math.max(0, y), BALL, BALL_COLORS)], under: [] }
-  }
-  if (stage === 'open') {
-    const art = OPEN[Math.min(t, OPEN.length - 1)]
-    return { over: [at(top - (art.length - BALL.length), art, LIGHT_COLORS)], under: [] }
-  }
-  if (stage === 'drop') {
-    const since = t - wild.throw.drop
-    const y = since < 0 ? top + t : since >= 1 && since < 3 ? rest - 1 : rest
-    return { over: [], under: [at(Math.min(rest, y), BALL)] }
-  }
-  if (stage === 'wobble') {
-    const k = Math.floor((t % THROW_TICKS.shake) / 3)
-    return { over: [], under: [at(rest, LEANS[[0, 1, 2, 1][k]])] }
-  }
-  if (stage === 'caught') {
-    const twinkle = t < 12 ? SPARKLES.filter((_, i) => (i + Math.floor(t / 2)) % 2 === 0) : []
-    const sparks = twinkle.map(([dx, dy]) => stamp(mid.x - BALL_HALF + dx, rest + dy, ['.s.', 'sws', '.s.'], SPARKLE))
-    return { over: sparks, under: [at(rest, BALL)] }
-  }
-  if (stage === 'breakout') {
-    if (t < THROW_TICKS.open) {
-      const art = OPEN[Math.min(t, OPEN.length - 1)]
-      return { over: [at(rest - (art.length - BALL.length), art, LIGHT_COLORS)], under: [] }
-    }
-    const flash = FLASH[Math.min(FLASH.length - 1, Math.floor((t - THROW_TICKS.open) / 2))]
-    return { over: [at(rest - (flash.length - BALL.length), flash, LIGHT_COLORS)], under: [] }
-  }
-  return { over: [], under: [] }
-}
-
-const wildName = () => (wild.variant === 'shiny' ? 'shiny wild ' : 'wild ') + displayName(wild.mon)
-
 // Send the foe off, with a toast unless quiet. One still calling just doesn't come.
 function fleeWild($, quiet = false) {
-  const shown = isOnStage(wild) && wild.phase !== 'fleeing'
-  if (shown && !quiet) $.ui.toast('Wild ' + displayName(wild.mon) + ' fled!')
-  wild = fleeingWild(wild, wildAt())
+  const shown = isOnStage(S.wild) && S.wild.phase !== 'fleeing'
+  if (shown && !quiet) $.ui.toast('Wild ' + displayName(S.wild.mon) + ' fled!')
+  S.wild = fleeingWild(S.wild, wildAt())
 }
 
 // Mark a mon in the Pokédex as last saved by any session, so two sessions marking at once
@@ -1384,22 +184,22 @@ async function markDex($, key, patch) {
 
 // Move the visit on a tick. Asleep or fainted, the home mon can't fight, so the foe leaves.
 function stepWildPhase($) {
-  if (!wild) return
-  if (wild.phase !== 'fleeing' && (isTuckedIn() || isAsleep() || isDown())) return fleeWild($)
-  const result = stepWild(wild, { tick, atHome: isHome() && !attack, at: wildAt(), stayTicks: WILD_STAY_MS / TICK_MS })
+  if (!S.wild) return
+  if (S.wild.phase !== 'fleeing' && (isTuckedIn() || isAsleep() || isDown())) return fleeWild($)
+  const result = stepWild(S.wild, { tick: S.tick, atHome: isHome() && !S.attack, at: wildAt(), stayTicks: WILD_STAY_MS / TICK_MS })
   if (result.event === 'timeout') fleeWild($)
-  else wild = result.wild
+  else S.wild = result.wild
   if (result.event === 'arrived') {
-    const yours = wild.runaway ? ' It looks a lot like ' + (stats[wild.mon]?.nickname ?? 'your ' + displayName(wild.mon)) + '.' : ''
-    $.ui.toast('A ' + wildName() + ' (Lv. ' + wild.level + ') appeared!' + yours)
-    markDex($, wild.key, { seen: nowMs }).catch((err) => logOnce($, err))
-    if (wild.runaway) metRunaway($, wild.mon).catch((err) => logOnce($, err))
+    const yours = S.wild.runaway ? ' It looks a lot like ' + (S.stats[S.wild.mon]?.nickname ?? 'your ' + displayName(S.wild.mon)) + '.' : ''
+    $.ui.toast('A ' + wildName() + ' (Lv. ' + S.wild.level + ') appeared!' + yours)
+    markDex($, S.wild.key, { seen: S.nowMs }).catch((err) => logOnce($, err))
+    if (S.wild.runaway) metRunaway($, S.wild.mon).catch((err) => logOnce($, err))
   } else if (result.event === 'caught') {
-    caughtFoe($, wild).catch((err) => logOnce($, err))
+    caughtFoe($, S.wild).catch((err) => logOnce($, err))
   } else if (result.event === 'brokefree') {
-    $.ui.toast(BROKE_FREE[wild.throw.shakes])
+    $.ui.toast(BROKE_FREE[S.wild.throw.shakes])
   }
-  if (wild?.phase === 'battle') stepBattle($)
+  if (S.wild?.phase === 'battle') stepBattle($)
 }
 
 // What breaks free says, by how many times the ball rocked first
@@ -1411,66 +211,50 @@ const BROKE_FREE = ['Oh no! It broke free!', 'Aww! It appeared to be caught!', '
 async function caughtFoe($, caught) {
   const species = caught.mon
   const name = displayName(species)
-  nowMs = await $.clock.now()
-  await markDex($, caught.key, { caught: nowMs, ...(caught.variant === 'shiny' ? { shiny: true } : {}) })
+  S.nowMs = await $.clock.now()
+  await markDex($, caught.key, { caught: S.nowMs, ...(caught.variant === 'shiny' ? { shiny: true } : {}) })
   await freshen($, [species])
   if (hasRunAway(species)) {
-    const { ranAway, fainted, healing, starving, ...record } = stats[species]
-    stats[species] = { ...record, ...revivedMeters(), ...(species === mon ? {} : { parked: true }) }
+    const { ranAway, fainted, healing, starving, ...record } = S.stats[species]
+    S.stats[species] = { ...record, ...revivedMeters(), ...(species === S.mon ? {} : { parked: true }) }
     await saveRecords($, [species])
     $.ui.toast('Gotcha! ' + nameOf(species) + ' came back to you.')
     $.ui.invalidate('ui.render')
     return
   }
-  if (isDead(species)) delete stats[species]
-  if (stats[species]) {
+  if (isDead(species)) delete S.stats[species]
+  if (S.stats[species]) {
     $.ui.toast('Gotcha! ' + name + ' was caught! ' + name + ' is already in your box, so it\'s marked in your Pokédex.')
     return
   }
-  stats[species] = { xp: xpAt(startLevel(species)), caught: true, ...(species === mon ? {} : { parked: true }) }
+  S.stats[species] = { xp: xpAt(startLevel(species)), caught: true, ...(species === S.mon ? {} : { parked: true }) }
   await saveRecords($, [species])
   $.ui.toast('Gotcha! ' + name + ' was caught! It joined your box.')
-}
-
-// Throw a ball at the foe in battle. It falls from the foe's middle to the ground.
-function catchCommand() {
-  if (wild?.phase !== 'battle' && wild?.phase !== 'throw') return { text: 'There\'s no wild Pokémon here.' }
-  if (attack || wild.phase === 'throw') return { text: 'Wait for the move to end.' }
-  const rows = bandRows()
-  const drop = Math.max(0, rows * 2 - BALL.length - (foeMiddle(rows).y - Math.floor(BALL.length / 2)))
-  wild = thrownWild(wild, tick, drop)
-  return { text: 'You threw a Poké Ball!' }
-}
-
-// The moves that can reach a foe in front of the mon
-function foeMoves() {
-  const moves = movesOf(mon).filter(aimsAhead)
-  return moves.length > 0 ? moves : FALLBACK_MOVES
 }
 
 // Land a move on the foe 60% of the way through it, and spend banked work on the next
 // move once the mon is free, awake, at home, and its last move is long enough ago
 function stepBattle($) {
-  if (attack?.atFoe && !attack.landed && !attack.backing && tick >= attack.start + Math.round(attack.ticks * 0.6)) {
-    attack.landed = true
+  if (S.attack?.atFoe && !S.attack.landed && !S.attack.backing && S.tick >= S.attack.start + Math.round(S.attack.ticks * 0.6)) {
+    S.attack.landed = true
     hitFoe($)
   }
-  const ready = !attack && !food && !evolving && !isAlerted() && !isFlinching() && !isAsleep() && x === homeX()
-  if (!ready || wild.hp === 0 || wild.charge === 0 || tick < wild.nextAttackAt) return
+  const ready = !S.attack && !S.food && !S.evolving && !isAlerted() && !isFlinching() && !isAsleep() && S.x === homeX()
+  if (!ready || S.wild.hp === 0 || S.wild.charge === 0 || S.tick < S.wild.nextAttackAt) return
   const moves = foeMoves()
   const move = moves[Math.floor(Math.random() * moves.length)]
-  wild = { ...wild, charge: wild.charge - 1 }
+  S.wild = { ...S.wild, charge: S.wild.charge - 1 }
   startAttack(move, { foe: true })
-  $.ui.toast(nameOf(mon) + ' used ' + move.name + '!')
+  $.ui.toast(nameOf(S.mon) + ' used ' + move.name + '!')
 }
 
 // A hit resets the foe's wait for a fight. Worn out, it waits WORN_OUT_MS for a ball.
 function hitFoe($) {
-  if (wild.hp === 0) return
-  const hp = Math.max(0, Math.round(wild.hp - damageOf(wild, attack.power, Math.random())))
+  if (S.wild.hp === 0) return
+  const hp = Math.max(0, Math.round(S.wild.hp - damageOf(S.wild, S.attack.power, Math.random())))
   const stay = (hp === 0 ? WORN_OUT_MS : WILD_STAY_MS) / TICK_MS
-  wild = { ...wild, hp, hitAt: tick, leaveAt: tick + stay }
-  if (hp === 0) $.ui.toast('Wild ' + displayName(wild.mon) + ' is worn out! Throw a ball with /pokemon catch.')
+  S.wild = { ...S.wild, hp, hitAt: S.tick, leaveAt: S.tick + stay }
+  if (hp === 0) $.ui.toast('Wild ' + displayName(S.wild.mon) + ' is worn out! Throw a ball with /pokemon catch.')
 }
 
 const SPAWN_CHECK_TICKS = (30 * 1000) / TICK_MS
@@ -1482,37 +266,28 @@ const WILD_EVERY_MS = [20 * 60 * 1000, 40 * 60 * 1000]
 // claims it with its token and checks on its next call that no other session's claim
 // landed over its own before the mon shows up.
 async function maybeSpawn($) {
-  if (tick - lastSpawnCheck < SPAWN_CHECK_TICKS) return
-  lastSpawnCheck = tick
-  const pick = claimedPick
-  claimedPick = null
-  if (!turnRunning || wild || isTuckedIn() || isAsleep() || isDown()) return
+  if (S.tick - S.lastSpawnCheck < SPAWN_CHECK_TICKS) return
+  S.lastSpawnCheck = S.tick
+  const pick = S.claimedPick
+  S.claimedPick = null
+  if (!S.turnRunning || S.wild || isTuckedIn() || isAsleep() || isDown()) return
   const now = await $.clock.now()
   const gate = await $.store.get('wildAt')
   if (pick) {
-    if (gate?.by === sessionToken && !wild && !isDown() && battleFits(pick.mon, pick.variant)) wild = newWild(pick, Math.floor(Math.random() * 0x7fffffff))
+    if (gate?.by === S.sessionToken && !S.wild && !isDown() && battleFits(pick.mon, pick.variant)) S.wild = newWild(pick, Math.floor(Math.random() * 0x7fffffff))
     return
   }
-  if (typeof gate?.at !== 'number') return $.store.set('wildAt', { at: now + FIRST_WILD_MS, by: sessionToken })
+  if (typeof gate?.at !== 'number') return $.store.set('wildAt', { at: now + FIRST_WILD_MS, by: S.sessionToken })
   if (now < gate.at) return
   const next = (await runawayPick($, now)) ?? pickWild(Math.random)
   if (!battleFits(next.mon, next.variant)) return
   const wait = WILD_EVERY_MS[0] + Math.random() * (WILD_EVERY_MS[1] - WILD_EVERY_MS[0])
-  await $.store.set('wildAt', { at: now + Math.round(wait), by: sessionToken })
-  claimedPick = next
+  await $.store.set('wildAt', { at: now + Math.round(wait), by: S.sessionToken })
+  S.claimedPick = next
 }
 
-// A mon that ran away turns up again at its own level and variant, a tier harder and
-// harder still to hold in a ball
-const TIER_ORDER = Object.keys(TIERS)
-const RUNAWAY_CATCH = 0.5
 const RUNAWAY_BACK_MS = 30 * 60 * 1000
 const RUNAWAY_ODDS = 0.25
-function runawayFoe(name) {
-  const tier = TIER_ORDER[Math.min(TIER_ORDER.length - 1, TIER_ORDER.indexOf(tierOf(name)) + 1)]
-  const variant = VARIANTS.includes(stats[name].ranAway.variant) ? stats[name].ranAway.variant : 'default'
-  return { mon: name, variant, key: dexKey(name), tier, level: levelOf(name), runaway: true, catchScale: RUNAWAY_CATCH }
-}
 
 // The first encounter at least RUNAWAY_BACK_MS after a mon ran away is that mon, and after
 // that it's one in RUNAWAY_ODDS until it's caught. Null for a wild mon as usual.
@@ -1522,7 +297,7 @@ async function runawayPick($, now) {
   const back = Object.keys(saved).filter((name) => MONS.includes(name) && saved[name]?.ranAway && !saved[name].dead && now - saved[name].ranAway.at >= RUNAWAY_BACK_MS)
   if (back.length === 0) return null
   await freshen($, back)
-  const unmet = back.find((name) => hasRunAway(name) && !stats[name].ranAway.met)
+  const unmet = back.find((name) => hasRunAway(name) && !S.stats[name].ranAway.met)
   if (unmet) return runawayFoe(unmet)
   const met = back.filter(hasRunAway)
   return met.length > 0 && Math.random() < RUNAWAY_ODDS ? runawayFoe(met[Math.floor(Math.random() * met.length)]) : null
@@ -1531,8 +306,8 @@ async function runawayPick($, now) {
 // Once a mon that ran away has shown up, it's met, and later encounters are it only by chance
 async function metRunaway($, name) {
   await freshen($, [name])
-  if (!hasRunAway(name) || stats[name].ranAway.met) return
-  stats[name] = { ...stats[name], ranAway: { ...stats[name].ranAway, met: true } }
+  if (!hasRunAway(name) || S.stats[name].ranAway.met) return
+  S.stats[name] = { ...S.stats[name], ranAway: { ...S.stats[name].ranAway, met: true } }
   await saveRecords($, [name])
 }
 
@@ -1543,16 +318,16 @@ async function wildCommand($, rest) {
   const words = rest.split(/\s+/).filter(Boolean)
   const name = words.find((word) => word !== 'shiny')
   if (name && !MONS.includes(name)) return { text: 'Unknown mon "' + name + '". See /pokemon list for every mon.' }
-  if (wild) return { text: 'A wild ' + displayName(wild.mon) + ' is already here.' }
-  if (isTuckedIn()) return { text: nameOf(mon) + ' is asleep.' }
+  if (S.wild) return { text: 'A wild ' + displayName(S.wild.mon) + ' is already here.' }
+  if (isTuckedIn()) return { text: nameOf(S.mon) + ' is asleep.' }
   if (isDown()) return downReply()
   if (name) await freshen($, [name])
   const own = name && hasRunAway(name) ? runawayFoe(name) : null
   const pick = own ?? (name ? { mon: name, variant: 'default', key: dexKey(name), tier: tierOf(name), level: startLevel(name) } : pickWild(Math.random))
   if (words.includes('shiny')) pick.variant = 'shiny'
   if (!battleFits(pick.mon, pick.variant)) return { text: 'The band is too narrow for a wild ' + displayName(pick.mon) + '. Widen the pane and try again.' }
-  wild = newWild(pick, Math.floor(Math.random() * 0x7fffffff))
-  wanderTarget = null
+  S.wild = newWild(pick, Math.floor(Math.random() * 0x7fffffff))
+  S.wanderTarget = null
   return { text: 'A wild ' + displayName(pick.mon) + ' is on its way.' }
 }
 
@@ -1560,560 +335,29 @@ async function wildCommand($, rest) {
 // loses it under nuzlocke. Null when debug is off, so it reads as an unknown option.
 async function killCommand($) {
   if ((await $.store.get('debug')) !== true) return null
-  nowMs = await $.clock.now()
-  await freshen($, [mon])
+  S.nowMs = await $.clock.now()
+  await freshen($, [S.mon])
   if (isDown()) return downReply()
-  const name = nameOf(mon)
-  await (nuzlockeOn ? loseMon($, mon) : faintMon($))
-  return { text: name + (nuzlockeOn ? ' fainted for good.' : ' fainted.') }
+  const name = nameOf(S.mon)
+  await (S.nuzlockeOn ? loseMon($, S.mon) : faintMon($))
+  return { text: name + (S.nuzlockeOn ? ' fainted for good.' : ' fainted.') }
 }
 
-// What a party mon's bubble shows: its agent's running tool, or dots while it thinks
-function crewIcon(m) {
-  if (crewPhase(m, tick) !== 'out') return null
-  const tool = crewTool(m)
-  if (tool !== null) return toolIcon(toolKind(tool))
-  return m.thinking ? dotsIcon() : null
-}
-
-// Each party mon on stage as drawn this tick, its feet on the ground of a band rows tall:
-// its pixels, its frame's pupils, its head and body, where its bubble leads, and its
-// stamps in front of the scene, the sweat of a flinch and the flash it comes and goes in.
-// Inside the flash its body stays out of sight, so the flash reads as it coming and going.
-// Its bubble keeps between its neighbors' heads, the last one's short of limit.
-function crewDrawn(rows, limit) {
-  const mates = crew
-    .filter((m) => isShown(m, tick))
-    .map((m) => {
-      const sprite = SPRITES[m.mon]
-      const walking = crewWalking(m, tick, FLINCH_TICKS)
-      const view = walking ? 'walk' : 'idle'
-      const frame = frameAt(sprite.variants[m.variant][view], tick * TICK_MS)
-      const colors = COLORS[m.mon][m.variant]
-      const flip = walking && m.facing === 'left'
-      const red = crewRed(m, tick)
-      const hidden = crewHidden(m, tick)
-      const since = m.flinchAt === null ? Infinity : tick - m.flinchAt
-      const shaking = since < SHAKE_TICKS ? (Math.floor(since / 2) % 2 === 0 ? -1 : 1) : 0
-      const left = m.x + shaking
-      const top = rows * 2 - sprite.height + (walking ? WALK_DROP[m.mon][m.variant] : 0) - (crewHopping(m, tick) ? 2 : 0)
-      const local = (px, py) => {
-        const row = frame[py]
-        if (!row || px < 0 || px >= sprite.width) return null
-        return colors[row[flip ? sprite.width - 1 - px : px]] ?? null
-      }
-      const pixel = (cx, py) => {
-        if (hidden) return null
-        const c = local(cx - left, py - top)
-        return c === null || red === 0 ? c : mixed(c, RECALL_RED, red * 0.8)
-      }
-      const box = boxOf(frame, colors)
-      const [boxLeft, boxRight] = flip ? [sprite.width - 1 - box.right, sprite.width - 1 - box.left] : [box.left, box.right]
-      const body = { left: left + boxLeft, right: left + boxRight, top: top + box.top, bottom: top + box.bottom }
-      const head = headColumns(local, sprite.width, left)
-      const pupils = red === 0 && !hidden ? pupilsAt(m.mon, m.variant, view, frame, { left, top, mirrored: flip }) : []
-      return { m, pixel, pupils, head, body, side: walking ? m.facing : 'left', since, icon: crewIcon(m) }
-    })
-    .sort((a, b) => a.head[0] - b.head[0])
-  return mates.map((mate, i) => {
-    const room = [i > 0 ? mates[i - 1].head[1] + 1 : -margin, i + 1 < mates.length ? mates[i + 1].head[0] : limit]
-    const wincing = mate.since < FLINCH_TICKS && crewPhase(mate.m, tick) === 'out'
-    const sweat = wincing ? sweatStamps(mate.head, mate.body.top, mate.side, { since: mate.since, room }) : []
-    return { ...mate, room, front: [...sweat, ...flashAt(crewFlash(mate.m, tick), mate.body)] }
-  })
-}
-
-// The current frame, zoomed to the band or at full size: a color or null per pixel, two
-// pixel rows per cell, and the effects' glyphs by cell
-function frameNow(full = false) {
-  const playing = attack !== null && !isBackingUp()
-  const age = attack ? tick - attack.start : 0
-  const pose = playing ? attackPose(attack, age) : attack ? BACKING_POSE : NO_POSE
-  const shown = pose.swap ? attack.swap : mon
-  const sprite = SPRITES[shown]
-  const sheet = sprite.variants[variant]
-  const walking = isWalking()
-  // A move faces its target side on, with the walk frames held still unless it strides
-  const sideOn = attack ? pose.view === 'side' : walking
-  const anim = sideOn ? sheet.walk : sheet.idle
-  const asleep = isAsleep() || pose.asleep
-  // A swapped-in mon stands on the same ground and stays inside the strip. An evolving
-  // mon at home keeps to the right edge in either shape.
-  const baseX = Math.max(0, Math.min(evolving && isHome() ? homeXOf(shown) : x, columns - sprite.width))
-  // A fainted mon lies still in one frame with X eyes, in its fainted palette. Healing,
-  // it's in its ball at the Pokémon Center, and once the heal is over it's back on its feet.
-  const down = isDown()
-  const healing = down && isHealing(mon)
-  const heal = healing ? healTicks() : null
-  const red = healing ? recallTint(heal, tick) : 0
-  const away = healing && (atCenter(heal, tick) || red >= 1)
-  const knockedOut = down && !(healing && tick >= heal.endTick)
-  let frame = frameAt(anim, tick * TICK_MS)
-  if (knockedOut) frame = faintedFrame(shown)
-  else if (asleep) frame = sleepingFrame(shown, sideOn ? 'walk' : 'idle')
-  else if (attack && sideOn) frame = anim[pose.stride ? Math.floor(age / STRIDE_TICKS) % anim.length : 0].rows
-  const colors = knockedOut ? faintedColors(shown) : COLORS[shown][variant]
-  // Facing out, the sprite stays unmirrored like the idle mon, so it doesn't jump when the move ends
-  const flip = attack ? sideOn && attack.side === 'left' : walking && facing === 'left'
-  const rows = bandRows()
-  // A sleeping mon holds one frame, lowered so its feet rest where the idle ones do
-  const drop = asleep || knockedOut ? gapOf(frame) - gapUnder(sheet.idle) : sideOn ? WALK_DROP[shown][variant] : 0
-  const baseTop = rows * 2 - SPRITES[shown].height + drop
-  const box = boxOf(frame, colors)
-  const pixelOf = (mirror) => (px, py) => {
-    if (px < 0 || px >= sprite.width || py < 0) return null
-    const row = frame[py]
-    if (!row) return null
-    return colors[row[mirror ? sprite.width - 1 - px : px]] ?? null
-  }
-  const pixel = pixelOf(flip)
-  let effect = NO_EFFECT
-  if (playing) effect = attackFrame(attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel))
-  else if (away) effect = { ...NO_EFFECT, hidden: true }
-  else if (red > 0) effect = { ...NO_EFFECT, shade: (cx, py, c) => mixed(c, RECALL_RED, red * 0.8) }
-  const overlay = overlayOf(effect.dots, rows)
-  const underlay = overlayOf(effect.under, rows)
-  const jolt = flinchJolt(baseX, sprite.width)
-  const hopUp = !attack && !down && !isShaking() && isHopping() && Math.floor((tick - hopStart) / 3) % 2 === 0
-  const top = baseTop + effect.dy - (hopUp ? 2 : 0)
-  const left = baseX + effect.dx + jolt
-  const mirrored = flip !== effect.flipX
-  const body = bodyPixel(effect, pixelOf(mirrored), box, sprite.width, mirrored, left, top)
-  const ghost = ghostPixel(effect.ghosts, pixel, box, sprite.width, flip, baseX, baseTop)
-  const head = headColumns(pixel, sprite.width, left)
-  // With a foe on stage the bubble has no room, so only the "!" shows, over the foe
-  const onStage = isOnStage(wild)
-  const foe = onStage ? foePixel(rows) : null
-  // A party mon's bubble stops short of the foe's columns, or else the lead's head
-  const mates = crewDrawn(rows, onStage ? crewWidth : head[0] - 1)
-  const wanted = bubbleIcon()
-  const icon = onStage && wanted !== ALERT_ICON ? null : wanted
-  // The frame's box as drawn, mirrored along with the sprite
-  const [boxLeft, boxRight] = flip ? [sprite.width - 1 - box.right, sprite.width - 1 - box.left] : [box.left, box.right]
-  const sleeper = { left: left + boxLeft, right: left + boxRight, top: top + box.top, bottom: top + box.bottom }
-  const bubbleSide = walking ? facing : 'left'
-  // The Pokémon Center stands on the ground at the right of the mon's columns, clear of the panel
-  const center = { ground: rows * 2 - 1, right: columns - 1 }
-  // Stars circle over a fainted mon until it goes to the Pokémon Center
-  const dizzy = knockedOut && !healing
-  // A shrunk band draws the bubble, the Zs, and the berry over the shrunk scene in its own
-  // pixels, so they stay whole
-  const scene = sceneColumns()
-  const zoom = (!full && bandZoom()) || { scale: 1, columns: scene, rows }
-  const shrunk = zoom.scale < 1
-  const bubble = icon && !shrunk ? bubbleStamps(icon, head, bubbleSide) : []
-  const mateBubbles = shrunk ? [] : mates.flatMap((m) => (m.icon ? bubbleStamps(m.icon, m.head, m.side, m.room) : []))
-  const ball = throwStamps(rows, { x: Math.round((head[0] + head[1]) / 2), y: top + box.top })
-  const over = [
-    ...ball.over,
-    ...(onStage ? [...bubble, ...hpStamps(rows)] : []),
-    ...heartStamps(),
-    ...(isWincing() ? sweatStamps(head, top + box.top, bubbleSide) : []),
-    ...mates.flatMap((m) => m.front),
-    ...mateBubbles,
-    ...(asleep && !shrunk ? sleepStamps(sleeper) : []),
-    ...(dizzy && !shrunk ? dizzyStamps(tick, sleeper, { light: ink === INKS.light }) : []),
-    ...flashStamps(heal, sleeper),
-    ...(away && !shrunk ? sparkleStamps(heal, tick, center, { light: ink === INKS.light }) : []),
-    ...(away ? centerStamps(heal, tick, center) : []),
-  ]
-  const still = new Set(crew.filter((m) => m.outAt !== null).map((m) => m.id))
-  const open = new Set(crew.filter((m) => ballOpen(m, tick)).map((m) => m.id))
-  const balls = partyStamps(party, tick, { columns, ground: rows * 2 - 1, label: ink.party, still, open })
-  const under = [...ball.under, ...(onStage ? [] : bubble), ...balls]
-  const pixels = rows * 2
-  const width = stripColumns()
-  const colorAt = (cx, py) => {
-    if (py < 0 || py >= pixels) return null
-    const i = cx >= 0 && cx < width ? py * width + cx : -1
-    if (overlay && i >= 0 && overlay[i] >= 0) return overlay[i]
-    for (const s of over) {
-      const h = stampPixel(s, cx, py)
-      if (h !== null) return h
-    }
-    // The berry sits in front of the mon, so it stays in sight while it's eaten
-    const f = shrunk ? null : foodPixel(cx, py)
-    if (f !== null) return f
-    const c = effect.hidden ? null : body(cx, py)
-    if (c !== null) return c
-    for (const m of mates) {
-      const p = m.pixel(cx, py)
-      if (p !== null) return p
-    }
-    const w = foe ? foe(cx, py) : null
-    if (w !== null) return w
-    if (effect.ghosts.length > 0) {
-      const g = ghost(cx, py)
-      if (g !== null) return g
-    }
-    if (underlay && i >= 0 && underlay[i] >= 0) return underlay[i]
-    for (const s of under) {
-      const u = stampPixel(s, cx, py)
-      if (u !== null) return u
-    }
-    return null
-  }
-
-  // Shake the full-size scene, then shrink it to the band's size on screen. The scene's
-  // columns start at the margin's left edge, the strip's at the margin's right.
-  const [shakeX, shakeY] = effect.shake
-  const shaken = (cx, py) => (cx - shakeX < 0 || cx - shakeX >= scene ? null : colorAt(cx - shakeX - margin, py - shakeY))
-  // The eyes kept through the shrink: the mon's, unless a move hides or reshapes it, and the foe's
-  const reshaped = effect.hidden || effect.sx !== 1 || effect.sy !== 1 || effect.skew || effect.flipY
-  // A fainted mon's eyes are Xs, with no pupils to keep
-  const own = shrunk && !reshaped && !knockedOut ? pupilsAt(shown, variant, sideOn ? 'walk' : 'idle', frame, { left, top, mirrored }) : []
-  const pupils = [...own, ...(shrunk ? [...(foe?.pupils ?? []), ...mates.flatMap((m) => m.pupils)] : [])].map(([px, py, c, eye]) => [px + margin + shakeX, py + shakeY, c, eye && [eye[0] + margin + shakeX, eye[1] + shakeY, ...eye.slice(2)]])
-  const zoomed = zoomedPixel(shaken, { columns: scene, pixels, scale: zoom.scale, pupils })
-  // The head's zoomed columns, from the first its left column covers to the last its right one does
-  const [headLeft, headRight] = head.map((c) => c + margin)
-  const zoomedHead = [zoomedAt(headLeft, zoom.scale), Math.max(zoomedAt(headRight, zoom.scale), zoomedAt(headRight + 1, zoom.scale) - 1)]
-  // It keeps clear of the meters drawn over the small band's right end
-  const bubbleRoom = [0, zoom.columns - (isSmall() ? Math.round(panel * zoom.scale) : 0)]
-  const zoomedBubble = shrunk && icon ? bubbleStamps(icon, zoomedHead, bubbleSide, bubbleRoom, shrunkBubble(icon)) : []
-  const zoomedSpan = ([l, r]) => [zoomedAt(l + margin, zoom.scale), Math.max(zoomedAt(r + margin, zoom.scale), zoomedAt(r + margin + 1, zoom.scale) - 1)]
-  const zoomedMates = shrunk
-    ? mates.flatMap((m) => (m.icon ? bubbleStamps(m.icon, zoomedSpan(m.head), m.side, zoomedSpan(m.room), shrunkBubble(m.icon)) : []))
-    : []
-  // The Zs and the berry, in front of the shrunk scene as they are at full size
-  const zoomedX = (c) => zoomedAt(c + margin + shakeX, zoom.scale)
-  const zoomedY = (py) => zoomedAt(py + shakeY, zoom.scale)
-  const zoomedSleeper = { left: zoomedX(sleeper.left), right: zoomedX(sleeper.right), top: zoomedY(sleeper.top), bottom: zoomedY(sleeper.bottom) }
-  const front = shrunk
-    ? [
-        ...(asleep ? sleepStamps(zoomedSleeper, SMALL_ZS) : []),
-        ...(dizzy ? dizzyStamps(tick, zoomedSleeper, { light: ink === INKS.light, small: true }) : []),
-        ...(food ? [smallBerryStamp(zoom.scale, margin + shakeX)] : []),
-      ]
-    : []
-  const stampsAt = (stamps) => (tx, ty) => {
-    for (const s of stamps) {
-      const b = stampPixel(s, tx, ty)
-      if (b !== null) return b
-    }
-    return null
-  }
-  const frontAt = stampsAt(front)
-  const sceneAt = front.length === 0 ? zoomed : (tx, ty) => frontAt(tx, ty) ?? zoomed(tx, ty)
-  // As at full size, the lead's bubble sits behind the scene, and over it while a foe is
-  // on stage, and the party mons' sit over it, where a cramped one can't hide behind a neighbor
-  const overAt = stampsAt(onStage ? [...zoomedMates, ...zoomedBubble] : zoomedMates)
-  const behindAt = stampsAt(onStage ? [] : zoomedBubble)
-  const drawn = zoomedBubble.length + zoomedMates.length === 0 ? sceneAt : (tx, ty) => overAt(tx, ty) ?? sceneAt(tx, ty) ?? behindAt(tx, ty)
-  // A small band of an odd number of rows has a half row to spare, left on top so the
-  // mon keeps its feet on the band's bottom edge
-  const spare = zoom.rows * 2 - Math.round(pixels * zoom.scale)
-  const at = spare > 0 ? (tx, ty) => drawn(tx, ty - spare) : drawn
-  const glyphs = new Map()
-  for (let k = 0; k < effect.chars.length; k += 4) {
-    const gx = zoomedAt(effect.chars[k] + shakeX + margin, zoom.scale)
-    glyphs.set(gx + ',' + zoomedAt(effect.chars[k + 1], zoom.scale), [effect.chars[k + 2], effect.chars[k + 3]])
-  }
-  return { at, glyphs, zoom }
-}
-
-// The cells left blank under the level and meters, which are drawn over them
-const underPanel = (cx, cy, zoom) => cx >= (isSmall() ? zoom.columns - Math.round(panel * zoom.scale) : margin + columns) && cy >= zoom.rows - panelRows()
-
-// The small band is the full-size scene drawn into a smaller box: an Image in the
-// terminal, scaled by the terminal so no pixel is lost, and an Svg on the desktop. In
-// half blocks, it takes the zoom's votes as a shrunk band does.
-const isSmall = () => bandScale() < 1
-const drawsImage = () => bandSurface === 'terminal' && isSmall() && !noImages && imageRetryAt === null
-// The text hearts are pixel hearts on the same terminals, which learn from the hearts'
-// blits whether the terminal draws them, even while the band is large
-const drawsHearts = () => bandSurface === 'terminal' && !emojiOn && needsOn && !noImages && imageRetryAt === null
-
-// The small band's zoom while it shows at its own size, laid out as a full-size scene.
-// Null otherwise, as when a short pane shrinks it further, which lays it out like a
-// shrunk large band so it's never the wider of the two.
-function smallZoom() {
-  const zoom = isSmall() ? bandZoom() : null
-  return zoom?.scale === bandScale() ? zoom : null
-}
-
-// Only kitty, Ghostty, and newer iTerm2 builds draw kitty's image placeholders. Other
-// terminals print them as boxes, as xterm.js does in VS Code and Obsidian, even when
-// CLAUDE_CODE_FORCE_TERMINAL_IMAGES has the host send them and report them drawn. iTerm2
-// 3.7 and older, before the 2026-09-18 nightly, freezes a swapped Image's source.
-function drawsImages({ program, version, term, kittyWindow }) {
-  if (kittyWindow || term === 'xterm-kitty' || term === 'xterm-ghostty' || program === 'ghostty') return true
-  if (program !== 'iTerm.app') return false
-  const [major, minor, patch = ''] = String(version ?? '').split('.')
-  if (Number(major) > 3 || (Number(major) === 3 && Number(minor) > 7)) return true
-  const nightly = /^(\d{8})-nightly$/.exec(patch)
-  return Boolean(nightly && Number(nightly[1]) >= 20260918)
-}
-
-// /pokemon images auto trusts the terminal list above, and on and off override it
-const IMAGE_MODES = { auto: () => knownImages, on: () => true, off: () => false }
-function applyImageMode() {
-  noImages = !IMAGE_MODES[imageMode]()
-  imageRetryAt = null
-  imageWait = IMAGE_WAIT_TICKS[0]
-}
-
-// The full-size frame, padded on the left and top to fill the zoomed box at its scale, so
-// every pixel keeps its shape in it
-function fullFrame(zoom) {
-  const { at } = frameNow(true)
-  const scene = sceneColumns()
-  const width = Math.max(scene, Math.round(zoom.columns / zoom.scale))
-  const height = Math.max(bandRows() * 2, Math.round((zoom.rows * 2) / zoom.scale))
-  const [dx, dy] = [width - scene, height - bandRows() * 2]
-  return { at: (cx, py) => at(cx - dx, py - dy), width, height }
-}
-
-// The last frame encoded, a color or -1 per full-size pixel, and its Image source
-let encodedPixels = null
-let encodedWidth = 0
-let encodedSource = null
-
-// The full-size frame as a PNG, each pixel IMAGE_UP wide and tall. A frame like the last
-// one encoded reuses its PNG.
-function imageNow(zoom) {
-  const { at, width, height } = fullFrame(zoom)
-  const pixels = new Int32Array(width * height)
-  let same = encodedPixels?.length === pixels.length && encodedWidth === width
-  for (let py = 0; py < height; py++) {
-    for (let cx = 0; cx < width; cx++) {
-      const c = at(cx, py)
-      const i = py * width + cx
-      pixels[i] = c === null || underPanel(zoomedAt(cx, zoom.scale), zoomedAt(py, zoom.scale) >> 1, zoom) ? -1 : c
-      if (same && pixels[i] !== encodedPixels[i]) same = false
-    }
-  }
-  if (same) return encodedSource
-  const span = width * IMAGE_UP * 4
-  const bytes = new Uint8Array(span * height * IMAGE_UP)
-  for (let py = 0; py < height; py++) {
-    const line = py * IMAGE_UP * span
-    for (let cx = 0; cx < width; cx++) {
-      const c = pixels[py * width + cx]
-      if (c < 0) continue
-      for (let o = line + cx * IMAGE_UP * 4, end = o + IMAGE_UP * 4; o < end; o += 4) {
-        bytes[o] = c >> 16
-        bytes[o + 1] = (c >> 8) & 255
-        bytes[o + 2] = c & 255
-        bytes[o + 3] = 255
-      }
-    }
-    for (let k = 1; k < IMAGE_UP; k++) bytes.copyWithin(line + k * span, line, line + span)
-  }
-  encodedPixels = pixels
-  encodedWidth = width
-  encodedSource = { png: encodePng(width * IMAGE_UP, height * IMAGE_UP, bytes) }
-  return encodedSource
-}
-
-// Pack the current frame into Raster cells, two pixels per cell with half blocks
-function cellsNow() {
-  const { at, glyphs, zoom } = frameNow()
-  const words = new Uint32Array(zoom.columns * zoom.rows * 3)
-  for (let cy = 0; cy < zoom.rows; cy++) {
-    for (let cx = 0; cx < zoom.columns; cx++) {
-      const i = (cy * zoom.columns + cx) * 3
-      const upper = at(cx, cy * 2)
-      const lower = at(cx, cy * 2 + 1)
-      const glyph = glyphs.get(cx + ',' + cy)
-      if (underPanel(cx, cy, zoom)) words.set([SPACE, DEFAULT_COLOR, DEFAULT_COLOR], i)
-      else if (glyph) words.set([glyph[0], glyph[1], upper ?? lower ?? DEFAULT_COLOR], i)
-      // A cell one color top and bottom is a space on that background, which every
-      // terminal fills edge to edge. Only a cell split in two needs a half block, whose
-      // shape depends on the font and can leave thin seams between rows.
-      else if (upper !== null && upper === lower) words.set([SPACE, DEFAULT_COLOR, upper], i)
-      else if (upper !== null) words.set([UPPER_HALF, upper, lower ?? DEFAULT_COLOR], i)
-      else if (lower !== null) words.set([LOWER_HALF, lower, DEFAULT_COLOR], i)
-      else words.set([SPACE, DEFAULT_COLOR, DEFAULT_COLOR], i)
-    }
-  }
-  return new Uint8Array(words.buffer).toBase64()
-}
-
-const hexOf = (color) => '#' + color.toString(16).padStart(6, '0')
-
-// Draw the current frame as SVG for the desktop, which has no Raster. Each pixel is a
-// unit square, runs of one color in a row merged into one path per color. A glyph
-// takes its whole cell, two pixels tall, over the cell's top color or else its bottom.
-function svgNow() {
-  // A small band draws every full-size pixel, and the Svg's size scales them down
-  const full = isSmall() ? fullFrame(bandZoom()) : null
-  const { at, glyphs, zoom } = full ? { at: full.at, glyphs: new Map() } : frameNow()
-  const width = full ? full.width : zoom.columns
-  const height = full ? full.height : zoom.rows * 2
-  const runs = new Map()
-  const fill = (color, d) => runs.set(color, (runs.get(color) ?? '') + d)
-  const pixelAt = (cx, py) => {
-    const cy = py >> 1
-    return !full && (underPanel(cx, cy, zoom) || glyphs.has(cx + ',' + cy)) ? null : at(cx, py)
-  }
-  for (let py = 0; py < height; py++) {
-    for (let cx = 0; cx < width; ) {
-      const color = pixelAt(cx, py)
-      let end = cx + 1
-      while (end < width && pixelAt(end, py) === color) end++
-      if (color !== null) fill(color, `M${cx} ${py}h${end - cx}v1h${cx - end}z`)
-      cx = end
-    }
-  }
-  let text = ''
-  for (const [cell, [code, color]] of glyphs) {
-    const [cx, cy] = cell.split(',').map(Number)
-    if (cx < 0 || cx >= width || cy < 0 || cy >= zoom.rows) continue
-    const under = at(cx, cy * 2) ?? at(cx, cy * 2 + 1)
-    if (under !== null) fill(under, `M${cx} ${cy * 2}h1v2h-1z`)
-    text += `<text x="${cx + 0.5}" y="${cy * 2 + 1.6}" fill="${hexOf(color)}">&#${code};</text>`
-  }
-  let paths = ''
-  for (const [color, d] of runs) paths += `<path fill="${hexOf(color)}" d="${d}"/>`
-  const font = text ? `<g font-family="monospace" font-size="2" text-anchor="middle">${text}</g>` : ''
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" shape-rendering="crispEdges">${paths}${font}</svg>`
-}
-
-// Where a mon pacing right while Claude works turns back: before its bubble, which leads
-// on the right, would run past the panel, or at home if it never would
-const workTurnX = () => Math.max(leadFloor(), Math.min(homeX(), stripColumns() - BUBBLE_SPAN - 1 - WALK_HEAD_RIGHT[mon][variant]))
-
-// Keep the sprite inside the strip, right of any party mons
-function clampX() {
-  x = Math.max(leadFloor(), Math.min(homeX(), x))
-}
-
-// Pick the next spot to stroll to once the rest is over
-function planWander() {
-  if (wild || !wander || working || wanderTarget !== null || tick < restUntil) return
-  wanderTarget = leadFloor() + Math.floor(Math.random() * (homeX() - leadFloor() + 1))
-}
-
-// Advance the clock and move one column every few ticks: pacing while
-// working, heading for the idle target otherwise
-function step() {
-  tick += 1
-  nowMs += TICK_MS
-  hearts = hearts.filter((heart) => tick - heart.born <= (heart.y + heart.rows.length) * HEART_RISE_TICKS)
-  party = prunedParty(party, tick)
-  // A party mon leaves the crew once its ball has popped
-  if (crew.length > 0) crew = crew.filter((m) => party.some((ball) => ball.id === m.id))
-  stepIdleAlert()
-  if (isDown()) return
-  if (attack) return stepAttack()
-  // Calling you over, it stays awake and stands still, even with a berry to eat
-  if (isAlerted()) return markActive()
-  if (isFlinching()) return
-  if (food) return stepFood()
-  if (working) markActive()
-  planWander()
-  hopForJoy()
-  if (tick % moveTicks() !== 0) return
-
-  if (working && !wild) {
-    if (facing === 'left' && x <= leadFloor()) facing = 'right'
-    else if (facing === 'right' && x >= workTurnX()) facing = 'left'
-  } else {
-    const target = idleTarget()
-    if (target === x) {
-      if (wanderTarget !== null) {
-        wanderTarget = null
-        restUntil = tick + REST_TICKS[0] + Math.floor(Math.random() * (REST_TICKS[1] - REST_TICKS[0]))
-      }
-      return
-    }
-    facing = target < x ? 'left' : 'right'
-  }
-  x += facing === 'left' ? -1 : 1
-  clampX()
-}
-
-// Each stat drains from full to empty over its hours, per mon. It's stored with a
-// timestamp, which slowMeters moves on past most of the time when no session ran
-const STATS = {
-  food: { hoursToEmpty: 8 },
-  happiness: { hoursToEmpty: 12 },
-}
-// The meters' icons, plain text unless /pokemon emoji turns emoji on. Each text pair is a
-// filled and an empty glyph from one Unicode block, drawn one column wide at one size, with
-// no emoji presentation. An emoji icon takes two columns: a filled one is drawn two wide from
-// the emoji font whatever the terminal's font, and an empty one is followed by a space. Some
-// fonts lack ○ or ♡ and borrow a wider glyph, which then spills into the space, not the next icon.
-const METER_STYLES = {
-  text: {
-    columns: 1,
-    food: { icon: '●', emptyIcon: '○', color: '#ea697d' },
-    happiness: { icon: '♥', emptyIcon: '♡', color: '#ff5f9e' },
-  },
-  emoji: {
-    columns: 2,
-    // The empty icons take the color of the emoji they stand in for
-    food: { icon: '🍓', emptyIcon: '○', color: '#e0303e' },
-    happiness: { icon: '💗', emptyIcon: '♡', color: '#ff7aa8' },
-  },
-}
-// A terminal that draws Images gets the text hearts as pixel hearts instead, since some
-// fonts lack ♥ or ♡. Each takes one cell, HEART_CELL pixels wide and twice as tall, and
-// sits where a font like Hack draws ● beside it: the cell's full width, about as tall,
-// from HEART_TOP down. An empty heart is the full one's rim, two pixels thick.
-// A retina cell is about 14 device pixels wide and a non-retina one about 7. The
-// terminal scales the PNG to the cell without smoothing, so there it keeps about every
-// other pixel. Every feature is at least two pixels wide, and the lobes sit on even
-// columns, so what's kept is still a heart with a closed rim.
-const HEART_ICON = [
-  '..pppp..pppp..',
-  '.ppppp..ppppp.',
-  'pppppppppppppp',
-  'pppppppppppppp',
-  'pppppppppppppp',
-  'pppppppppppppp',
-  '.pppppppppppp.',
-  '..pppppppppp..',
-  '...pppppppp...',
-  '....pppppp....',
-  '.....pppp.....',
-  '......pp......',
-]
-const HEART_CELL = 14
-const HEART_TOP = 10
-const START_STAT = 80
-// One icon's worth, so each berry adds exactly one icon
-const FEED_FOOD = 20
-const FEED_HAPPINESS = 5
 const PET_HAPPINESS = 25
-const NEEDY_BELOW = 30
-const STAT_ICONS = 5
-const meterStyle = () => (emojiOn ? METER_STYLES.emoji : METER_STYLES.text)
-// The columns a meter takes in the active style
-const meterColumns = () => STAT_ICONS * meterStyle().columns
 const STAT_REDRAW_TICKS = 1200
-const HUNGRY_MOVE_TICKS = 5
-const HAPPY_FROM = 80
-// How fast each meter drains while tucked in, as a share of its awake rate
-const SLEEP_DRAIN = { food: 0.5, happiness: 0.25 }
-const JOY_HOP_TICKS = [400, 800]
-
-const clampStat = (v) => Math.max(0, Math.min(100, v))
-
-function statNow(name, key) {
-  const saved = stats[name]?.[key]
-  if (!saved) return START_STAT
-  if (stats[name].parked) return clampStat(saved.value)
-  const perMs = (100 / (STATS[key].hoursToEmpty * 3600 * 1000)) * (stats[name]?.asleep ? SLEEP_DRAIN[key] : 1)
-  return clampStat(saved.value - perMs * Math.max(0, nowMs - saved.at))
-}
-
-function bumpStat(key, amount, name = mon) {
-  stats[name] = { ...stats[name], [key]: { value: clampStat(statNow(name, key) + amount), at: nowMs } }
-}
 
 // Fill the meters once the berry is eaten or the hearts have floated away, not when
 // asked, for the mon that was fed or petted
 function stepOwed($) {
-  if (pettingFills && !isPetted()) {
-    owed.push({ name: pettingFills, happiness: PET_HAPPINESS })
-    pettingFills = null
+  if (S.pettingFills && !isPetted()) {
+    S.owed.push({ name: S.pettingFills, happiness: PET_HAPPINESS })
+    S.pettingFills = null
   }
-  if (owed.length > 0) payOwed($, owed.splice(0)).catch((err) => logOnce($, err))
+  if (S.owed.length > 0) payOwed($, S.owed.splice(0)).catch((err) => logOnce($, err))
 }
 
 async function payOwed($, gains) {
-  nowMs = await $.clock.now()
+  S.nowMs = await $.clock.now()
   const names = [...new Set(gains.map((g) => g.name))]
   await freshen($, names)
   for (const { name, ...meters } of gains) {
@@ -2123,31 +367,13 @@ async function payOwed($, gains) {
   $.ui.invalidate('ui.render')
 }
 
-// Only the mons on show drain. Switching away parks a mon's meters where they are, and
-// they pick up from there when it's shown again, so a mon left alone for weeks isn't
-// starving when it comes back. XP is the shown mon's alone already. A mon parked while
-// another session still shows it goes back to draining at that session's next sync.
-function park(name) {
-  if (!stats[name] || stats[name].parked || isDead(name)) return
-  const record = { ...stats[name], parked: true }
-  for (const key of Object.keys(STATS)) if (record[key]) record[key] = { value: statNow(name, key), at: nowMs }
-  stats[name] = record
-}
-
-function unpark(name) {
-  if (!stats[name]?.parked) return
-  const { parked, ...record } = stats[name]
-  for (const key of Object.keys(STATS)) if (record[key]) record[key] = { ...record[key], at: nowMs }
-  stats[name] = record
-}
-
 // Saves both meters as they are now before the drain rate changes, so the slower
 // rate only covers the time asleep
 async function setAsleep($, asleep) {
-  await freshen($, [mon])
+  await freshen($, [S.mon])
   for (const key of Object.keys(STATS)) bumpStat(key, 0)
-  stats[mon] = { ...stats[mon], asleep }
-  await saveStats($, [mon])
+  S.stats[S.mon] = { ...S.stats[S.mon], asleep }
+  await saveStats($, [S.mon])
   $.ui.invalidate('ui.render')
 }
 
@@ -2170,11 +396,11 @@ async function freshen($, names) {
   if (!saved || typeof saved !== 'object') return
   for (const name of names) {
     if (!saved[name]) {
-      delete stats[name]
+      delete S.stats[name]
       continue
     }
     const { parked, ...shown } = saved[name]
-    stats[name] = name === mon ? shown : saved[name]
+    S.stats[name] = name === S.mon ? shown : saved[name]
   }
 }
 
@@ -2184,12 +410,12 @@ async function saveRecords($, names) {
   try {
     const saved = await $.store.get('stats')
     const merged = saved && typeof saved === 'object' ? { ...saved } : {}
-    const started = names.filter((name) => stats[name] && !merged[name])
+    const started = names.filter((name) => S.stats[name] && !merged[name])
     for (const name of names) {
-      if (stats[name]) merged[name] = stats[name]
+      if (S.stats[name]) merged[name] = S.stats[name]
       else delete merged[name]
     }
-    stats = merged
+    S.stats = merged
     await $.store.set('stats', merged)
     // A mon raised again from scratch no longer points at what it once evolved into
     if (started.length > 0) {
@@ -2208,11 +434,11 @@ async function saveRecords($, names) {
 // 'mon' is the last one picked in any session, and a new session starts with it. A mon
 // picked here is shown as itself, even if it once evolved in another session.
 async function saveMon($) {
-  seenPick = mon
-  await $.store.set('mon', mon)
+  S.seenPick = S.mon
+  await $.store.set('mon', S.mon)
   const evolved = await $.store.get('evolved')
-  if (evolved && mon in evolved) {
-    const { [mon]: _, ...rest } = evolved
+  if (evolved && S.mon in evolved) {
+    const { [S.mon]: _, ...rest } = evolved
     await $.store.set('evolved', rest)
   }
 }
@@ -2235,7 +461,7 @@ const LIVE_STATUSES = ['pending', 'running', 'waiting']
 // its own runs no loop here, so its turn never completes in this process, and this is the
 // only way its ball ever pops.
 async function syncParty($) {
-  const open = party.filter((ball) => ball.popStart === null && tick - ball.born >= PARTY_SYNC_TICKS)
+  const open = S.party.filter((ball) => ball.popStart === null && S.tick - ball.born >= PARTY_SYNC_TICKS)
   if (open.length === 0) return
   const live = new Set()
   for (const agent of await $.agent.list()) {
@@ -2246,75 +472,14 @@ async function syncParty($) {
   for (const ball of open) if (!live.has(ball.id)) endAgent(ball.id)
 }
 
-// A subagent finished. Its ball pops now, or once its party mon has hopped and gone back in.
-function endAgent(id) {
-  const member = crew.find((m) => m.id === id)
-  if (member && crewPhase(member, tick) !== 'ball') crew = endedCrew(crew, id, tick)
-  else party = leaveParty(party, id, tick)
-}
-
-// The lead's last hop the party hopped along with
-let cheeredAt = -HOP_TICKS
-
-// The party mons out walk, and the ones due out come out, in lanes across the crew's
-// columns. They hop along when the lead hops, and jump when a wild mon walks in behind them.
-function stepCrewMons() {
-  if (crew.length === 0) return
-  const ground = bandRows() * 2 - 1
-  const rows = bandRows()
-  const lanes = crewWidth > 0 ? crewLanes(crewWanted(crewWidth), crewBox, crewWidth) : new Map()
-  const ready = (m) => ballReady(party, m.id, tick, ground)
-  const bubbleOf = (m) => (crewIcon(m) ? BUBBLE_SPAN : 0)
-  const foe = wild?.phase === 'entering' ? { id: wild.seed, ...foeBox(rows) } : null
-  if (hopStart > cheeredAt) {
-    cheeredAt = hopStart
-    crew = cheerCrew(crew, tick)
-  }
-  const result = stepCrew(crew, {
-    tick, lanes, width: crewWidth, ready, boxOf: crewBox, bubbleOf, foe, moveTicks: MOVE_TICKS, flinchTicks: FLINCH_TICKS, rand: Math.random,
-  })
-  crew = result.crew
-  for (const id of result.done) party = leaveParty(party, id, tick)
-}
-
-// The box's mons beside the one on show that can work for a subagent: none fainted, run
-// away, or lost. They're the picked party in its order, or the highest level first.
-const canWork = (name) => name !== mon && MONS.includes(name) && stats[name] && typeof stats[name] === 'object' && !isGone(name) && !isFainted(name)
-
-// A mon assigned to an agent type comes out for that type alone, so it stays out of the
-// party the other subagents draw from
-const isAssigned = (name) => Object.values(partyAgents).includes(name)
-
-function partyMons() {
-  const able = (name) => canWork(name) && !isAssigned(name)
-  if (partyPicks) return partyPicks.filter(able).slice(0, CREW_SIZE)
-  return Object.keys(stats)
-    .filter(able)
-    .sort((a, b) => levelOf(b) - levelOf(a) || displayName(a).localeCompare(displayName(b)) || a.localeCompare(b))
-    .slice(0, CREW_SIZE)
-}
-
 async function loadPartyPicks($) {
   const saved = await $.store.get('partyPicks')
-  partyPicks = Array.isArray(saved) ? saved.filter((name) => MONS.includes(name)) : null
+  S.partyPicks = Array.isArray(saved) ? saved.filter((name) => MONS.includes(name)) : null
   const agents = await $.store.get('partyAgents')
-  partyAgents = {}
+  S.partyAgents = {}
   if (agents && typeof agents === 'object') {
-    for (const [type, name] of Object.entries(agents)) if (MONS.includes(name)) partyAgents[type] = name
+    for (const [type, name] of Object.entries(agents)) if (MONS.includes(name)) S.partyAgents[type] = name
   }
-}
-
-// The mon assigned to an agent type, or undefined
-const assignedTo = (type) => partyAgents[String(type ?? '').toLowerCase()]
-
-// The agent types a mon is assigned to, as typed
-const typesOf = (name) => Object.keys(partyAgents).filter((type) => partyAgents[type] === name)
-
-// A party mon shows in the variant saved with its record, or shiny when it was caught shiny
-function crewVariant(name, dex) {
-  const saved = stats[name]?.variant
-  if (VARIANTS.includes(saved)) return saved
-  return stats[name]?.caught && dex?.[dexKey(name)]?.shiny ? 'shiny' : 'default'
 }
 
 // Give a new subagent the mon assigned to its agent type, or when that one is busy or
@@ -2326,21 +491,21 @@ async function joinCrewFor($, id, type) {
   const dex = await $.store.get('dex')
   const assigned = assignedTo(type)
   const mons = assigned && canWork(assigned) ? [assigned, ...partyMons()] : partyMons()
-  crew = joinCrew(crew, id, mons, (name) => crewVariant(name, dex))
+  S.crew = joinCrew(S.crew, id, mons, (name) => crewVariant(name, dex))
 }
 
 // Show the mon this one evolved into in another session, once nothing here is mid-move
 function followEvolution($, into, record) {
-  if (evolving || attack) return
-  const name = nameOf(mon)
+  if (S.evolving || S.attack) return
+  const name = nameOf(S.mon)
   const wasHome = isHome()
-  delete stats[mon]
-  stats[into] = record
-  evolveDue = null
-  mon = into
-  if (wasHome) x = homeX()
+  delete S.stats[S.mon]
+  S.stats[into] = record
+  S.evolveDue = null
+  S.mon = into
+  if (wasHome) S.x = homeX()
   clampX()
-  sentCells = null
+  S.sentCells = null
   $.ui.toast('Congratulations! Your ' + name + ' evolved into ' + displayName(into) + '!')
   $.ui.invalidate('ui.render')
 }
@@ -2349,17 +514,17 @@ function followEvolution($, into, record) {
 // evolving elsewhere is left to followEvolution. Says whether it switched.
 async function followPick($) {
   const pick = await $.store.get('mon')
-  if (pick === seenPick || typeof pick !== 'string') return false
+  if (pick === S.seenPick || typeof pick !== 'string') return false
   if (!MONS.includes(pick)) await loadCustom($)
   const evolved = await $.store.get('evolved')
-  if (evolving || attack || evolved?.[mon] === pick) return false
-  seenPick = pick
-  if (pick === mon || !MONS.includes(pick)) return false
+  if (S.evolving || S.attack || evolved?.[S.mon] === pick) return false
+  S.seenPick = pick
+  if (pick === S.mon || !MONS.includes(pick)) return false
   // A mon gone from the box can't be shown, so this session keeps its own
   await freshen($, [pick])
   if (isGone(pick)) return false
   await switchTo($, pick, { save: false })
-  sentCells = null
+  S.sentCells = null
   $.ui.invalidate('ui.render')
   return true
 }
@@ -2368,46 +533,46 @@ async function followPick($) {
 // XP, or put to bed. Put to bed elsewhere while Claude works here, it wakes right back up
 // in stepWake.
 async function syncSessions($) {
-  syncOn = (await $.store.get('sync')) === true
-  nuzlockeOn = (await $.store.get('nuzlocke')) === true
-  if (syncOn && (await followPick($))) return
+  S.syncOn = (await $.store.get('sync')) === true
+  S.nuzlockeOn = (await $.store.get('nuzlocke')) === true
+  if (S.syncOn && (await followPick($))) return
   const writes = statWrites
   const saved = await $.store.get('stats')
   const evolved = await $.store.get('evolved')
   // Nothing may await between this check and acting on what was read
   if (statSaving > 0 || writes !== statWrites) return
   // Evolved in another session, the shown mon evolves here too. Released, it starts over.
-  if (!saved?.[mon]) {
-    const into = evolved?.[mon]
+  if (!saved?.[S.mon]) {
+    const into = evolved?.[S.mon]
     if (MONS.includes(into) && saved?.[into]) {
       followEvolution($, into, saved[into])
       return
     }
-    if (stats[mon] && saved && typeof saved === 'object') {
-      delete stats[mon]
-      evolveDue = null
+    if (S.stats[S.mon] && saved && typeof saved === 'object') {
+      delete S.stats[S.mon]
+      S.evolveDue = null
       $.ui.invalidate('ui.render')
     }
     return
   }
   // Run away or lost in another session, it leaves this band too
-  if (!isGone(mon) && (saved[mon].ranAway || saved[mon].dead)) {
-    stats[mon] = saved[mon]
+  if (!isGone(S.mon) && (saved[S.mon].ranAway || saved[S.mon].dead)) {
+    S.stats[S.mon] = saved[S.mon]
     await leaveBand($, { save: false })
     return
   }
   // A session that switched away from the shown mon parked it. It's still on show here, so
   // its record goes back unparked and drains on from where the park left it.
-  const { parked, ...theirs } = saved[mon]
-  if (parked && !isGone(mon)) {
-    await freshen($, [mon])
-    await saveRecords($, [mon])
-  } else if (JSON.stringify(theirs) === JSON.stringify(stats[mon])) {
+  const { parked, ...theirs } = saved[S.mon]
+  if (parked && !isGone(S.mon)) {
+    await freshen($, [S.mon])
+    await saveRecords($, [S.mon])
+  } else if (JSON.stringify(theirs) === JSON.stringify(S.stats[S.mon])) {
     return
   } else {
-    const wasFainted = isFainted(mon)
-    stats[mon] = theirs
-    if (!wasFainted && isFainted(mon)) $.ui.toast(nameOf(mon) + ' fainted! /pokemon revive takes it to a Pokémon Center.')
+    const wasFainted = isFainted(S.mon)
+    S.stats[S.mon] = theirs
+    if (!wasFainted && isFainted(S.mon)) $.ui.toast(nameOf(S.mon) + ' fainted! /pokemon revive takes it to a Pokémon Center.')
   }
   $.ui.invalidate('ui.render')
 }
@@ -2415,127 +580,27 @@ async function syncSessions($) {
 // A tucked-in mon wakes when Claude starts working, or when it has a berry to eat,
 // a move to play, or an evolution to go through
 function stepWake($) {
-  if (isTuckedIn() && (turnRunning || food || attack || evolving || evolveDue)) setAsleep($, false).catch((err) => logOnce($, err))
+  if (isTuckedIn() && (S.turnRunning || S.food || S.attack || S.evolving || S.evolveDue)) setAsleep($, false).catch((err) => logOnce($, err))
 }
-
-// Five icons, each worth 20%, rounding up so any food or love left shows at least one.
-const filledIcons = (key, name = mon) => Math.ceil(statNow(name, key) / (100 / STAT_ICONS))
-// Full when every food icon is filled
-const isFull = () => filledIcons('food') === STAT_ICONS
-// As happy as can be when every heart is filled
-const isHappiest = () => filledIcons('happiness') === STAT_ICONS
-
-function iconsFor(key, name = mon) {
-  const style = meterStyle()
-  const filled = filledIcons(key, name)
-  return style[key].icon.repeat(filled) + (style[key].emptyIcon + ' '.repeat(style.columns - 1)).repeat(STAT_ICONS - filled)
-}
-
-// The happiness meter as pixel hearts, one PNG per number filled, each pixel IMAGE_UP
-// wide and tall like the small band's
-const heartPngs = new Map()
-function heartsImage(filled) {
-  if (heartPngs.has(filled)) return heartPngs.get(filled)
-  const color = Number.parseInt(METER_STYLES.text.happiness.color.slice(1), 16)
-  const width = STAT_ICONS * HEART_CELL * IMAGE_UP
-  const height = 2 * HEART_CELL * IMAGE_UP
-  const inHeart = (rx, ry) => (HEART_ICON[ry]?.[rx] ?? '.') !== '.'
-  const bytes = new Uint8Array(width * height * 4)
-  for (let k = 0; k < STAT_ICONS; k++) {
-    HEART_ICON.forEach((row, ry) => {
-      for (let rx = 0; rx < row.length; rx++) {
-        if (!inHeart(rx, ry)) continue
-        const rim = [1, 2].some((d) => !inHeart(rx - d, ry) || !inHeart(rx + d, ry) || !inHeart(rx, ry - d) || !inHeart(rx, ry + d))
-        if (k >= filled && !rim) continue
-        for (let py = (HEART_TOP + ry) * IMAGE_UP; py < (HEART_TOP + ry + 1) * IMAGE_UP; py++) {
-          for (let px = (k * HEART_CELL + rx) * IMAGE_UP; px < (k * HEART_CELL + rx + 1) * IMAGE_UP; px++) {
-            const o = (py * width + px) * 4
-            bytes.set([color >> 16, (color >> 8) & 255, color & 255, 255], o)
-          }
-        }
-      }
-    })
-  }
-  const source = { png: encodePng(width, height, bytes) }
-  heartPngs.set(filled, source)
-  return source
-}
-
-// A nickname lives in the mon's record too, so it follows the mon through evolution
-const nameOf = (name) => stats[name]?.nickname ?? displayName(name)
-
-// Like "Sparky (Pikachu)", or just "Pikachu" without a nickname
-const fullNameOf = (name) => (stats[name]?.nickname ? stats[name].nickname + ' (' + displayName(name) + ')' : displayName(name))
-
-// XP lives in each mon's record. A mon that hasn't earned any starts at its first level.
-const xpOf = (name) => stats[name]?.xp ?? xpAt(startLevel(name))
-const levelOf = (name) => levelAt(xpOf(name))
-
-// The level line above the meters, at most five columns wide
-const levelLine = () => (levelOf(mon) < MAX_LEVEL ? 'Lv ' : 'Lv') + levelOf(mon)
 
 // An answered turn earns XP, scaled by care. A level-up toasts the new level once, and
 // an evolution it reaches is due.
 async function gainXp($, durationMs) {
-  nowMs = await $.clock.now()
-  await freshen($, [mon])
+  S.nowMs = await $.clock.now()
+  await freshen($, [S.mon])
   if (isDown()) return
-  const was = levelOf(mon)
-  const care = needsOn ? careOf(statNow(mon, 'food'), statNow(mon, 'happiness')) : 1
-  stats[mon] = { ...stats[mon], xp: xpOf(mon) + turnXp({ level: was, durationMs, care }) }
-  await saveStats($, [mon])
-  const level = levelOf(mon)
+  const was = levelOf(S.mon)
+  const care = S.needsOn ? careOf(statNow(S.mon, 'food'), statNow(S.mon, 'happiness')) : 1
+  S.stats[S.mon] = { ...S.stats[S.mon], xp: xpOf(S.mon) + turnXp({ level: was, durationMs, care }) }
+  await saveStats($, [S.mon])
+  const level = levelOf(S.mon)
   if (level === was) return
-  $.ui.toast(nameOf(mon) + ' grew to Lv. ' + level + '!')
+  $.ui.toast(nameOf(S.mon) + ' grew to Lv. ' + level + '!')
   $.ui.invalidate('ui.render')
   const into = readyToEvolve()
   if (!into) return
-  if (autoEvolve) evolveDue = into
-  else $.ui.toast(nameOf(mon) + ' is ready to evolve into ' + displayName(into) + '! /pokemon evolve lets it.')
-}
-
-// The mon its level lets it become, while it isn't evolving already
-function readyToEvolve() {
-  const evolution = levelEvolutionOf(mon)
-  return evolution && levelOf(mon) >= evolution.level && !evolving && !isDown() ? evolution.into : null
-}
-
-// Like "Pikachu, Lv. 12, 1820 XP (377 to Lv. 13). Can become Raichu with a Thunder Stone.
-// Food 50%, happiness 67%. 12 pets, 5 feeds."
-async function statsText($) {
-  if (isGone(mon)) return goneLine(mon) + ' /pokemon <mon> picks another.'
-  const level = levelOf(mon)
-  const next = level < MAX_LEVEL ? ' (' + (xpAt(level + 1) - xpOf(mon)) + ' to Lv. ' + (level + 1) + ')' : ''
-  const evolutions = evolutionsOf(mon)
-  const ready = readyToEvolve()
-  const becomes = ready
-    ? ' Ready to evolve into ' + displayName(ready) + '. /pokemon evolve lets it.'
-    : evolutions.length > 0 ? ' Can become ' + orList(evolutions.map(evolutionText)) + '.' : ''
-  const meters = needsOn
-    ? ' Food ' + Math.round(statNow(mon, 'food')) + '%, happiness ' + Math.round(statNow(mon, 'happiness')) + '%.'
-    : ' Needs are off.'
-  const pets = Number((await $.store.get('pets')) ?? 0)
-  const feeds = Number((await $.store.get('feeds')) ?? 0)
-  const state = isFainted(mon) ? ' ' + downReply().text : ''
-  return fullNameOf(mon) + ', Lv. ' + level + ', ' + xpOf(mon) + ' XP' + next + '.' + becomes + meters + state + ' ' + pets + ' pets, ' + feeds + ' feeds.'
-}
-
-// Every mon with a saved record, one a line, like "Charizard ◓, Lv. 36 ●●●○○ ♥♥♥♡♡ (active)",
-// highest level first, where ◓ marks a mon caught in the wild. A record caught since carries
-// caught, and one saved before that counts as caught when its species is in the dex.
-function boxText(dex = {}) {
-  const raised = Object.keys(stats).filter((name) => MONS.includes(name) && stats[name] && typeof stats[name] === 'object' && !isDead(name))
-  if (raised.length === 0) return 'Your box is empty. Pet or feed ' + displayName(mon) + ', or finish a turn, to start raising it.'
-  const caught = (name) => Boolean(stats[name].caught || isCaught(dex[dexKey(name)]))
-  raised.sort((a, b) => levelOf(b) - levelOf(a) || displayName(a).localeCompare(displayName(b)) || a.localeCompare(b))
-  const lines = raised.map((name) => {
-    const meters = needsOn && !hasRunAway(name) ? ' ' + iconsFor('food', name).trimEnd() + ' ' + iconsFor('happiness', name).trimEnd() : ''
-    const tags = [name === mon && !hasRunAway(name) ? 'active' : null, conditionOf(name)].filter(Boolean)
-    return fullNameOf(name) + (caught(name) ? ' ◓' : '') + ', Lv. ' + levelOf(name) + meters + (tags.length > 0 ? ' (' + tags.join(', ') + ')' : '')
-  })
-  const count = raised.length + (raised.length === 1 ? ' mon' : ' mons')
-  const alone = raised.length === 1 && raised[0] === mon ? '\nOnly ' + nameOf(mon) + ' so far. /pokemon <mon> picks another.' : ''
-  return count + ' in your box:\n' + lines.join('\n') + alone
+  if (S.autoEvolve) S.evolveDue = into
+  else $.ui.toast(nameOf(S.mon) + ' is ready to evolve into ' + displayName(into) + '! /pokemon evolve lets it.')
 }
 
 // The box's mons beside the one on show that come out of subagents' balls, one a line,
@@ -2545,22 +610,22 @@ async function partyText($) {
   const saved = await $.store.get('stats')
   if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
   await loadPartyPicks($)
-  const assigned = [...new Set(Object.values(partyAgents))].filter(canWork)
+  const assigned = [...new Set(Object.values(S.partyAgents))].filter(canWork)
   const mons = [...assigned, ...partyMons()]
-  if (mons.length === 0 && partyPicks) return 'Your party is empty. Add a mon from your box with /pokemon party add <mon>.'
-  if (mons.length === 0) return 'Your party is empty. Raise or catch another mon, and it comes out of a subagent\'s Poké Ball to work beside ' + nameOf(mon) + '.'
+  if (mons.length === 0 && S.partyPicks) return 'Your party is empty. Add a mon from your box with /pokemon party add <mon>.'
+  if (mons.length === 0) return 'Your party is empty. Raise or catch another mon, and it comes out of a subagent\'s Poké Ball to work beside ' + nameOf(S.mon) + '.'
   const agents = await $.agent.list().catch(() => [])
   const described = new Map((Array.isArray(agents) ? agents : []).map((agent) => [agent.id, agent.description || agent.id]))
   const lines = mons.map((name) => {
-    const member = crew.find((m) => m.mon === name && m.endAt === null)
+    const member = S.crew.find((m) => m.mon === name && m.endAt === null)
     const types = typesOf(name)
     const shown = fullNameOf(name) + ', Lv. ' + levelOf(name) + (types.length > 0 ? ', for ' + types.join(' and ') : '')
     if (!member) return shown + ', free'
-    const waiting = isOut(member, tick) ? '' : ', waiting in its ball for room'
+    const waiting = isOut(member, S.tick) ? '' : ', waiting in its ball for room'
     return shown + ', working for ' + (described.get(member.id) ?? member.id) + waiting
   })
   const count = mons.length + (mons.length === 1 ? ' mon' : ' mons')
-  return count + ' in your party, beside ' + nameOf(mon) + ':\n' + lines.join('\n')
+  return count + ' in your party, beside ' + nameOf(S.mon) + ':\n' + lines.join('\n')
 }
 
 // Add a box mon to the party or take one out. The first change starts from the party as
@@ -2572,22 +637,22 @@ async function partyCommand($, verb, wanted) {
   const example = verb === 'add' ? 'dratini' : (partyMons()[0] ?? 'pikachu')
   if (!wanted) return { text: 'Name the mon, like /pokemon party ' + verb + ' ' + example + '. /pokemon box lists yours.' }
   if (!MONS.includes(wanted)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
-  const picks = partyPicks ?? partyMons()
+  const picks = S.partyPicks ?? partyMons()
   const name = nameOf(wanted)
   if (verb === 'remove') {
     if (!picks.includes(wanted)) return { text: name + ' isn\'t in your party.' }
-    partyPicks = picks.filter((pick) => pick !== wanted)
-    await $.store.set('partyPicks', partyPicks)
-    const working = crew.some((m) => m.mon === wanted && m.endAt === null)
+    S.partyPicks = picks.filter((pick) => pick !== wanted)
+    await $.store.set('partyPicks', S.partyPicks)
+    const working = S.crew.some((m) => m.mon === wanted && m.endAt === null)
     return { text: name + ' leaves your party.' + (working ? ' It finishes its subagent\'s work first.' : '') }
   }
-  if (wanted === mon) return { text: name + ' is the mon on show. Pick another with /pokemon <mon> first.' }
-  if (!stats[wanted] || isDead(wanted)) return { text: displayName(wanted) + ' isn\'t in your box. Catch one, or pick it with /pokemon ' + wanted + '.' }
+  if (wanted === S.mon) return { text: name + ' is the mon on show. Pick another with /pokemon <mon> first.' }
+  if (!S.stats[wanted] || isDead(wanted)) return { text: displayName(wanted) + ' isn\'t in your box. Catch one, or pick it with /pokemon ' + wanted + '.' }
   if (isGone(wanted)) return { text: name + ' ran away. Catch it in the wild to bring it back.' }
   if (picks.includes(wanted)) return { text: name + ' is already in your party.' }
   if (picks.length >= CREW_SIZE) return { text: 'Your party is full at ' + CREW_SIZE + '. Take one out with /pokemon party remove <mon> first.' }
-  partyPicks = [...picks, wanted]
-  await $.store.set('partyPicks', partyPicks)
+  S.partyPicks = [...picks, wanted]
+  await $.store.set('partyPicks', S.partyPicks)
   const resting = isFainted(wanted) ? ' It rests until it\'s revived.' : ''
   return { text: name + ' joins your party.' + resting }
 }
@@ -2601,10 +666,10 @@ async function assignCommand($, verb, words) {
   if (verb === 'unassign') {
     const type = words.join(' ')
     if (!type) return { text: 'Name the agent type, like /pokemon party unassign explore.' }
-    if (!partyAgents[type]) return { text: 'No mon is assigned to ' + type + '.' }
-    const name = nameOf(partyAgents[type])
-    delete partyAgents[type]
-    await $.store.set('partyAgents', partyAgents)
+    if (!S.partyAgents[type]) return { text: 'No mon is assigned to ' + type + '.' }
+    const name = nameOf(S.partyAgents[type])
+    delete S.partyAgents[type]
+    await $.store.set('partyAgents', S.partyAgents)
     return { text: name + ' no longer comes out for ' + type + '.' }
   }
   if (words.length < 2) return { text: 'Name the agent type and the mon, like /pokemon party assign explore abra.' }
@@ -2612,200 +677,21 @@ async function assignCommand($, verb, words) {
   const type = words.slice(0, -1).join(' ')
   if (!MONS.includes(wanted)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
   const name = nameOf(wanted)
-  if (wanted === mon) return { text: name + ' is the mon on show. Pick another with /pokemon <mon> first.' }
-  if (!stats[wanted] || isDead(wanted)) return { text: displayName(wanted) + ' isn\'t in your box. Catch one, or pick it with /pokemon ' + wanted + '.' }
+  if (wanted === S.mon) return { text: name + ' is the mon on show. Pick another with /pokemon <mon> first.' }
+  if (!S.stats[wanted] || isDead(wanted)) return { text: displayName(wanted) + ' isn\'t in your box. Catch one, or pick it with /pokemon ' + wanted + '.' }
   if (isGone(wanted)) return { text: name + ' ran away. Catch it in the wild to bring it back.' }
   const before = typesOf(wanted).filter((other) => other !== type)
-  for (const other of before) delete partyAgents[other]
-  partyAgents[type] = wanted
-  await $.store.set('partyAgents', partyAgents)
+  for (const other of before) delete S.partyAgents[other]
+  S.partyAgents[type] = wanted
+  await $.store.set('partyAgents', S.partyAgents)
   const moved = before.length > 0 ? ' It no longer comes out for ' + before.join(' or ') + '.' : ''
   const resting = isFainted(wanted) ? ' It rests until it\'s revived.' : ''
   return { text: name + ' comes out for every ' + type + ' subagent.' + moved + resting }
 }
 
-const dexLabel = (key) => '#' + String(dexNumber(key)).padStart(3, '0') + ' ' + displayName(key)
-
-// † marks a species lost for good until a new one is caught, and a mon that ran away says so
-const LOST_MARK = ' †'
-function dexMark(key) {
-  const own = Object.keys(stats).filter((name) => dexKey(name) === key)
-  if (own.some(isDead)) return LOST_MARK
-  return own.some(hasRunAway) ? ' (ran away)' : ''
-}
-
-// The graveyard as saved, a list of { mon, level, nickname?, at }, like
-// "Rest well: Spoon (Abra), Lv. 35, on 2026-10-10."
-function graveyardText(graveyard) {
-  if (!Array.isArray(graveyard) || graveyard.length === 0) return ''
-  const lines = graveyard.map((g) => (g.nickname ? g.nickname + ' (' + displayName(g.mon) + ')' : displayName(g.mon)) + ', Lv. ' + g.level + ', on ' + new Date(g.at).toISOString().slice(0, 10))
-  return '\nRest well: ' + lines.join('; ') + '.'
-}
-
-// The Pokédex as saved, { [dexKey]: { seen, caught?, shiny? } }, where shiny marks a shiny
-// catch. The whole dex is a count, the caught mons in dex order, and the ones only seen.
-// One mon is its number, tier, and status.
-function dexText(dex, wanted, graveyard) {
-  const entries = DEX.filter((key) => dex[key] && typeof dex[key] === 'object')
-  if (wanted) {
-    if (!MONS.includes(wanted)) return 'Unknown mon "' + wanted + '". See /pokemon list for every mon.'
-    const key = dexKey(wanted)
-    if (!DEX.includes(key)) return displayName(wanted) + " isn't in the Pokédex. Only gen 1 mons appear in the wild."
-    const entry = entries.includes(key) ? dex[key] : null
-    const status = isCaught(entry) ? 'Caught ◓' + (entry.shiny ? ' ✦' : '') + '.' : entry ? 'Seen, not caught yet.' : 'Not seen yet.'
-    const mark = dexMark(key)
-    const lost = mark === LOST_MARK ? ' Gone for good †. Catch a new one to raise it again.' : mark ? ' Ran away. It may turn up in the wild.' : ''
-    return dexLabel(key) + ', ' + tierOf(key) + '. ' + status + lost
-  }
-  const caught = entries.filter((key) => isCaught(dex[key]))
-  const seen = entries.filter((key) => !isCaught(dex[key]))
-  const shiny = caught.filter((key) => dex[key].shiny).length
-  const head = 'Pokédex: seen ' + entries.length + ', caught ' + caught.length + ' of ' + DEX.length + (shiny ? ' (' + shiny + ' shiny)' : '') + '.'
-  const rest = graveyardText(graveyard)
-  if (entries.length === 0) return head + ' No wild mons met yet.' + rest
-  const lines = caught.map((key) => dexLabel(key) + ' ◓' + (dex[key].shiny ? ' ✦' : '') + dexMark(key))
-  if (seen.length > 0) lines.push('Seen: ' + seen.map((key) => displayName(key) + dexMark(key)).join(', '))
-  return head + '\n' + lines.join('\n') + rest
-}
-
-// Drop a mon's record from the box, so it starts over at its first level with fresh
-// meters. The active mon stays on screen and starts over in place.
-function releaseCommand(wanted) {
-  if (!wanted) return { text: 'Name the mon to release, like /pokemon release ' + mon + '. /pokemon box lists yours.' }
-  if (!MONS.includes(wanted)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
-  if (!stats[wanted] || isDead(wanted)) return { text: displayName(wanted) + ' isn\'t in your box.' }
-  const name = nameOf(wanted)
-  delete stats[wanted]
-  if (wanted !== mon) return { text: 'You release ' + name + '. Bye-bye, ' + name + '!' }
-  evolveDue = null
-  return { text: 'You release ' + name + '. Bye-bye, ' + name + '! A fresh ' + displayName(mon) + ' takes its place.' }
-}
-
-const NICKNAME_MAX = 12
-
-// Name the active mon. Its species name, as in the games, takes the nickname away.
-function nicknameCommand(wanted) {
-  const species = displayName(mon)
-  const nickname = wanted.replace(/\p{C}/gu, '').replace(/\s+/g, ' ').trim()
-  if (!nickname) {
-    const now = stats[mon]?.nickname ? species + ' goes by ' + stats[mon].nickname + '. ' : ''
-    return { text: now + 'Name it with /pokemon nickname <name>, up to ' + NICKNAME_MAX + ' characters.' }
-  }
-  if ([...nickname].length > NICKNAME_MAX) return { text: 'That\'s too long. A nickname fits ' + NICKNAME_MAX + ' characters.' }
-  const old = stats[mon]?.nickname
-  if (moveKey(nickname) === moveKey(species) || moveKey(nickname) === moveKey(mon)) {
-    if (!old) return { text: species + ' has no nickname.' }
-    const { nickname: _, ...rest } = stats[mon]
-    if (Object.keys(rest).length > 0) stats[mon] = rest
-    else delete stats[mon]
-    return { text: old + ' is just ' + species + ' again.' }
-  }
-  stats[mon] = { ...stats[mon], nickname }
-  return { text: (old ?? species) + ' is now ' + nickname + '!' }
-}
-
-// A hungry mon drags its feet, except on its way to a berry
-const moveTicks = () => (needsOn && statNow(mon, 'food') < NEEDY_BELOW ? HUNGRY_MOVE_TICKS : MOVE_TICKS)
-
-// A happy mon hops for joy every 20 to 40 seconds while idle and awake
-function hopForJoy() {
-  if (!needsOn || working || isAsleep() || statNow(mon, 'happiness') < HAPPY_FROM) {
-    joyHopAt = null
-  } else if (joyHopAt === null) {
-    joyHopAt = tick + JOY_HOP_TICKS[0] + Math.floor(Math.random() * (JOY_HOP_TICKS[1] - JOY_HOP_TICKS[0]))
-  } else if (tick >= joyHopAt) {
-    hopStart = tick
-    joyHopAt = null
-  }
-}
-
-// Every option with what it does, in groups for /pokemon help. A setting's third field
-// reads its current value.
-const onOff = (on) => (on ? 'on' : 'off')
-const HELP = [
-  ['Pick', [
-    ['<mon>', 'Show a mon, like /pokemon charmander'],
-    ['default', 'Show its default colors'],
-    ['shiny', 'Show its shiny colors'],
-    ['new <mon>', 'Fetch a mon from gen 2 to 5, or new random, new gen3'],
-    ['list', 'List every mon name'],
-  ]],
-  ['Care', [
-    ['pet', 'Pet it'],
-    ['feed', 'Toss it a berry'],
-    ['sleep', 'Tuck it in, or wake it'],
-    ['revive [mon]', 'Take a fainted mon to a Pokémon Center'],
-    ['nickname <name>', 'Nickname it, up to 12 characters'],
-  ]],
-  ['Battle', [
-    ['attack [move]', 'Use a random move, or the one named'],
-    ['moves [mon]', 'List its moves, or another mon\'s'],
-    ['catch', 'Throw a Poké Ball at the wild mon'],
-    ['run', 'Send the wild mon away'],
-  ]],
-  ['Evolve', [
-    ['evolve [mon]', 'Evolve with a stone or a trade, or pick what Eevee becomes'],
-    ['stop', 'Cancel an evolution'],
-  ]],
-  ['Records', [
-    ['stats', 'Its level, XP, evolution, and meters'],
-    ['box', "Every mon you've raised"],
-    ['party', 'The mons that come out for subagents. party add or remove <mon> picks them, party assign <agent> <mon> ties one to an agent type'],
-    ['dex [mon]', "The wild mons you've seen and caught"],
-    ['release <mon>', 'Release a mon, so it starts over'],
-  ]],
-  ['Settings', [
-    ['wander', 'Wander while idle', () => onOff(wander)],
-    ['needs', 'Food and happiness', () => onOff(needsOn)],
-    ['emoji', 'Emoji meters', () => onOff(emojiOn)],
-    ['size small|large', 'Band size', () => size],
-    ['images auto|on|off', 'Pixel images or half blocks', () => imageMode],
-    ['pane', 'Show the mon in a docked pane, not the band', () => onOff(paneOn)],
-    ['sync', 'Same mon in every open session', () => onOff(syncOn)],
-    ['autoevolve', 'Evolve on its own at its level', () => onOff(autoEvolve)],
-    ['nuzlocke', 'A fainted mon is lost for good', () => onOff(nuzlockeOn)],
-  ]],
-]
-// The hidden debug options, at the top of /pokemon help only while debug is on
-const DEBUG_HELP = ['Debug', [
-  ['wild [mon]', 'Call a wild mon now, or the one named; add shiny for its shiny colors'],
-  ['kill', 'Faint the mon now, or lose it under nuzlocke'],
-]]
 const OPTIONS = [...HELP.flatMap(([, rows]) => rows.map(([usage]) => usage.split(' ')[0])), 'help']
-const USAGE_WIDTH = Math.max(...[DEBUG_HELP, ...HELP].flatMap(([, rows]) => rows.map(([usage]) => usage.length))) + 2
-// A setting shows its value ahead of what it does, so the values line up in a column
-function helpText(debug) {
-  const groups = (debug ? [DEBUG_HELP, ...HELP] : HELP).map(([title, rows]) => title + '\n' + rows.map(([usage, does, value]) => '  ' + usage.padEnd(USAGE_WIDTH) + (value ? value().padEnd(7) : '') + does).join('\n'))
-  return 'Usage: /pokemon <option>\n\n' + groups.join('\n\n')
-}
+
 const PET_LINES = ['loves it', 'wiggles happily', 'leans into your hand', 'does a little hop', 'looks very pleased']
-
-const FALLBACK_MOVES = [{ name: 'Tackle', effect: 'tackle' }]
-const moveKey = (name) => name.toLowerCase().replace(/[\s\-_'.]/g, '')
-
-// A mon's moves, like "Pikachu knows Thunderbolt, Quick Attack, Thunder, Agility."
-function movesText(name) {
-  const known = movesOf(name)
-  const moves = known.length > 0 ? known : FALLBACK_MOVES
-  return { text: nameOf(name) + ' knows ' + moves.map((m) => m.name).join(', ') + '.' }
-}
-
-// Play a random move, or the one named, and announce it. "list" lists the moves instead.
-function attackCommand(wanted) {
-  const name = nameOf(mon)
-  if (wanted === 'list') return movesText(mon)
-  if (attack) return { text: name + ' is still attacking.' }
-  if (food) return { text: name + ' is busy eating.' }
-  const known = movesOf(mon)
-  const moves = known.length > 0 ? known : FALLBACK_MOVES
-  // Facing a foe, a random move is one that reaches it, and any such move is aimed at it
-  const battle = wild?.phase === 'battle'
-  const pool = battle && !wanted ? foeMoves() : moves
-  const move = wanted ? moves.find((m) => moveKey(m.name) === moveKey(wanted)) : pool[Math.floor(Math.random() * pool.length)]
-  if (!move) return { text: name + ' doesn\'t know "' + wanted + '". Its moves: ' + moves.map((m) => m.name).join(', ') + '.' }
-  startAttack(move, { foe: battle && aimsAhead(move) })
-  return { text: name + ' used ' + move.name + '!' + (move.text ? '\n' + move.text : '') }
-}
 
 // Send the frame only when it differs from the last one sent or drawn. A resize can
 // remount the band, and the host then refuses frames for the old one, so a refused
@@ -2815,27 +701,27 @@ let refusedAt = -Infinity
 function blitFrame($) {
   const zoom = bandZoom()
   if (!zoom) return
-  if (imageRetryAt !== null && tick >= imageRetryAt) imageRetryAt = null
+  if (S.imageRetryAt !== null && S.tick >= S.imageRetryAt) S.imageRetryAt = null
   // Going between the Image and cells takes a redraw, so the blits wait for it
-  if (drawsImage() !== drawnImage || drawsHearts() !== drawnHearts) return $.ui.invalidate('ui.render')
-  if (drawnHearts) blitHearts($)
-  if (drawnImage) return blitImage($, zoom)
+  if (drawsImage() !== S.drawnImage || drawsHearts() !== S.drawnHearts) return $.ui.invalidate('ui.render')
+  if (S.drawnHearts) blitHearts($)
+  if (S.drawnImage) return blitImage($, zoom)
   const cells = cellsNow()
-  if (cells === sentCells) return
-  sentCells = cells
+  if (cells === S.sentCells) return
+  S.sentCells = cells
   $.ui
-    .blit({ requestId: bandId, key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells })
+    .blit({ requestId: S.bandId, key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells })
     .then((result) => {
       if (!result?.deny) return
-      sentCells = null
+      S.sentCells = null
       redrawRefused($, result.deny)
     })
     .catch((err) => logOnce($, err))
 }
 
 function redrawRefused($, deny) {
-  if (tick - refusedAt < REDRAW_AFTER_REFUSAL_TICKS) return
-  refusedAt = tick
+  if (S.tick - refusedAt < REDRAW_AFTER_REFUSAL_TICKS) return
+  refusedAt = S.tick
   logOnce($, 'frame refused: ' + deny)
   $.ui.invalidate('ui.render')
 }
@@ -2844,16 +730,16 @@ function redrawRefused($, deny) {
 // or drawn. A terminal that draws the Image's alt gets half blocks for a while.
 function blitImage($, zoom) {
   const source = imageNow(zoom)
-  if (source.png === sentImage) return
-  sentImage = source.png
+  if (source.png === S.sentImage) return
+  S.sentImage = source.png
   $.ui
-    .blit({ requestId: bandId, key: 'pokemon', columns: zoom.columns, rows: zoom.rows, source })
+    .blit({ requestId: S.bandId, key: 'pokemon', columns: zoom.columns, rows: zoom.rows, source })
     .then((result) => {
       if (!result?.deny) {
-        imagesDrawn = true
+        S.imagesDrawn = true
         return
       }
-      sentImage = null
+      S.sentImage = null
       deniedImage($, result.deny)
     })
     .catch((err) => logOnce($, err))
@@ -2862,16 +748,16 @@ function blitImage($, zoom) {
 // Send the pixel hearts as drawn, once per PNG, to learn whether the terminal draws them
 function blitHearts($) {
   const source = heartsImage(filledIcons('happiness'))
-  if (source.png === sentHearts) return
-  sentHearts = source.png
+  if (source.png === S.sentHearts) return
+  S.sentHearts = source.png
   $.ui
-    .blit({ requestId: bandId, key: 'hearts', columns: STAT_ICONS, rows: 1, source })
+    .blit({ requestId: S.bandId, key: 'hearts', columns: STAT_ICONS, rows: 1, source })
     .then((result) => {
       if (!result?.deny) {
-        imagesDrawn = true
+        S.imagesDrawn = true
         return
       }
-      sentHearts = null
+      S.sentHearts = null
       deniedImage($, result.deny)
     })
     .catch((err) => logOnce($, err))
@@ -2879,13 +765,13 @@ function blitHearts($) {
 
 function deniedImage($, deny) {
   if (!/draws its alt/.test(deny)) return redrawRefused($, deny)
-  if (imageRetryAt !== null) return
+  if (S.imageRetryAt !== null) return
   // A terminal that has drawn Images denies one only for a while, as when its focus
   // resets, so the wait starts over
-  if (imagesDrawn) imageWait = IMAGE_WAIT_TICKS[0]
-  imagesDrawn = false
-  imageRetryAt = tick + imageWait
-  imageWait = Math.min(IMAGE_WAIT_TICKS[1], imageWait * 2)
+  if (S.imagesDrawn) S.imageWait = IMAGE_WAIT_TICKS[0]
+  S.imagesDrawn = false
+  S.imageRetryAt = S.tick + S.imageWait
+  S.imageWait = Math.min(IMAGE_WAIT_TICKS[1], S.imageWait * 2)
   logOnce($, 'drawing half blocks and text hearts: ' + deny)
   $.ui.invalidate('ui.render')
 }
@@ -2894,7 +780,7 @@ function deniedImage($, deny) {
 // host draws a plugin's band ten times a second at most.
 const DESKTOP_FRAME_TICKS = 2
 function redrawSvg($) {
-  if (!bandZoom() || svgNow() === sentSvg) return
+  if (!bandZoom() || svgNow() === S.sentSvg) return
   $.ui.invalidate('ui.render')
 }
 
@@ -2910,24 +796,24 @@ const BEAT_TICKS = BEAT_MS / TICK_MS
 const OFF_AFTER_MS = 60 * 1000
 
 async function slowMeters($, now, offMs) {
-  await freshen($, Object.keys(stats))
+  await freshen($, Object.keys(S.stats))
   // A stamp set during the gap, by another session, only sees the gap after it
   const overlap = (at) => Math.min(offMs, Math.max(0, now - at))
-  const draining = Object.keys(stats).filter((name) => !stats[name].parked)
+  const draining = Object.keys(S.stats).filter((name) => !S.stats[name].parked)
   for (const name of draining) {
-    const record = { ...stats[name] }
+    const record = { ...S.stats[name] }
     for (const key of Object.keys(STATS)) {
       if (record[key]?.at !== undefined) record[key] = { ...record[key], at: record[key].at + overlap(record[key].at) * (1 - OFF_DRAIN) }
     }
-    stats[name] = record
+    S.stats[name] = record
   }
   // A heal takes open time too, so its end moves on by all of the gap it ran through
-  const healing = Object.keys(stats).filter((name) => typeof stats[name].healing?.until === 'number')
+  const healing = Object.keys(S.stats).filter((name) => typeof S.stats[name].healing?.until === 'number')
   for (const name of healing) {
-    const { from, until } = stats[name].healing
+    const { from, until } = S.stats[name].healing
     const start = from ?? until - HEAL_MS
     const shift = overlap(start)
-    stats[name] = { ...stats[name], healing: { from: start + shift, until: until + shift } }
+    S.stats[name] = { ...S.stats[name], healing: { from: start + shift, until: until + shift } }
   }
   await saveRecords($, [...new Set([...draining, ...healing])])
 }
@@ -2937,13 +823,13 @@ async function slowMeters($, now, offMs) {
 async function beat($) {
   const since = await $.store.get('seenAt')
   const now = await $.clock.now()
-  nowMs = now
+  S.nowMs = now
   if (typeof since === 'number' && now - since > OFF_AFTER_MS) await slowMeters($, now, now - since - BEAT_MS)
   await $.store.set('seenAt', now)
 }
 
 async function resyncMeters($) {
-  nowMs = await $.clock.now()
+  S.nowMs = await $.clock.now()
   $.ui.invalidate('ui.render')
 }
 
@@ -2957,68 +843,41 @@ const FAINT_AFTER_MS = 3 * 3600 * 1000
 const RUNAWAY_AFTER_MS = 24 * 3600 * 1000
 const FAINT_GRACE_MS = 10 * 60 * 1000
 const COUNTED_GAP_MS = OFF_AFTER_MS
-const HEAL_MS = 5 * 60 * 1000
-const REVIVED = { food: 50, happiness: 30 }
-
-const revivedMeters = () => ({ food: { value: REVIVED.food, at: nowMs }, happiness: { value: REVIVED.happiness, at: nowMs } })
-
-const conditionOf = (name) => (hasRunAway(name) ? 'ran away' : isHealing(name) ? 'healing' : isFainted(name) ? 'fainted' : null)
-
-const goneLine = (name) => (isDead(name) ? displayName(name) + ' fainted for good. Rest well.' : nameOf(name) + ' ran away. It may turn up in the wild.')
-
-// What a command the shown mon can't do while it's down says instead
-function downReply() {
-  const name = nameOf(mon)
-  if (isGone(mon)) return { text: goneLine(mon) + ' /pokemon <mon> picks another.' }
-  if (isHealing(mon)) {
-    const minutes = Math.max(1, Math.ceil((stats[mon].healing.until - nowMs) / 60000))
-    return { text: name + ' is resting at the Pokémon Center. It\'s back in ' + minutes + ' min.' }
-  }
-  return { text: name + ' has fainted. /pokemon revive takes it to a Pokémon Center.' }
-}
-
-// The heal in this session's ticks, from its saved times, so a session started midway
-// joins it where it's at
-function healTicks() {
-  const { from, until } = stats[mon].healing
-  const start = Math.min(from ?? until - HEAL_MS, until)
-  return { startTick: tick - Math.max(0, Math.round((nowMs - start) / TICK_MS)), endTick: tick + Math.round((until - nowMs) / TICK_MS) }
-}
 
 // The mon on show ran away or died, so the band shows the next one in the box: the
 // highest level one still standing, else a fainted one. With none, the band is a line of
 // text. Returns the mon it shows next, if any.
 async function leaveBand($, { save = true } = {}) {
-  const gone = mon
-  const next = Object.keys(stats)
-    .filter((name) => name !== gone && MONS.includes(name) && stats[name] && typeof stats[name] === 'object' && !isGone(name))
+  const gone = S.mon
+  const next = Object.keys(S.stats)
+    .filter((name) => name !== gone && MONS.includes(name) && S.stats[name] && typeof S.stats[name] === 'object' && !isGone(name))
     .sort((a, b) => isFainted(a) - isFainted(b) || levelOf(b) - levelOf(a) || a.localeCompare(b))[0]
-  attack = null
-  food = null
-  evolving = null
-  evolveDue = null
-  if (wild) fleeWild($, true)
+  S.attack = null
+  S.food = null
+  S.evolving = null
+  S.evolveDue = null
+  if (S.wild) fleeWild($, true)
   if (next) await switchTo($, next, { save })
-  sentCells = null
+  S.sentCells = null
   $.ui.invalidate('ui.render')
   return next ?? null
 }
 
 async function faintMon($) {
-  const { starving, asleep, ...record } = stats[mon]
-  stats[mon] = { ...record, food: { value: 0, at: nowMs }, happiness: { value: 0, at: nowMs }, fainted: { ms: 0, at: nowMs } }
-  await saveRecords($, [mon])
-  $.ui.toast(nameOf(mon) + ' fainted! /pokemon revive takes it to a Pokémon Center.')
+  const { starving, asleep, ...record } = S.stats[S.mon]
+  S.stats[S.mon] = { ...record, food: { value: 0, at: S.nowMs }, happiness: { value: 0, at: S.nowMs }, fainted: { ms: 0, at: S.nowMs } }
+  await saveRecords($, [S.mon])
+  $.ui.toast(nameOf(S.mon) + ' fainted! /pokemon revive takes it to a Pokémon Center.')
   $.ui.invalidate('ui.render')
 }
 
 // The record stays, marked with when it left and the variant it was shown in, for its
 // comeback in the wild
 async function runAway($) {
-  const name = nameOf(mon)
-  const { fainted, healing, starving, asleep, ...record } = stats[mon]
-  stats[mon] = { ...record, ranAway: { at: nowMs, variant } }
-  await saveRecords($, [mon])
+  const name = nameOf(S.mon)
+  const { fainted, healing, starving, asleep, ...record } = S.stats[S.mon]
+  S.stats[S.mon] = { ...record, ranAway: { at: S.nowMs, variant: S.variant } }
+  await saveRecords($, [S.mon])
   const next = await leaveBand($)
   $.ui.toast(name + ' ran away! It may turn up in the wild.' + (next ? ' ' + nameOf(next) + ' takes its place.' : ''))
 }
@@ -3027,12 +886,12 @@ async function runAway($) {
 // species until a new one is caught, and the graveyard keeps who it was.
 async function loseMon($, name) {
   const shownName = nameOf(name)
-  const grave = { mon: name, level: levelOf(name), at: nowMs, ...(stats[name]?.nickname ? { nickname: stats[name].nickname } : {}) }
+  const grave = { mon: name, level: levelOf(name), at: S.nowMs, ...(S.stats[name]?.nickname ? { nickname: S.stats[name].nickname } : {}) }
   const graveyard = await $.store.get('graveyard')
   await $.store.set('graveyard', [...(Array.isArray(graveyard) ? graveyard : []), grave])
-  stats[name] = { dead: { at: nowMs } }
+  S.stats[name] = { dead: { at: S.nowMs } }
   await saveRecords($, [name])
-  const next = name === mon ? await leaveBand($) : null
+  const next = name === S.mon ? await leaveBand($) : null
   $.ui.toast(shownName + ' fainted for good. Rest well.' + (next ? ' ' + nameOf(next) + ' takes its place.' : ''))
 }
 
@@ -3048,82 +907,74 @@ async function loseFainted($) {
 
 // Move the shown mon's faint clock or runaway clock on, as often as the beat
 async function checkNeglect($) {
-  if (checkingNeglect) return
-  checkingNeglect = true
+  if (S.checkingNeglect) return
+  S.checkingNeglect = true
   try {
-    nowMs = await $.clock.now()
-    if (nuzlockeOn) await loseFainted($)
-    await freshen($, [mon])
-    const record = stats[mon]
-    if (!needsOn || !record || isGone(mon) || isHealing(mon)) return
-    const now = nowMs
-    const counts = now - (firstShown.get(mon) ?? now) >= FAINT_GRACE_MS
+    S.nowMs = await $.clock.now()
+    if (S.nuzlockeOn) await loseFainted($)
+    await freshen($, [S.mon])
+    const record = S.stats[S.mon]
+    if (!S.needsOn || !record || isGone(S.mon) || isHealing(S.mon)) return
+    const now = S.nowMs
+    const counts = now - (S.firstShown.get(S.mon) ?? now) >= FAINT_GRACE_MS
     const added = (clock) => (counts && clock && now - clock.at <= COUNTED_GAP_MS ? Math.max(0, now - clock.at) : 0)
-    if (isFainted(mon)) {
+    if (isFainted(S.mon)) {
       const ms = (record.fainted.ms ?? 0) + added(record.fainted)
       if (ms >= RUNAWAY_AFTER_MS) return await runAway($)
-      stats[mon] = { ...record, fainted: { ms, at: now } }
-      return await saveRecords($, [mon])
+      S.stats[S.mon] = { ...record, fainted: { ms, at: now } }
+      return await saveRecords($, [S.mon])
     }
-    if (statNow(mon, 'food') > 0 || statNow(mon, 'happiness') > 0) {
+    if (statNow(S.mon, 'food') > 0 || statNow(S.mon, 'happiness') > 0) {
       if (!record.starving) return
       const { starving, ...rest } = record
-      stats[mon] = rest
-      return await saveRecords($, [mon])
+      S.stats[S.mon] = rest
+      return await saveRecords($, [S.mon])
     }
     const ms = (record.starving?.ms ?? 0) + added(record.starving)
-    if (ms >= FAINT_AFTER_MS) return await (nuzlockeOn ? loseMon($, mon) : faintMon($))
-    stats[mon] = { ...record, starving: { ms, at: now } }
-    await saveRecords($, [mon])
+    if (ms >= FAINT_AFTER_MS) return await (S.nuzlockeOn ? loseMon($, S.mon) : faintMon($))
+    S.stats[S.mon] = { ...record, starving: { ms, at: now } }
+    await saveRecords($, [S.mon])
   } finally {
-    checkingNeglect = false
+    S.checkingNeglect = false
   }
 }
 
-// A heal that's over stands the mon up with some food and happiness, and a fresh faint clock
-function settleHeal(name) {
-  if (!isHealing(name) || nowMs < stats[name].healing.until) return false
-  const { fainted, healing, starving, ...record } = stats[name]
-  stats[name] = { ...record, ...revivedMeters() }
-  return true
-}
-
 async function finishHeal($) {
-  finishingHeal = true
+  S.finishingHeal = true
   try {
-    nowMs = await $.clock.now()
-    await freshen($, [mon])
-    const healed = settleHeal(mon)
-    if (healed) await saveRecords($, [mon])
-    if (healed || !isFainted(mon)) {
+    S.nowMs = await $.clock.now()
+    await freshen($, [S.mon])
+    const healed = settleHeal(S.mon)
+    if (healed) await saveRecords($, [S.mon])
+    if (healed || !isFainted(S.mon)) {
       markActive()
-      hopStart = tick
-      releasedAt = tick
-      $.ui.toast(nameOf(mon) + ' is healed and back on its feet!')
+      S.hopStart = S.tick
+      S.releasedAt = S.tick
+      $.ui.toast(nameOf(S.mon) + ' is healed and back on its feet!')
       $.ui.invalidate('ui.render')
     }
   } finally {
-    finishingHeal = false
+    S.finishingHeal = false
   }
 }
 
 // Stop whatever the shown mon was doing once it's down, here or in another session
 function stepDown($) {
   if (!isDown()) return
-  if (isHealing(mon) && !finishingHeal && nowMs >= stats[mon].healing.until) finishHeal($).catch((err) => logOnce($, err))
-  attack = null
-  evolving = null
-  evolveDue = null
-  food = null
+  if (isHealing(S.mon) && !S.finishingHeal && S.nowMs >= S.stats[S.mon].healing.until) finishHeal($).catch((err) => logOnce($, err))
+  S.attack = null
+  S.evolving = null
+  S.evolveDue = null
+  S.food = null
 }
 
 // /pokemon revive [<mon>] takes a fainted mon to a Pokémon Center for HEAL_MS
 async function reviveCommand($, wanted) {
-  const name = wanted || mon
+  const name = wanted || S.mon
   if (!MONS.includes(name)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
   await freshen($, [name])
-  if (name === mon && isDown()) {
-    if (isGone(mon) || isHealing(mon)) return downReply()
+  if (name === S.mon && isDown()) {
+    if (isGone(S.mon) || isHealing(S.mon)) return downReply()
   } else if (isDead(name)) {
     return { text: displayName(name) + ' is gone.' }
   } else if (hasRunAway(name)) {
@@ -3132,33 +983,28 @@ async function reviveCommand($, wanted) {
   const shown = nameOf(name)
   if (!isFainted(name)) return { text: shown + ' hasn\'t fainted.' }
   if (isHealing(name)) return { text: shown + ' is already at the Pokémon Center.' }
-  if (nuzlockeOn) return { text: 'Nuzlocke is on, so ' + shown + ' can\'t be revived.' }
-  stats[name] = { ...stats[name], healing: { from: nowMs, until: nowMs + HEAL_MS } }
+  if (S.nuzlockeOn) return { text: 'Nuzlocke is on, so ' + shown + ' can\'t be revived.' }
+  S.stats[name] = { ...S.stats[name], healing: { from: S.nowMs, until: S.nowMs + HEAL_MS } }
   await saveRecords($, [name])
   // It comes back out of its ball at home
-  if (name === mon) x = homeX()
+  if (name === S.mon) S.x = homeX()
   $.ui.invalidate('ui.render')
   return { text: 'You take ' + shown + ' to a Pokémon Center. It\'ll be back on its feet in ' + HEAL_MS / 60000 + ' minutes.' }
 }
 
 // The shown mon is at the Pokémon Center, so it can't be swapped out until it's back
 async function stillHealing($) {
-  await freshen($, [mon])
-  return isHealing(mon) && nowMs < stats[mon].healing.until
+  await freshen($, [S.mon])
+  return isHealing(S.mon) && S.nowMs < S.stats[S.mon].healing.until
 }
 
-const healingReply = () => ({ text: downReply().text + ' Wait for it before switching.' })
-
-// Joins items as "A", "A and B", or "A, B, and C"
-const andList = (items) => (items.length < 3 ? items.join(' and ') : items.slice(0, -1).join(', ') + ', and ' + items.at(-1))
-
 async function nuzlockeCommand($) {
-  nuzlockeOn = !nuzlockeOn
-  await $.store.set('nuzlocke', nuzlockeOn)
-  if (!nuzlockeOn) return { text: 'Nuzlocke is off. A mon that faints can be revived again. The ones you lost stay gone.' }
+  S.nuzlockeOn = !S.nuzlockeOn
+  await $.store.set('nuzlocke', S.nuzlockeOn)
+  if (!S.nuzlockeOn) return { text: 'Nuzlocke is off. A mon that faints can be revived again. The ones you lost stay gone.' }
   const saved = await $.store.get('stats')
   if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
-  const doomed = Object.keys(stats).filter((name) => MONS.includes(name) && isFainted(name) && !isHealing(name))
+  const doomed = Object.keys(S.stats).filter((name) => MONS.includes(name) && isFainted(name) && !isHealing(name))
   const fate = doomed.length === 1 ? ' has fainted already, so it\'s gone for good in a moment.' : ' have fainted already, so they\'re gone for good in a moment.'
   const warning = doomed.length > 0 ? ' ' + andList(doomed.map(nameOf)) + fate : ''
   return { text: 'Nuzlocke is on. A mon that faints is gone for good, with no revive and no coming back. Keep them fed and happy.' + warning }
@@ -3176,9 +1022,6 @@ function logOnce($, err) {
   } catch {}
 }
 
-// Any light theme takes the light ink. Every other theme, or none, takes the dark.
-const inkFor = (theme) => (typeof theme === 'string' && theme.startsWith('light') ? INKS.light : INKS.dark)
-
 async function themeInk($) {
   try {
     const rows = await $.config.list()
@@ -3192,26 +1035,21 @@ async function themeInk($) {
 // Show another mon, parking the one that leaves so its meters stop where they are
 async function switchTo($, asked, { save = true } = {}) {
   const wasHome = isHome()
-  evolveDue = null
-  const left = mon
-  nowMs = await $.clock.now()
+  S.evolveDue = null
+  const left = S.mon
+  S.nowMs = await $.clock.now()
   await freshen($, [left, asked])
   settleHeal(asked)
-  if (!firstShown.has(asked)) firstShown.set(asked, nowMs)
-  if (asked !== left && (stats[left] || stats[asked])) {
+  if (!S.firstShown.has(asked)) S.firstShown.set(asked, S.nowMs)
+  if (asked !== left && (S.stats[left] || S.stats[asked])) {
     park(left)
     unpark(asked)
     await saveRecords($, [left, asked])
   }
-  mon = asked
-  if (wasHome) x = homeX()
+  S.mon = asked
+  if (wasHome) S.x = homeX()
   clampX()
   if (save) await saveMon($)
-}
-
-const addCustom = (name, { sprite, moves }) => {
-  addSprite(name, sprite)
-  MOVES[name] = moves
 }
 
 // Load the mons fetched with /pokemon new, in this session or another, not loaded yet
@@ -3249,7 +1087,7 @@ async function newCommand($, wanted) {
     addCustom(name, entry)
     await switchTo($, name)
     $.ui.invalidate('ui.render')
-    return { text: 'Fetched gen ' + entry.gen + ' ' + nameOf(name) + '. It knows ' + entry.moves.join(', ') + '. Now showing ' + variant + ' ' + nameOf(name) + '.' }
+    return { text: 'Fetched gen ' + entry.gen + ' ' + nameOf(name) + '. It knows ' + entry.moves.join(', ') + '. Now showing ' + S.variant + ' ' + nameOf(name) + '.' }
   } catch (err) {
     return { text: "Couldn't fetch " + (name || 'a mon') + ': ' + (err?.message ?? String(err)) }
   }
@@ -3264,132 +1102,33 @@ async function openPane($, columns) {
 
 // The band draws the scene again, and blits go to it
 function leavePane($) {
-  if (!paneShown) return
-  paneShown = false
-  bandId = null
+  if (!S.paneShown) return
+  S.paneShown = false
+  S.bandId = null
   $.ui.invalidate('ui.render')
 }
 
 async function paneCommand($, presentation) {
-  if (paneOn) {
-    paneOn = false
+  if (S.paneOn) {
+    S.paneOn = false
     await $.store.set('pane', false)
     await $.ui.close({ id: PANE_ID })
     leavePane($)
-    return { text: nameOf(mon) + ' is back above the prompt.' }
+    return { text: nameOf(S.mon) + ' is back above the prompt.' }
   }
-  paneOn = true
+  S.paneOn = true
   const columns = Math.floor((presentation?.columns ?? 0) / 2)
   await $.store.set('pane', true)
   await $.store.set('paneColumns', columns)
   const opened = await openPane($, columns)
-  if (!opened.isPlaced) return { text: nameOf(mon) + "'s pane is open but waits for a wider terminal. /pokemon pane brings it back to the band." }
-  if (presentation?.isFullscreen === false) return { text: nameOf(mon) + ' moved to a pane above the prompt. It docks beside the transcript in the fullscreen layout. /pokemon pane brings it back to the band.' }
-  return { text: nameOf(mon) + ' moved to a pane beside the transcript. /pokemon pane brings it back to the band.' }
-}
-
-// Lays out the scene, the mon with its meters beside or over it, in the room the band
-// or the pane gives it, and returns its parts for the site to wrap
-function drawScene($, e, site) {
-  const desktop = e.surface === 'desktop'
-  const elements = $.ui.resolve(e)
-  const { Box, Text } = elements
-  const wasHome = isHome()
-  bandId = e.requestId
-  bandSurface = e.surface
-  maxRows = site.maxRows
-  // The panel goes over the scene's right end when the band shows at full size and
-  // has room for it, and beside a shrunk band otherwise. The desktop draws text in its
-  // own font, so its meters can't line up with the pixels and always sit beside them.
-  // A small band at its own size lays out as a full-size one and shows it at its scale,
-  // so its panel and margin take more of the scene's columns per band column.
-  const panelColumns = meterColumns() + 1
-  const fullSize = !isSmall() && bandRows() <= maxRows
-  const small = smallZoom()
-  // It goes over the scene only when the mon at home still keeps its gap from it.
-  const atHome = SPRITES[mon].width + gapRightOf(mon)
-  panel = !desktop && fullSize && site.bodyColumns >= atHome + panelColumns ? panelColumns : 0
-  if (small && !desktop && site.bodyColumns >= atHome * small.scale + panelColumns) panel = Math.ceil(panelColumns / small.scale)
-  lastBodyColumns = site.bodyColumns
-  columns = stripTarget(site.bodyColumns)
-  drawnColumns = columns
-  // The party mons' columns open up on the strip's left, so the lead keeps its spot on screen
-  const hadCrew = crewWidth
-  crewWidth = Math.max(0, columns - baseStrip(sceneRoom(site.bodyColumns)))
-  margin = fullSize ? Math.max(0, Math.min(BUBBLE_SPAN, site.bodyColumns - panel - columns)) : 0
-  if (small) {
-    const room = Math.floor((site.bodyColumns - (panel > 0 ? 0 : panelColumns)) / small.scale) - columns - panel - 1
-    margin = Math.max(0, Math.min(BUBBLE_SPAN, room))
-  }
-  const shift = crewWidth - hadCrew
-  if (wasHome) x = homeX()
-  else x += shift
-  if (shift !== 0 && wanderTarget !== null) wanderTarget = Math.max(leadFloor(), Math.min(homeX(), wanderTarget + shift))
-  if (food) food.x += shift
-  clampX()
-
-  const zoom = bandZoom()
-  // Pixel hearts go out with the band's blits, so a band too short for them has none
-  drawnHearts = Boolean(zoom) && drawsHearts()
-  const meter = (key, lead = '') => {
-    const text = Text({ color: meterStyle()[key].color, children: [lead + iconsFor(key)] })
-    if (key !== 'happiness' || !drawnHearts) return text
-    const source = heartsImage(filledIcons(key))
-    // Until a blit says the terminal draws Images, the next tick asks with one
-    sentHearts = imagesDrawn ? source.png : null
-    return elements.Image({ key: 'hearts', source, columns: STAT_ICONS, rows: 1, alt: iconsFor(key) })
-  }
-  const level = Text({ dimColor: true, children: [levelLine()] })
-  let corner
-  drawnImage = false
-  if (isGone(mon)) {
-    // Ran away or lost with no other mon in the box, the band is just a line saying so
-    bandId = null
-    drawnHearts = false
-    corner = [Text({ dimColor: true, children: [goneLine(mon)] })]
-  } else if (zoom) {
-    let sprite
-    if (desktop) {
-      const svg = svgNow()
-      if (svg !== sentSvg) svgFrame += 1
-      sentSvg = svg
-      const alt = isOnStage(wild) ? nameOf(mon) + ' vs. wild ' + displayName(wild.mon) : nameOf(mon) + (conditionOf(mon) ? ', ' + conditionOf(mon) : '')
-      const image = elements.Svg({ source: svg, alt, width: zoom.columns * PIXEL_PX, height: zoom.rows * 2 * PIXEL_PX })
-      sprite = Box({ key: 'pokemon-' + svgFrame, children: [image] })
-    } else if (drawsImage()) {
-      const source = imageNow(zoom)
-      // Until a blit says the terminal draws Images, the next tick asks with one
-      sentImage = imagesDrawn ? source.png : null
-      drawnImage = true
-      sprite = elements.Image({ key: 'pokemon', source, columns: zoom.columns, rows: zoom.rows, alt: ' ' })
-    } else {
-      sentCells = cellsNow()
-      sprite = elements.Raster({ key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells: sentCells })
-    }
-    const meterLines = needsOn ? [level, meter('food'), meter('happiness')] : [level]
-    if (panel > 0) {
-      const meters = Box({ position: 'absolute', right: 0, bottom: 0, width: panelColumns, paddingLeft: 1, flexDirection: 'column', children: meterLines })
-      corner = [Box({ position: 'relative', children: [sprite, meters] })]
-    } else {
-      const meters = Box({ flexDirection: 'column', justifyContent: 'flex-end', paddingLeft: 1, children: meterLines })
-      corner = site.bodyColumns >= zoom.columns + panelColumns ? [sprite, meters] : [sprite]
-      // The desktop clips the band's right edge, so its meters keep clear of it
-      if (desktop) corner = [Box({ flexDirection: 'row', flexShrink: 0, paddingRight: 2, children: corner })]
-    }
-  } else {
-    // Too short even for a shrunk mon: its name, level, and meters on one line, and no blits
-    bandId = null
-    const name = Text({ children: [nameOf(mon) + ' ' + levelLine() + (conditionOf(mon) ? ' ' + conditionOf(mon) : '')] })
-    const meters = needsOn ? [meter('food', ' '), meter('happiness', ' ')] : []
-    corner = [Box({ flexDirection: 'row', children: [name, ...meters] })]
-  }
-
-  return corner
+  if (!opened.isPlaced) return { text: nameOf(S.mon) + "'s pane is open but waits for a wider terminal. /pokemon pane brings it back to the band." }
+  if (presentation?.isFullscreen === false) return { text: nameOf(S.mon) + ' moved to a pane above the prompt. It docks beside the transcript in the fullscreen layout. /pokemon pane brings it back to the band.' }
+  return { text: nameOf(S.mon) + ' moved to a pane beside the transcript. /pokemon pane brings it back to the band.' }
 }
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
-    sessionToken = Math.random().toString(36).slice(2)
+    S.sessionToken = Math.random().toString(36).slice(2)
     await $.command.register({
       name: 'pokemon',
       description: 'Pick the Pokémon above the prompt, pet it, feed it, put it to sleep, make it attack, list its moves, evolve it, or check your Pokédex',
@@ -3398,33 +1137,33 @@ export function register(on) {
     })
     await loadCustom($).catch((err) => logOnce($, err))
     const savedMon = await $.store.get('mon')
-    if (MONS.includes(savedMon)) mon = savedMon
-    seenPick = savedMon ?? null
-    syncOn = (await $.store.get('sync')) === true
-    nuzlockeOn = (await $.store.get('nuzlocke')) === true
+    if (MONS.includes(savedMon)) S.mon = savedMon
+    S.seenPick = savedMon ?? null
+    S.syncOn = (await $.store.get('sync')) === true
+    S.nuzlockeOn = (await $.store.get('nuzlocke')) === true
     await loadPartyPicks($)
     forgetOldKeys($).catch((err) => logOnce($, err))
     const savedVariant = await $.store.get('variant')
-    if (VARIANTS.includes(savedVariant)) variant = savedVariant
-    wander = (await $.store.get('wander')) !== false
-    needsOn = (await $.store.get('needs')) !== false
-    emojiOn = (await $.store.get('emoji')) === true
+    if (VARIANTS.includes(savedVariant)) S.variant = savedVariant
+    S.wander = (await $.store.get('wander')) !== false
+    S.needsOn = (await $.store.get('needs')) !== false
+    S.emojiOn = (await $.store.get('emoji')) === true
     const savedSize = await $.store.get('size')
-    if (Object.hasOwn(SIZES, savedSize)) size = savedSize
+    if (Object.hasOwn(SIZES, savedSize)) S.size = savedSize
     const savedImages = await $.store.get('images')
-    if (Object.hasOwn(IMAGE_MODES, savedImages)) imageMode = savedImages
-    autoEvolve = (await $.store.get('autoEvolve')) !== false
-    paneOn = (await $.store.get('pane')) === true
-    paneShown = false
-    if (paneOn) openPane($, await $.store.get('paneColumns')).catch((err) => logOnce($, err))
+    if (Object.hasOwn(IMAGE_MODES, savedImages)) S.imageMode = savedImages
+    S.autoEvolve = (await $.store.get('autoEvolve')) !== false
+    S.paneOn = (await $.store.get('pane')) === true
+    S.paneShown = false
+    if (S.paneOn) openPane($, await $.store.get('paneColumns')).catch((err) => logOnce($, err))
     const savedStats = await $.store.get('stats')
-    if (savedStats && typeof savedStats === 'object') stats = savedStats
-    nowMs = await $.clock.now()
-    firstShown.set(mon, nowMs)
-    ink = await themeInk($)
+    if (savedStats && typeof savedStats === 'object') S.stats = savedStats
+    S.nowMs = await $.clock.now()
+    S.firstShown.set(S.mon, S.nowMs)
+    S.ink = await themeInk($)
     // A refused env read leaves the band as it is on any other terminal
     const unread = () => undefined
-    knownImages = drawsImages({
+    S.knownImages = drawsImages({
       program: await $.env.get('TERM_PROGRAM').catch(unread),
       version: await $.env.get('TERM_PROGRAM_VERSION').catch(unread),
       term: await $.env.get('TERM').catch(unread),
@@ -3433,12 +1172,12 @@ export function register(on) {
     applyImageMode()
     await beat($).catch((err) => logOnce($, err))
     // Shown again, a parked mon's meters pick up where they stopped
-    if (stats[mon]?.parked && !isGone(mon)) {
-      unpark(mon)
-      await saveStats($, [mon]).catch((err) => logOnce($, err))
+    if (S.stats[S.mon]?.parked && !isGone(S.mon)) {
+      unpark(S.mon)
+      await saveStats($, [S.mon]).catch((err) => logOnce($, err))
     }
     // The mon last picked ran away or was lost, so the session starts with the next one
-    if (isGone(mon)) await leaveBand($).catch((err) => logOnce($, err))
+    if (isGone(S.mon)) await leaveBand($).catch((err) => logOnce($, err))
     await checkNeglect($).catch((err) => logOnce($, err))
     $.clock.every(TICK_MS, () => {
       try {
@@ -3450,21 +1189,21 @@ export function register(on) {
         stepWake($)
         stepOwed($)
         // The band grows and shrinks back around a Transform
-        if (bandRows() !== drawnRows) {
-          drawnRows = bandRows()
+        if (bandRows() !== S.drawnRows) {
+          S.drawnRows = bandRows()
           $.ui.invalidate('ui.render')
         }
         // The strip grows and shrinks back around a wild mon's visit
-        if (bandId !== null && stripTarget(lastBodyColumns) !== drawnColumns) {
-          drawnColumns = stripTarget(lastBodyColumns)
+        if (S.bandId !== null && stripTarget(S.lastBodyColumns) !== S.drawnColumns) {
+          S.drawnColumns = stripTarget(S.lastBodyColumns)
           $.ui.invalidate('ui.render')
         }
-        if (tick % STAT_REDRAW_TICKS === 0) resyncMeters($).catch((err) => logOnce($, err))
-        if (tick % SYNC_TICKS === 0) syncSessions($).catch((err) => logOnce($, err))
-        if (tick % PARTY_SYNC_TICKS === 0) syncParty($).catch((err) => logOnce($, err))
-        if (tick % BEAT_TICKS === 0) beat($).then(() => checkNeglect($)).catch((err) => logOnce($, err))
-        if (bandId !== null && bandSurface === 'terminal') blitFrame($)
-        if (bandId !== null && bandSurface === 'desktop' && tick % DESKTOP_FRAME_TICKS === 0) redrawSvg($)
+        if (S.tick % STAT_REDRAW_TICKS === 0) resyncMeters($).catch((err) => logOnce($, err))
+        if (S.tick % SYNC_TICKS === 0) syncSessions($).catch((err) => logOnce($, err))
+        if (S.tick % PARTY_SYNC_TICKS === 0) syncParty($).catch((err) => logOnce($, err))
+        if (S.tick % BEAT_TICKS === 0) beat($).then(() => checkNeglect($)).catch((err) => logOnce($, err))
+        if (S.bandId !== null && S.bandSurface === 'terminal') blitFrame($)
+        if (S.bandId !== null && S.bandSurface === 'desktop' && S.tick % DESKTOP_FRAME_TICKS === 0) redrawSvg($)
       } catch (err) {
         logOnce($, err)
       }
@@ -3476,7 +1215,7 @@ export function register(on) {
   on('config.set', { key: 'theme' }, async ($, e, next) => {
     const result = await next(e)
     if (result?.value !== undefined) {
-      ink = inkFor(result.value)
+      S.ink = inkFor(result.value)
       $.ui.invalidate('ui.render')
     }
     return result
@@ -3490,66 +1229,66 @@ export function register(on) {
     // A pet doesn't wake a sleeping mon, so it doesn't count as activity
     if (asked !== 'pet' || !isAsleep()) markActive()
     clearAlert()
-    nowMs = await $.clock.now()
-    if (waitsForEvolution(asked)) return { text: nameOf(mon) + ' is evolving! /pokemon stop cancels it.' }
-    if (waitsForCare(asked)) return { text: nameOf(mon) + (food ? ' is busy eating.' : ' is enjoying the pets.') + ' Try again in a moment.' }
+    S.nowMs = await $.clock.now()
+    if (waitsForEvolution(asked)) return { text: nameOf(S.mon) + ' is evolving! /pokemon stop cancels it.' }
+    if (waitsForCare(asked)) return { text: nameOf(S.mon) + (S.food ? ' is busy eating.' : ' is enjoying the pets.') + ' Try again in a moment.' }
     const verb = asked.split(' ')[0]
-    const blocked = DOWN_WAITS.includes(verb) || (isGone(mon) && GONE_WAITS.includes(verb))
+    const blocked = DOWN_WAITS.includes(verb) || (isGone(S.mon) && GONE_WAITS.includes(verb))
     if (asked !== 'attack list' && isDown() && blocked) {
       // Healed or caught back in another session since the last sync, it carries on
-      await freshen($, [mon])
+      await freshen($, [S.mon])
       if (isDown()) return downReply()
     }
     if (MONS.includes(asked)) {
       await freshen($, [asked])
       if (isDead(asked)) return { text: displayName(asked) + ' is gone. Catch a new one in the wild to raise it again.' }
       if (hasRunAway(asked)) return { text: goneLine(asked) }
-      if (asked !== mon && (await stillHealing($))) return healingReply()
+      if (asked !== S.mon && (await stillHealing($))) return healingReply()
       await switchTo($, asked)
     } else if (asked === 'new' || asked.startsWith('new ')) {
       if (await stillHealing($)) return healingReply()
       return newCommand($, asked.slice('new'.length).trim())
     } else if (VARIANTS.includes(asked)) {
-      variant = asked
-      await $.store.set('variant', variant)
+      S.variant = asked
+      await $.store.set('variant', S.variant)
     } else if (asked === 'wander') {
-      wander = !wander
-      wanderTarget = null
-      await $.store.set('wander', wander)
-      return { text: nameOf(mon) + (wander ? ' is free to wander.' : ' is heading home.') }
+      S.wander = !S.wander
+      S.wanderTarget = null
+      await $.store.set('wander', S.wander)
+      return { text: nameOf(S.mon) + (S.wander ? ' is free to wander.' : ' is heading home.') }
     } else if (asked === 'pet') {
       // A mon as happy as can be, every heart filled, still enjoys it, but it fills no
       // meter and doesn't count as a pet
       const happiest = isHappiest()
       const sleeping = isAsleep()
       pet()
-      const line = nameOf(mon) + ' ' + (sleeping ? 'smiles in its sleep' : PET_LINES[Math.floor(Math.random() * PET_LINES.length)]) + ' ♥'
-      if (happiest) return { text: line + ' ' + nameOf(mon) + ' is already as happy as can be.' }
-      pettingFills = mon
+      const line = nameOf(S.mon) + ' ' + (sleeping ? 'smiles in its sleep' : PET_LINES[Math.floor(Math.random() * PET_LINES.length)]) + ' ♥'
+      if (happiest) return { text: line + ' ' + nameOf(S.mon) + ' is already as happy as can be.' }
+      S.pettingFills = S.mon
       const pets = Number((await $.store.get('pets')) ?? 0) + 1
       await $.store.set('pets', pets)
       return { text: line }
     } else if (asked === 'feed') {
-      if (isHere(wild)) return { text: 'Not now, a ' + wildName() + ' is right there!' }
+      if (isHere(S.wild)) return { text: 'Not now, a ' + wildName() + ' is right there!' }
       // A full mon, every food icon filled, still eats the berry, but it fills no meter
       // and doesn't count as a feed
       const full = isFull()
       const berry = feed()
       const article = /^[aeiou]/.test(berry.name) ? 'an ' : 'a '
-      const tossed = 'You toss ' + nameOf(mon) + ' ' + article + berry.name + ' ' + berry.emoji
-      if (full) return { text: tossed + '. ' + nameOf(mon) + ' is already full, so it just nibbles it.' }
+      const tossed = 'You toss ' + nameOf(S.mon) + ' ' + article + berry.name + ' ' + berry.emoji
+      if (full) return { text: tossed + '. ' + nameOf(S.mon) + ' is already full, so it just nibbles it.' }
       // The meters fill once it has eaten the berry
-      food.fills = mon
+      S.food.fills = S.mon
       const feeds = Number((await $.store.get('feeds')) ?? 0) + 1
       await $.store.set('feeds', feeds)
       return { text: tossed }
     } else if (asked === 'sleep') {
-      const name = nameOf(mon)
+      const name = nameOf(S.mon)
       if (isTuckedIn()) {
         await setAsleep($, false)
         return { text: name + ' wakes up.' }
       }
-      if (turnRunning) return { text: name + " can't sleep while Claude is working." }
+      if (S.turnRunning) return { text: name + " can't sleep while Claude is working." }
       await setAsleep($, true)
       return { text: name + ' curls up and falls asleep. Its meters drain slower until Claude starts working.' }
     } else if (asked === 'attack' || asked.startsWith('attack ')) {
@@ -3557,7 +1296,7 @@ export function register(on) {
     } else if (asked === 'catch') {
       return catchCommand()
     } else if (asked === 'run') {
-      if (!wild || wild.phase === 'fleeing') return { text: 'There\'s no wild Pokémon here.' }
+      if (!S.wild || S.wild.phase === 'fleeing') return { text: 'There\'s no wild Pokémon here.' }
       fleeWild($, true)
       return { text: 'Got away safely!' }
     } else if ((asked === 'wild' || asked.startsWith('wild ')) && (reply = await wildCommand($, asked.slice('wild'.length)))) {
@@ -3565,62 +1304,62 @@ export function register(on) {
     } else if (asked === 'kill' && (reply = await killCommand($))) {
       return reply
     } else if (asked === 'moves' || asked.startsWith('moves ')) {
-      const whose = asked.slice('moves'.length).trim() || mon
+      const whose = asked.slice('moves'.length).trim() || S.mon
       if (!MONS.includes(whose)) return { text: 'Unknown mon "' + whose + '". See /pokemon list for every mon.' }
       return movesText(whose)
     } else if (asked === 'needs') {
-      needsOn = !needsOn
-      await $.store.set('needs', needsOn)
+      S.needsOn = !S.needsOn
+      await $.store.set('needs', S.needsOn)
       $.ui.invalidate('ui.render')
-      const name = nameOf(mon)
-      const still = isFainted(mon) ? ' It\'s still fainted, so /pokemon revive takes it to a Pokémon Center.' : ''
-      return { text: (needsOn ? 'Needs are on. Keep ' + name + ' fed and happy.' : 'Needs are off. ' + name + ' won\'t get hungry or lonely.') + still }
+      const name = nameOf(S.mon)
+      const still = isFainted(S.mon) ? ' It\'s still fainted, so /pokemon revive takes it to a Pokémon Center.' : ''
+      return { text: (S.needsOn ? 'Needs are on. Keep ' + name + ' fed and happy.' : 'Needs are off. ' + name + ' won\'t get hungry or lonely.') + still }
     } else if (asked === 'emoji') {
-      emojiOn = !emojiOn
-      await $.store.set('emoji', emojiOn)
+      S.emojiOn = !S.emojiOn
+      await $.store.set('emoji', S.emojiOn)
       $.ui.invalidate('ui.render')
       const icons = iconsFor('food').trimEnd() + ' ' + iconsFor('happiness').trimEnd()
-      return { text: (emojiOn ? 'The meters show emoji: ' : 'The meters show text icons: ') + icons }
+      return { text: (S.emojiOn ? 'The meters show emoji: ' : 'The meters show text icons: ') + icons }
     } else if (asked === 'size' || asked.startsWith('size ')) {
       const wanted = asked.slice('size'.length).trim()
       const sizes = Object.keys(SIZES).join(', ')
-      if (!wanted) return { text: 'The band is ' + size + '. Sizes: ' + sizes + '.' }
+      if (!wanted) return { text: 'The band is ' + S.size + '. Sizes: ' + sizes + '.' }
       if (!Object.hasOwn(SIZES, wanted)) return { text: 'Unknown size "' + wanted + '". Try one of: ' + sizes + '.' }
-      size = wanted
-      await $.store.set('size', size)
+      S.size = wanted
+      await $.store.set('size', S.size)
       $.ui.invalidate('ui.render')
-      return { text: 'The band is ' + size + '.' }
+      return { text: 'The band is ' + S.size + '.' }
     } else if (asked === 'images' || asked.startsWith('images ')) {
       const wanted = asked.slice('images'.length).trim()
       const modes = Object.keys(IMAGE_MODES).join(', ')
-      const drawn = () => (noImages ? 'half blocks' : 'images')
-      if (!wanted) return { text: 'Images are ' + imageMode + ', so the band draws ' + drawn() + '. Modes: ' + modes + '.' }
+      const drawn = () => (S.noImages ? 'half blocks' : 'images')
+      if (!wanted) return { text: 'Images are ' + S.imageMode + ', so the band draws ' + drawn() + '. Modes: ' + modes + '.' }
       if (!Object.hasOwn(IMAGE_MODES, wanted)) return { text: 'Unknown mode "' + wanted + '". Try one of: ' + modes + '.' }
-      imageMode = wanted
-      await $.store.set('images', imageMode)
+      S.imageMode = wanted
+      await $.store.set('images', S.imageMode)
       applyImageMode()
       $.ui.invalidate('ui.render')
-      return { text: 'Images are ' + imageMode + ', so the band draws ' + drawn() + '.' }
+      return { text: 'Images are ' + S.imageMode + ', so the band draws ' + drawn() + '.' }
     } else if (asked === 'pane') {
       return paneCommand($, e.presentation)
     } else if (asked === 'sync') {
-      syncOn = !syncOn
-      await $.store.set('sync', syncOn)
-      const name = nameOf(mon)
-      if (!syncOn) return { text: 'Sync is off. Each session keeps the mon picked in it.' }
+      S.syncOn = !S.syncOn
+      await $.store.set('sync', S.syncOn)
+      const name = nameOf(S.mon)
+      if (!S.syncOn) return { text: 'Sync is off. Each session keeps the mon picked in it.' }
       // This session's mon becomes the pick the others follow
       await saveMon($)
       return { text: 'Sync is on. Every open session shows ' + name + ', and follows the next mon you pick.' }
     } else if (asked === 'autoevolve') {
-      autoEvolve = !autoEvolve
-      await $.store.set('autoEvolve', autoEvolve)
-      const name = nameOf(mon)
-      if (!autoEvolve) {
-        evolveDue = null
+      S.autoEvolve = !S.autoEvolve
+      await $.store.set('autoEvolve', S.autoEvolve)
+      const name = nameOf(S.mon)
+      if (!S.autoEvolve) {
+        S.evolveDue = null
         return { text: name + ' waits for /pokemon evolve when it reaches its evolution level.' }
       }
       // Already at its level, it evolves once idle
-      evolveDue = readyToEvolve()
+      S.evolveDue = readyToEvolve()
       return { text: name + ' evolves on its own once idle at its evolution level.' }
     } else if (asked === 'revive' || asked.startsWith('revive ')) {
       return reviveCommand($, asked.slice('revive'.length).trim())
@@ -3631,12 +1370,14 @@ export function register(on) {
     } else if (asked === 'stop') {
       return stopEvolution($)
     } else if (asked === 'stats') {
-      return { text: await statsText($) }
+      const pets = Number((await $.store.get('pets')) ?? 0)
+      const feeds = Number((await $.store.get('feeds')) ?? 0)
+      return { text: statsText(pets, feeds) }
     } else if (asked === 'box') {
       // List every record as last saved by any session
       const saved = await $.store.get('stats')
       if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
-      const healed = Object.keys(stats).filter((name) => name !== mon && settleHeal(name))
+      const healed = Object.keys(S.stats).filter((name) => name !== S.mon && settleHeal(name))
       if (healed.length > 0) await saveRecords($, healed)
       const dex = await $.store.get('dex')
       return { text: boxText(dex && typeof dex === 'object' ? dex : {}) }
@@ -3657,15 +1398,15 @@ export function register(on) {
       const wanted = asked.slice('release'.length).trim()
       if (MONS.includes(wanted)) await freshen($, [wanted])
       // The shown mon starts over, so a foe it faced leaves
-      if (wanted === mon && stats[wanted] && wild) fleeWild($)
+      if (wanted === S.mon && S.stats[wanted] && S.wild) fleeWild($)
       const result = releaseCommand(wanted)
       if (MONS.includes(wanted)) await saveRecords($, [wanted])
       $.ui.invalidate('ui.render')
       return result
     } else if (asked === 'nickname' || asked.startsWith('nickname ')) {
-      await freshen($, [mon])
+      await freshen($, [S.mon])
       const result = nicknameCommand(e.args.trim().slice('nickname'.length))
-      await saveRecords($, [mon])
+      await saveRecords($, [S.mon])
       $.ui.invalidate('ui.render')
       return result
     } else if (asked === 'list') {
@@ -3675,15 +1416,15 @@ export function register(on) {
     } else if (asked) {
       return { text: 'Unknown option "' + asked + '". Try one of: ' + OPTIONS.join(', ') + '. See /pokemon list for every mon.' }
     } else {
-      if (isGone(mon)) return { text: goneLine(mon) + ' /pokemon <mon> picks another. Options: ' + OPTIONS.join(', ') + '.' }
-      const condition = conditionOf(mon)
-      const mode = (condition ? ', ' + condition : '') + (isTuckedIn() ? ', asleep' : '') + (wander ? ', wandering' : '') + (isHere(wild) ? ', a ' + wildName() + ' is here' : '')
-      const levels = 'food ' + Math.round(statNow(mon, 'food')) + '%, happiness ' + Math.round(statNow(mon, 'happiness')) + '%'
-      const shown = nameOf(mon) + ' Lv. ' + levelOf(mon)
-      return { text: 'Showing ' + variant + ' ' + shown + mode + ' (' + (needsOn ? levels : 'needs off') + '). Options: ' + OPTIONS.join(', ') + '. /pokemon help says what each does.' }
+      if (isGone(S.mon)) return { text: goneLine(S.mon) + ' /pokemon <mon> picks another. Options: ' + OPTIONS.join(', ') + '.' }
+      const condition = conditionOf(S.mon)
+      const mode = (condition ? ', ' + condition : '') + (isTuckedIn() ? ', asleep' : '') + (S.wander ? ', wandering' : '') + (isHere(S.wild) ? ', a ' + wildName() + ' is here' : '')
+      const levels = 'food ' + Math.round(statNow(S.mon, 'food')) + '%, happiness ' + Math.round(statNow(S.mon, 'happiness')) + '%'
+      const shown = nameOf(S.mon) + ' Lv. ' + levelOf(S.mon)
+      return { text: 'Showing ' + S.variant + ' ' + shown + mode + ' (' + (S.needsOn ? levels : 'needs off') + '). Options: ' + OPTIONS.join(', ') + '. /pokemon help says what each does.' }
     }
     $.ui.invalidate('ui.render')
-    return { text: 'Now showing ' + variant + ' ' + nameOf(mon) + '.' }
+    return { text: 'Now showing ' + S.variant + ' ' + nameOf(S.mon) + '.' }
   })
 
   // Typing or sending a prompt wakes the mon up and answers its "!"
@@ -3701,12 +1442,12 @@ export function register(on) {
 
   // Read what the turn is doing from the spinner, and draw the spinner as usual
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
-    thinking = e.props.mode === 'thinking'
+    S.thinking = e.props.mode === 'thinking'
     return next(e)
   })
 
   on('turn.start', async ($, e, next) => {
-    turnRunning = true
+    S.turnRunning = true
     return next(e)
   })
 
@@ -3714,22 +1455,22 @@ export function register(on) {
   // hops unless the turn was interrupted, and earns XP when it answered. A subagent's
   // turn ending sends its party mon back and pops its Poké Ball.
   on('turn.complete', async ($, e, next) => {
-    thinking = false
+    S.thinking = false
     markActive()
     if (e.agentId) endAgent(e.agentId)
     if (!e.agentId) {
-      turnRunning = false
+      S.turnRunning = false
       clearAlert()
     }
     if (!e.agentId && !e.isAborted) {
-      hopStart = tick
-      idleAlertAt = tick + IDLE_WAIT_MS / TICK_MS
-      wild = chargedWild(wild)
+      S.hopStart = S.tick
+      S.idleAlertAt = S.tick + IDLE_WAIT_MS / TICK_MS
+      S.wild = chargedWild(S.wild)
     }
     // A foe left uncaught for WILD_TURNS main turns moves on
-    if (!e.agentId && wild?.phase === 'battle') {
-      wild = { ...wild, turns: wild.turns + 1 }
-      if (wild.turns >= WILD_TURNS) fleeWild($)
+    if (!e.agentId && S.wild?.phase === 'battle') {
+      S.wild = { ...S.wild, turns: S.wild.turns + 1 }
+      if (S.wild.turns >= WILD_TURNS) fleeWild($)
     }
     if (!e.agentId && e.reason === 'answer') await gainXp($, e.durationMs ?? 0).catch((err) => logOnce($, err))
     return next(e)
@@ -3738,17 +1479,17 @@ export function register(on) {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const desktop = e.surface === 'desktop'
     if ((e.surface !== 'terminal' && !desktop) || e.props.hasSurvey) {
-      if (!paneShown) bandId = null
+      if (!S.paneShown) S.bandId = null
       return next(e)
     }
-    if (working !== e.props.isWorking) {
-      working = e.props.isWorking
+    if (S.working !== e.props.isWorking) {
+      S.working = e.props.isWorking
       // The pane hears of a turn through the band, so it draws again with it
-      if (paneShown) $.ui.invalidate('ui.render')
+      if (S.paneShown) $.ui.invalidate('ui.render')
     }
-    if (!working) thinking = false
-    if (paneShown) return next(e)
-    const corner = drawScene($, e, { maxRows: e.props.maxRows, bodyColumns: e.props.bodyColumns })
+    if (!S.working) S.thinking = false
+    if (S.paneShown) return next(e)
+    const corner = drawScene($.ui.resolve(e), e, { maxRows: e.props.maxRows, bodyColumns: e.props.bodyColumns })
     const { Box } = $.ui.resolve(e)
     const theirs = await next(e)
     return Box({
@@ -3761,12 +1502,12 @@ export function register(on) {
   // Docked, the pane runs floor to ceiling, so the scene sits at its foot by the prompt
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
     if (e.surface !== 'terminal' && e.surface !== 'desktop') return next(e)
-    const wasShown = paneShown
-    paneShown = true
+    const wasShown = S.paneShown
+    S.paneShown = true
     // The band stops drawing the scene once the pane does
     if (!wasShown) $.ui.invalidate('ui.render')
     const { Box } = $.ui.resolve(e)
-    const corner = drawScene($, e, { maxRows: e.props.scroll.bodyRows, bodyColumns: e.props.bodyColumns })
+    const corner = drawScene($.ui.resolve(e), e, { maxRows: e.props.scroll.bodyRows, bodyColumns: e.props.bodyColumns })
     const docked = e.props.placement === 'dock'
     return Box({
       flexDirection: 'column',
@@ -3782,7 +1523,7 @@ export function register(on) {
     if (e.id !== PANE_ID) return result
     leavePane($)
     if (e.origin === 'person') {
-      paneOn = false
+      S.paneOn = false
       await $.store.set('pane', false)
     }
     return result
@@ -3796,16 +1537,16 @@ export function register(on) {
   on('tool.call', async ($, e, next) => {
     const name = String(e.tool)
     let id = null
-    toolCalls += 1
-    const skillId = name === 'Skill' ? (e.tool_use_id ?? toolCalls) : null
-    if (skillId !== null) runningSkills.add(skillId)
+    S.toolCalls += 1
+    const skillId = name === 'Skill' ? (e.tool_use_id ?? S.toolCalls) : null
+    if (skillId !== null) S.runningSkills.add(skillId)
     // A subagent's call shows in its party mon's bubble
-    const crewCall = e.agentId && crew.some((m) => m.id === e.agentId) ? (e.tool_use_id ?? toolCalls) : null
-    if (crewCall !== null) crew = crewToolStarts(crew, e.agentId, crewCall, name)
+    const crewCall = e.agentId && S.crew.some((m) => m.id === e.agentId) ? (e.tool_use_id ?? S.toolCalls) : null
+    if (crewCall !== null) S.crew = crewToolStarts(S.crew, e.agentId, crewCall, name)
     if (!e.agentId) {
       await maybeSpawn($).catch((err) => logOnce($, err))
-      id = e.tool_use_id ?? toolCalls
-      runningTools.set(id, name)
+      id = e.tool_use_id ?? S.toolCalls
+      S.runningTools.set(id, name)
       if (QUESTION_TOOLS.includes(name)) raiseAlert({ tool: name })
     }
     let failed = true
@@ -3814,18 +1555,18 @@ export function register(on) {
       failed = result?.isError === true && !REFUSED.test(String(result.text ?? ''))
       return result
     } finally {
-      wild = chargedWild(wild)
-      if (skillId !== null) runningSkills.delete(skillId)
+      S.wild = chargedWild(S.wild)
+      if (skillId !== null) S.runningSkills.delete(skillId)
       if (crewCall !== null) {
-        crew = crewToolEnds(crew, e.agentId, crewCall, failed && !next.signal?.aborted && verdicts.get(crewCall) !== 'deny', tick)
-        verdicts.delete(crewCall)
+        S.crew = crewToolEnds(S.crew, e.agentId, crewCall, failed && !next.signal?.aborted && S.verdicts.get(crewCall) !== 'deny', S.tick)
+        S.verdicts.delete(crewCall)
       }
       if (id !== null) {
-        runningTools.delete(id)
-        if (failed && !next.signal?.aborted && verdicts.get(id) !== 'deny') flinch()
-        verdicts.delete(id)
+        S.runningTools.delete(id)
+        if (failed && !next.signal?.aborted && S.verdicts.get(id) !== 'deny') flinch()
+        S.verdicts.delete(id)
       }
-      alertTools.delete(name)
+      S.alertTools.delete(name)
     }
   })
 
@@ -3842,7 +1583,7 @@ export function register(on) {
   // and a preload into a subagent. In practice no session raises it yet, so the hooks
   // above carry the disc, and this one is ready for when it does.
   on('skill.prompt', async ($, e, next) => {
-    discUntil = tick + DISC_TICKS
+    S.discUntil = S.tick + DISC_TICKS
     return next(e)
   })
 
@@ -3850,8 +1591,8 @@ export function register(on) {
   // denies isn't taken for a tool failing
   on('tool.check', async ($, e, next) => {
     const result = await next(e)
-    const crewCall = crew.some((m) => m.tools.some((t) => t.call === e.tool_use_id))
-    if (e.tool_use_id !== undefined && (runningTools.has(e.tool_use_id) || crewCall)) verdicts.set(e.tool_use_id, result?.decision)
+    const crewCall = S.crew.some((m) => m.tools.some((t) => t.call === e.tool_use_id))
+    if (e.tool_use_id !== undefined && (S.runningTools.has(e.tool_use_id) || crewCall)) S.verdicts.set(e.tool_use_id, result?.decision)
     return result
   })
 
@@ -3869,7 +1610,7 @@ export function register(on) {
   // events from reaching user plugins.
   on('classic.Notification', async ($, e, next) => {
     const type = e.notification_type
-    const reminder = type === 'permission_prompt' && alertTools.size > 0
+    const reminder = type === 'permission_prompt' && S.alertTools.size > 0
     if (ALERT_NOTIFICATIONS.includes(type) && !reminder) raiseAlert({ ticks: Infinity })
     return next(e)
   })
@@ -3880,7 +1621,7 @@ export function register(on) {
   on('agent.spawn', async ($, e, next) => {
     const result = await next(e)
     if (result?.agentId) {
-      party = joinParty(party, result.agentId, tick)
+      S.party = joinParty(S.party, result.agentId, S.tick)
       await joinCrewFor($, result.agentId, e.subagentType).catch((err) => logOnce($, err))
     }
     return result
@@ -3894,11 +1635,11 @@ export function register(on) {
       while (true) {
         const { value, done } = await stream.next()
         if (done) return value
-        if (e.agentId && THOUGHT_KINDS.has(value?.kind)) crew = crewThinking(crew, e.agentId, value.kind === 'thinking')
+        if (e.agentId && THOUGHT_KINDS.has(value?.kind)) S.crew = crewThinking(S.crew, e.agentId, value.kind === 'thinking')
         yield value
       }
     } finally {
-      if (e.agentId) crew = crewThinking(crew, e.agentId, false)
+      if (e.agentId) S.crew = crewThinking(S.crew, e.agentId, false)
     }
   })
 }
