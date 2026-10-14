@@ -3429,10 +3429,10 @@ async function inBattle($, on, saved: Record<string, any>, foe = 'pidgey') {
   quickTools(on)
   Object.assign(saved, { wander: false, debug: true, ...saved })
   const started = await startedWith($, on, saved, 0)
-  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await $.command.run({ command: 'pokemon', args: 'wild ' + foe })
   await started.clock.advance(10000)
-  return { ...started, toasts }
+  return { ...started, toasts, band }
 }
 
 const movesIn = (toasts: string[]) => toasts.filter((text) => / used .+!$/.test(text))
@@ -3578,6 +3578,39 @@ test('a ball thrown at full HP always breaks free, and the foe fights on', async
   expect(toasts).toContain('Oh no! It broke free!')
   expect(columnsIn(blits[blits.length - 1], widths[widths.length - 1], foeColor('abra', 'pidgey')).length).toBeGreaterThan(0)
   expect(await run('')).toContain(', a wild Pidgey is here (')
+})
+
+// Desktop stops a running turn when you send it a message, so its band throws the ball
+test('the desktop band attacks and throws a ball from buttons while a foe is in battle', async ($, on) => {
+  const { clock, toasts } = await inBattle($, on, {})
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await ui.find({ key: 'catch' })).toBeDefined()
+  await ui.press({ key: 'catch' })
+  expect(toasts).toContain('You threw a Poké Ball!')
+  await clock.advance(100)
+  expect(await ui.find({ key: 'catch' })).toBeUndefined()
+  await clock.advance(4000)
+  expect(toasts).toContain('Oh no! It broke free!')
+  const before = toasts.length
+  await ui.press({ key: 'attack' })
+  expect(toasts.slice(before).some((text) => / used .+!/.test(text))).toBe(true)
+})
+
+test('the desktop battle buttons draw dim and only say why while the mon is busy', async ($, on) => {
+  const { toasts } = await inBattle($, on, {})
+  await $.command.run({ command: 'pokemon', args: 'pet' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await ui.find({ key: 'catch' })).props.dimColor).toBe(true)
+  await ui.press({ key: 'catch' })
+  expect(toasts).toContain('Abra is enjoying the pets. Try again in a moment.')
+  expect(toasts).not.toContain('You threw a Poké Ball!')
+  await ui.press({ key: 'attack' })
+  expect(toasts.filter((text) => / used .+!/.test(text))).toEqual([])
+})
+
+test('the terminal band has no battle buttons, as /pokemon catch runs there mid-turn', async ($, on) => {
+  const { band } = await inBattle($, on, {})
+  expect(await band.find({ key: 'catch' })).toBeUndefined()
 })
 
 test('/pokemon catch needs a foe in battle', async ($, on) => {

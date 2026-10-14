@@ -19,7 +19,7 @@ export const inkFor = (theme) => (typeof theme === 'string' && theme.startsWith(
 
 // Lays out the scene, the mon with its meters beside or over it, in the room the band
 // or the pane gives it, and returns its parts, drawn with the surface's elements, for the
-// site to wrap
+// site to wrap. The desktop draws the site's buttons under the meters.
 export function drawScene(elements, e, site) {
   const desktop = e.surface === 'desktop'
   const { Box, Text } = elements
@@ -95,7 +95,7 @@ export function drawScene(elements, e, site) {
       S.sentCells = cellsNow()
       sprite = elements.Raster({ key: 'pokemon', columns: zoom.columns, rows: zoom.rows, cells: S.sentCells })
     }
-    const meterLines = S.needsOn ? [level, meter('food'), meter('happiness')] : [level]
+    const meterLines = [...(S.needsOn ? [level, meter('food'), meter('happiness')] : [level]), ...(desktop ? (site.buttons ?? []) : [])]
     if (S.panel > 0) {
       const meters = Box({ position: 'absolute', right: 0, bottom: 0, width: panelColumns, paddingLeft: 1, flexDirection: 'column', children: meterLines })
       corner = [Box({ position: 'relative', children: [sprite, meters] })]

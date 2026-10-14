@@ -2,7 +2,8 @@ import { INKS } from './art.js'
 import { drawScene, inkFor } from './band.js'
 import { clearAlert, isAlerted, raiseAlert } from './bubble.js'
 import {
-  attackCommand, moveKey, movesText, nicknameCommand, releaseCommand, waitsForCare, waitsForEvolution,
+  attackCommand, battleWait, careReply, evolvingReply, moveKey, movesText, nicknameCommand, releaseCommand, waitsForCare,
+  waitsForEvolution,
 } from './commands.js'
 import { IMAGE_WAIT_TICKS, TICK_MS } from './constants.js'
 import { CREW_SIZE, crewThinking, crewToolEnds, crewToolStarts, isOut, joinCrew } from './crew.js'
@@ -230,6 +231,31 @@ async function caughtFoe($, caught) {
   S.stats[species] = { xp: xpAt(startLevel(species)), caught: true, ...(species === S.mon ? {} : { parked: true }) }
   await saveRecords($, [species])
   $.ui.toast('Gotcha! ' + name + ' was caught! It joined your box.')
+}
+
+// The desktop app stops the running turn when you send it a message, and a foe only
+// fights mid-turn, so the desktop band attacks and throws the ball from buttons instead.
+// They can't be disabled, so while the mon is evolving, busy or down they draw dim and a
+// press only says why, as /pokemon catch and attack would.
+function battleButtons($, { Box, Button }) {
+  if (S.wild?.phase !== 'battle') return []
+  const press = (act) => {
+    const reply = battleWait() ?? act()
+    markActive()
+    $.ui.toast(reply.text)
+    $.ui.invalidate('ui.render')
+  }
+  const dimColor = battleWait() !== null
+  return [
+    Box({
+      flexDirection: 'row',
+      gap: 1,
+      children: [
+        Button({ key: 'catch', label: 'Catch', variant: 'primary', dimColor, onPress: () => press(catchCommand) }),
+        Button({ key: 'attack', label: 'Attack', dimColor, onPress: () => press(() => attackCommand('')) }),
+      ],
+    }),
+  ]
 }
 
 // Land a move on the foe 60% of the way through it, and spend banked work on the next
@@ -1230,8 +1256,8 @@ export function register(on) {
     if (asked !== 'pet' || !isAsleep()) markActive()
     clearAlert()
     S.nowMs = await $.clock.now()
-    if (waitsForEvolution(asked)) return { text: nameOf(S.mon) + ' is evolving! /pokemon stop cancels it.' }
-    if (waitsForCare(asked)) return { text: nameOf(S.mon) + (S.food ? ' is busy eating.' : ' is enjoying the pets.') + ' Try again in a moment.' }
+    if (waitsForEvolution(asked)) return evolvingReply()
+    if (waitsForCare(asked)) return careReply()
     const verb = asked.split(' ')[0]
     const blocked = DOWN_WAITS.includes(verb) || (isGone(S.mon) && GONE_WAITS.includes(verb))
     if (asked !== 'attack list' && isDown() && blocked) {
@@ -1489,7 +1515,8 @@ export function register(on) {
     }
     if (!S.working) S.thinking = false
     if (S.paneShown) return next(e)
-    const corner = drawScene($.ui.resolve(e), e, { maxRows: e.props.maxRows, bodyColumns: e.props.bodyColumns })
+    const elements = $.ui.resolve(e)
+    const corner = drawScene(elements, e, { maxRows: e.props.maxRows, bodyColumns: e.props.bodyColumns, buttons: battleButtons($, elements) })
     const { Box } = $.ui.resolve(e)
     const theirs = await next(e)
     return Box({
@@ -1506,8 +1533,9 @@ export function register(on) {
     S.paneShown = true
     // The band stops drawing the scene once the pane does
     if (!wasShown) $.ui.invalidate('ui.render')
-    const { Box } = $.ui.resolve(e)
-    const corner = drawScene($.ui.resolve(e), e, { maxRows: e.props.scroll.bodyRows, bodyColumns: e.props.bodyColumns })
+    const elements = $.ui.resolve(e)
+    const { Box } = elements
+    const corner = drawScene(elements, e, { maxRows: e.props.scroll.bodyRows, bodyColumns: e.props.bodyColumns, buttons: battleButtons($, elements) })
     const docked = e.props.placement === 'dock'
     return Box({
       flexDirection: 'column',

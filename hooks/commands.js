@@ -3,10 +3,10 @@ import { foeMoves } from './encounter.js'
 import { startAttack } from './motion.js'
 import { movesOf } from './moves.js'
 import { displayName } from './names.js'
-import { nameOf } from './records.js'
+import { downReply, nameOf } from './records.js'
 import { MONS } from './sprites.js'
 import { S } from './state.js'
-import { isDead, isPetted } from './status.js'
+import { isDead, isDown, isPetted } from './status.js'
 
 // The /pokemon options that need nothing from the engine, and which options wait while
 // the mon evolves, eats, or enjoys a pet
@@ -17,6 +17,17 @@ const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack', 'release', 'catch
 // so nothing changes the record the berry or pet is about to fill
 const SHOWS_ONLY = ['', 'list', 'help', 'stats', 'box', 'party', 'moves', 'dex']
 export const waitsForCare = (asked) => (S.food !== null || isPetted()) && !SHOWS_ONLY.includes(asked.split(' ')[0]) && asked !== 'attack list'
+
+export const evolvingReply = () => ({ text: nameOf(S.mon) + ' is evolving! /pokemon stop cancels it.' })
+export const careReply = () => ({ text: nameOf(S.mon) + (S.food ? ' is busy eating.' : ' is enjoying the pets.') + ' Try again in a moment.' })
+
+// What stops the mon fighting now, as the command's reply, or null when it's free
+export function battleWait() {
+  if (S.evolving !== null) return evolvingReply()
+  if (S.food !== null || isPetted()) return careReply()
+  if (isDown()) return downReply()
+  return null
+}
 
 export const waitsForEvolution = (asked) => S.evolving !== null && (MONS.includes(asked) || WAITS_FOR_EVOLUTION.includes(asked.split(' ')[0]))
 
