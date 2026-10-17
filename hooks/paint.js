@@ -22,14 +22,15 @@ export const drawsHearts = () => S.bandSurface === 'terminal' && !S.emojiOn && S
 // Only kitty, Ghostty, and newer iTerm2 builds draw kitty's image placeholders. Other
 // terminals print them as boxes, as xterm.js does in VS Code and Obsidian, even when
 // CLAUDE_CODE_FORCE_TERMINAL_IMAGES has the host send them and report them drawn. iTerm2
-// 3.7 and older, before the 2026-09-18 nightly, freezes a swapped Image's source.
+// before 3.7.5 and the 2026-09-18 nightly freezes a swapped Image's source.
 export function drawsImages({ program, version, term, kittyWindow }) {
   if (kittyWindow || term === 'xterm-kitty' || term === 'xterm-ghostty' || program === 'ghostty') return true
   if (program !== 'iTerm.app') return false
   const [major, minor, patch = ''] = String(version ?? '').split('.')
   if (Number(major) > 3 || (Number(major) === 3 && Number(minor) > 7)) return true
+  if (Number(major) !== 3 || Number(minor) !== 7) return false
   const nightly = /^(\d{8})-nightly$/.exec(patch)
-  return Boolean(nightly && Number(nightly[1]) >= 20260918)
+  return nightly ? Number(nightly[1]) >= 20260918 : Number(patch) >= 5
 }
 
 // /pokemon images auto trusts the terminal list above, and on and off override it
