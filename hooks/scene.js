@@ -17,7 +17,7 @@ import {
 } from './sprites.js'
 import { S } from './state.js'
 import { isAsleep, isBackingUp, isDown, isHealing, isHopping, isShaking, isWincing } from './status.js'
-import { foeBlinks, foeJolt, foeX, HP_BAR, hpBar, isHere, isOnStage, THROW_TICKS, throwStage } from './wild.js'
+import { foeBlinks, foeJolt, foeLunge, foeX, HP_BAR, hpBar, isHere, isOnStage, THROW_TICKS, throwStage } from './wild.js'
 import { zoomedAt, zoomedPixel } from './zoom.js'
 
 // One frame of the scene put together: the mon as its pose and move leave it, the foe,
@@ -151,7 +151,8 @@ function hpStamps(rows) {
 }
 
 // The foe as a color per strip pixel or null: walk frames on the way in, idle frames in
-// battle, and walk frames mirrored on the way out. A hit jolts it and makes it blink.
+// battle, and walk frames mirrored on the way out. A hit jolts it and makes it blink, and
+// a strike lunges it at the home mon. Fainted, it lies in its X-eyed frame.
 // A ball that opens on it shades it red and shrinks it into the ball, and it stays
 // inside until it breaks out.
 function foePixel(rows) {
@@ -162,17 +163,20 @@ function foePixel(rows) {
   const sprite = SPRITES[foe]
   const sheet = sprite.variants[S.wild.variant]
   const walking = S.wild.phase === 'entering' || S.wild.phase === 'fleeing'
-  const frame = frameAt(walking ? sheet.walk : sheet.idle, S.tick * TICK_MS)
-  const colors = COLORS[foe][S.wild.variant]
+  const fainted = S.wild.phase === 'fainted'
+  const frame = fainted ? faintedFrame(foe, S.wild.variant) : frameAt(walking ? sheet.walk : sheet.idle, S.tick * TICK_MS)
+  const colors = fainted ? faintedColors(foe, S.wild.variant) : COLORS[foe][S.wild.variant]
   const flip = S.wild.phase === 'fleeing'
-  const top = rows * 2 - sprite.height + (walking ? WALK_DROP[foe][S.wild.variant] : 0)
-  const left = foeX(S.wild, wildAt()) + foeJolt(S.wild, S.tick)
+  const drop = fainted ? gapOf(frame) - gapUnder(sheet.idle) : walking ? WALK_DROP[foe][S.wild.variant] : 0
+  const top = rows * 2 - sprite.height + drop
+  const left = foeX(S.wild, wildAt()) + foeJolt(S.wild, S.tick) + foeLunge(S.wild, S.tick)
   const pixel = (cx, py) => {
     const px = cx - left
     const row = frame[py - top]
     if (!row || px < 0 || px >= sprite.width) return null
     return colors[row[flip ? sprite.width - 1 - px : px]] ?? null
   }
+  if (fainted) return pixel
   if (held?.stage !== 'open') {
     pixel.pupils = pupilsAt(foe, S.wild.variant, walking ? 'walk' : 'idle', frame, { left, top, mirrored: flip })
     return pixel

@@ -8,7 +8,7 @@
 // node scripts/preview-wild.mjs <mon> <foe> [options]
 //   --move <name>   play just this move at the foe once it arrives
 //   --tools <n>     tool calls that bank a move each, two at most (default 2)
-//   --throw <how>   throw a ball: 'fail' at full HP, or 'catch' once tool calls wear the foe out
+//   --throw <how>   throw a ball: 'fail' at full HP, or 'catch' once tool calls make the foe weak
 //   --every <n>     keep every nth frame (default 4)
 //   --balls <n>     subagents running, drawn as Poké Balls (default 0)
 //   --scale <n>     screen pixels per sprite pixel (default 4)
@@ -71,8 +71,8 @@ if (opts.move) {
   console.log(await host.command('attack ' + opts.move))
   await playFor(BATTLE_TICKS * 4)
 } else if (opts.throw) {
-  const worn = () => host.toasts.some((text) => text.includes('worn out'))
-  for (let k = 0; k < 8 && opts.throw === 'catch' && !worn(); k++) {
+  const weak = () => host.toasts.some((text) => text.includes('is weak'))
+  for (let k = 0; k < 8 && opts.throw === 'catch' && !weak(); k++) {
     await host.fire('tool.call', { tool: 'Read' }, {})
     await playFor(ATTACK_TICKS)
   }

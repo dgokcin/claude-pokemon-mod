@@ -241,7 +241,7 @@ box, marked "ran away", with its level, XP, and nickname, and the band shows you
 highest level mon instead, or a line saying it ran away. The first wild encounter at
 least 30 minutes later is that mon, at its own level and variant, and after that it's
 one encounter in four until you catch it. It's a tier tougher and breaks out of the ball
-more often, even worn out. Catching it brings it back with 50% food and 30% happiness.
+more often, even weak. Catching it brings it back with 50% food and 30% happiness.
 
 `/pokemon nuzlocke` makes fainting final. A mon that faints is lost: its level, XP, and
 meters are gone, it leaves your box, and the Pokédex marks its species with †. `/pokemon
@@ -328,12 +328,16 @@ Lapras and Snorlax are rarer, the five legendaries rarest, and 1 in 128 is shiny
 Your work does the fighting. Each tool call and each answered turn banks a move, two at
 most, and the mon spends one every 6 to 8 s on a random move aimed at the foe. Each hit
 shrinks the HP bar over the foe's head. A common foe takes about 3 hits, a legendary about 10.
+Once another hit could knock the foe out, it's weak, and the mon holds off. Only
+`/pokemon attack` lands the last hit. A foe at 0 HP faints and blinks away, and can't be
+caught. Every 10 to 15 s the foe lunges back at the mon, which flinches and puts its next
+move off. A strike never touches the mon's meters.
 
-`/pokemon catch` throws a Poké Ball. The odds rise as HP falls. At full HP the ball always
-breaks free, and a worn out foe at 0 HP is a sure catch. The ball rocks once per shake
-before it clicks shut or the foe breaks out.
+`/pokemon catch` throws a Poké Ball. The odds rise as HP falls, so a weak foe is the best
+catch. At full HP the ball always breaks free. The ball rocks once per shake before it
+clicks shut or the foe breaks out.
 
-The foe leaves after 4 minutes without a hit, 90 s after it's worn out, after 4 turns end
+The foe leaves after 4 minutes without a hit, 90 s after it turns weak, after 4 turns end
 without a catch, when the mon falls asleep, or on `/pokemon run`. `/pokemon feed` waits
 until it's gone, and so does an evolution that comes due.
 
