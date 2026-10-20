@@ -19,10 +19,6 @@ export const ATTACK_JITTER_MS = 2000
 // The same for the foe's strikes back, which only make the home mon flinch
 export const STRIKE_GAP_MS = 10000
 export const STRIKE_JITTER_MS = 5000
-// A strike lunges the foe toward the home mon a pixel more each 2 ticks and back, and
-// lands at its peak
-const LUNGE = [1, 2, 3, 2, 1]
-export const STRIKE_HIT_TICKS = 2 * LUNGE.indexOf(3)
 // A fainted foe lies still, then blinks away over FAINT_BLINK_TICKS
 const FAINT_TICKS = 40
 const FAINT_BLINK_TICKS = 12
@@ -57,8 +53,7 @@ export const newWild = (pick, seed) => ({
   hitAt: null,
   turns: 0,
   nextStrikeAt: 0,
-  strikeAt: null,
-  strikeLanded: false,
+  strike: null,
   faintedAt: null,
 })
 
@@ -107,13 +102,9 @@ export const isWeak = (wild) => wild.hp <= damageOf(wild, 2, 1)
 
 export const faintedWild = (wild, tick) => ({ ...wild, hp: 0, phase: 'fainted', faintedAt: tick })
 
-export const struckWild = (wild, tick, nextStrikeAt) => ({ ...wild, strikeAt: tick, strikeLanded: false, nextStrikeAt })
-
-// How far a strike has the foe lunged toward the home mon at tick
-export function foeLunge(wild, tick) {
-  if (wild.strikeAt === null) return 0
-  return LUNGE[Math.floor((tick - wild.strikeAt) / 2)] ?? 0
-}
+// Start one of the foe's moves at the home mon. attack is the move as prepareAttack
+// settles it, played from start.
+export const strikingWild = (wild, move, attack, tick, nextStrikeAt) => ({ ...wild, strike: { move, attack, start: tick, landed: false }, nextStrikeAt })
 
 export const foeJolt = (wild, tick) =>
   wild.hitAt !== null && tick - wild.hitAt < JOLT_TICKS ? (Math.floor((tick - wild.hitAt) / 2) % 2 === 0 ? -1 : 1) : 0

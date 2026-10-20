@@ -1,4 +1,5 @@
 import { INKS } from './art.js'
+import { prepareAttack } from './attacks.js'
 import { drawScene, inkFor } from './band.js'
 import { clearAlert, isAlerted, raiseAlert } from './bubble.js'
 import {
@@ -9,7 +10,7 @@ import { IMAGE_WAIT_TICKS, TICK_MS } from './constants.js'
 import { CREW_SIZE, crewThinking, crewToolEnds, crewToolStarts, isOut, joinCrew } from './crew.js'
 import { CUSTOM_PREFIX, fetchMon, monsOfGen } from './custom.js'
 import { dexKey, mergedDexEntry, pickWild, tierOf } from './dex.js'
-import { catchCommand, foeMoves, runawayFoe, wildName } from './encounter.js'
+import { catchCommand, foeMoves, runawayFoe, wildMoves, wildName } from './encounter.js'
 import { evolutionsOf, startLevel } from './evolutions.js'
 import { SPRITES } from './frames.js'
 import { bandRows, bandZoom, battleFits, clampX, homeX, isHome, stripTarget, wildAt } from './layout.js'
@@ -33,8 +34,8 @@ import {
 import { assignedTo, canWork, crewVariant, endAgent, partyMons, stepCrewMons, typesOf } from './team.js'
 import { andList, boxText, dexText, evolutionText, HELP, helpText, orList, statsText } from './texts.js'
 import {
-  chargedWild, damageOf, faintedWild, fleeingWild, isHere, isOnStage, isWeak, newWild, STRIKE_GAP_MS, STRIKE_HIT_TICKS,
-  STRIKE_JITTER_MS, stepWild, struckWild, WEAK_MS, WILD_STAY_MS, WILD_TURNS,
+  chargedWild, damageOf, faintedWild, fleeingWild, foeX, isHere, isOnStage, isWeak, newWild, STRIKE_GAP_MS, STRIKE_JITTER_MS,
+  stepWild, strikingWild, WEAK_MS, WILD_STAY_MS, WILD_TURNS,
 } from './wild.js'
 import { SIZES } from './zoom.js'
 
@@ -274,8 +275,8 @@ function stepBattle($) {
     hitFoe($)
     if (S.wild.phase !== 'battle') return
   }
-  strikeBack()
-  const ready = !S.attack && !S.food && !S.evolving && !isAlerted() && !isFlinching() && !isAsleep() && S.x === homeX()
+  strikeBack($)
+  const ready = !S.wild.strike && !S.attack && !S.food && !S.evolving && !isAlerted() && !isFlinching() && !isAsleep() && S.x === homeX()
   if (!ready || isWeak(S.wild) || S.wild.charge === 0 || S.tick < S.wild.nextAttackAt) return
   const moves = foeMoves()
   const move = moves[Math.floor(Math.random() * moves.length)]
@@ -284,16 +285,24 @@ function stepBattle($) {
   $.ui.toast(nameOf(S.mon) + ' used ' + move.name + '!')
 }
 
-// The foe lunges at the free mon now and then. Its strike only makes the mon flinch and
-// puts its next move off, so a fight never touches the mon's meters.
-function strikeBack() {
-  const { strikeAt, strikeLanded } = S.wild
-  if (strikeAt !== null && !strikeLanded && S.tick >= strikeAt + STRIKE_HIT_TICKS) {
-    S.wild = { ...S.wild, strikeLanded: true, nextAttackAt: Math.max(S.wild.nextAttackAt, S.tick + STRIKE_DELAY_TICKS) }
+// Now and then the foe plays one of its own moves at the free mon. It lands 60% of the
+// way through, and only makes the mon flinch and puts its next move off, so a fight
+// never touches the mon's meters.
+function strikeBack($) {
+  const { strike } = S.wild
+  if (strike && !strike.landed && S.tick >= strike.start + Math.round(strike.attack.ticks * 0.6)) {
+    S.wild = { ...S.wild, strike: { ...strike, landed: true }, nextAttackAt: Math.max(S.wild.nextAttackAt, S.tick + STRIKE_DELAY_TICKS) }
     flinch()
   }
-  const free = !S.attack && !S.food && !S.evolving && !isAsleep() && S.x === homeX()
-  if (free && S.tick >= S.wild.nextStrikeAt) S.wild = struckWild(S.wild, S.tick, S.tick + strikeGap())
+  if (strike && S.tick >= strike.start + strike.attack.ticks) S.wild = { ...S.wild, strike: null }
+  const free = !S.wild.strike && !S.attack && !S.food && !S.evolving && !isAsleep() && S.x === homeX()
+  if (!free || S.tick < S.wild.nextStrikeAt) return
+  const moves = wildMoves()
+  const move = moves[Math.floor(Math.random() * moves.length)]
+  const seed = Math.floor(Math.random() * 0x7fffffff)
+  const attack = prepareAttack(move, { side: 'right', seed, x: foeX(S.wild, wildAt()), home: homeX() })
+  S.wild = strikingWild(S.wild, move, attack, S.tick, S.tick + strikeGap())
+  $.ui.toast('Wild ' + displayName(S.wild.mon) + ' used ' + move.name + '!')
 }
 
 // A hit resets the foe's wait for a fight. Weak, it waits WEAK_MS for a ball, and at 0 HP

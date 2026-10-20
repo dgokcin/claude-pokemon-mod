@@ -31,6 +31,12 @@ export function foeMoves() {
   return moves.length > 0 ? moves : FALLBACK_MOVES
 }
 
+// The foe's own moves that reach the home mon
+export function wildMoves() {
+  const moves = movesOf(S.wild.mon).filter(aimsAhead)
+  return moves.length > 0 ? moves : FALLBACK_MOVES
+}
+
 // A mon that ran away turns up again at its own level and variant, a tier harder and
 // harder still to hold in a ball
 const TIER_ORDER = Object.keys(TIERS)

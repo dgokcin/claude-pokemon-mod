@@ -3368,7 +3368,8 @@ test('a wild mon flees after four minutes without a fight, and the strip shrinks
     await clock.advance(60 * 1000)
   }
   await clock.advance(10000)
-  expect(toasts).toEqual(['A wild Pidgeot (Lv. 36) appeared!', 'Wild Pidgeot fled!'])
+  // Its own strikes don't count as a fight
+  expect(toasts.filter((text) => !/^Wild Pidgeot used .+!$/.test(text))).toEqual(['A wild Pidgeot (Lv. 36) appeared!', 'Wild Pidgeot fled!'])
   expect(widths[widths.length - 1]).toBe(RASTER)
   const status = await $.command.run({ command: 'pokemon', args: '' })
   expect(status.text).not.toContain('wild')
@@ -3439,7 +3440,8 @@ async function inBattle($, on, saved: Record<string, any>, foe = 'pidgey') {
   return { ...started, toasts, band }
 }
 
-const movesIn = (toasts: string[]) => toasts.filter((text) => / used .+!$/.test(text))
+// The home mon's moves, leaving out the foe's
+const movesIn = (toasts: string[]) => toasts.filter((text) => / used .+!$/.test(text) && !text.startsWith('Wild '))
 
 test('work during a battle fires a move at the foe, and the hit shrinks its HP bar', async ($, on) => {
   const { clock, blits, widths, toasts } = await inBattle($, on, {})
@@ -3497,7 +3499,8 @@ test('banked work fires one move at a time, at most one every six seconds', asyn
   expect(movesIn(toasts).length).toBe(1)
   await clock.advance(5800)
   expect(movesIn(toasts).length).toBe(1)
-  await clock.advance(2200)
+  // A strike from the foe can put the next move off a little
+  for (let k = 0; k < 8 && movesIn(toasts).length < 2; k++) await clock.advance(1000)
   expect(movesIn(toasts).length).toBe(2)
   // Work banks two moves at most
   await clock.advance(20000)
@@ -3520,7 +3523,8 @@ test('an evolving mon makes no moves until it has evolved', async ($, on) => {
   await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
   await clock.advance(6000)
   expect(movesIn(toasts)).toEqual([])
-  await clock.advance(3000)
+  // A strike from the foe can put the first move off a little
+  for (let k = 0; k < 8 && movesIn(toasts).length === 0; k++) await clock.advance(1000)
   expect(movesIn(toasts)).toEqual([expect.stringMatching(/^Charmeleon used /)])
 })
 
@@ -3584,17 +3588,15 @@ test('/pokemon attack knocks out a weak foe, which can\'t be caught and blinks a
   expect(toasts.some((text) => text.startsWith('Gotcha!'))).toBe(false)
 })
 
-test('the foe strikes back now and then, lunging at the mon without a toast', async ($, on) => {
-  const { clock, blits, widths, toasts } = await inBattle($, on, {})
-  const color = foeColor('abra', 'pidgey')
-  const leftOf = (i: number) => Math.min(...columnsIn(blits[i], widths[i], color))
-  const rest = leftOf(blits.length - 1)
-  const before = blits.length
-  const said = toasts.length
+test('the foe strikes back now and then with its own moves, leaving the mon\'s meters alone', async ($, on) => {
+  const saved: Record<string, any> = {}
+  const { clock, toasts } = await inBattle($, on, saved)
+  const before = structuredClone(saved.stats)
   await clock.advance(16000)
-  const lefts = blits.slice(before).map((_, i) => leftOf(before + i))
-  expect(Math.max(...lefts)).toBeGreaterThan(rest)
-  expect(toasts.slice(said)).toEqual([])
+  const strikes = toasts.filter((text) => /^Wild Pidgey used (Gust|Sand Attack|Quick Attack)!$/.test(text))
+  expect(strikes.length).toBeGreaterThanOrEqual(1)
+  expect(movesIn(toasts)).toEqual([])
+  expect(saved.stats).toEqual(before)
 })
 
 test('a foe left uncaught for four main turns moves on', async ($, on) => {
@@ -3644,7 +3646,7 @@ test('the desktop battle buttons draw dim and only say why while the mon is busy
   expect(toasts).toContain('Abra is enjoying the pets. Try again in a moment.')
   expect(toasts).not.toContain('You threw a Poké Ball!')
   await ui.press({ key: 'attack' })
-  expect(toasts.filter((text) => / used .+!/.test(text))).toEqual([])
+  expect(movesIn(toasts)).toEqual([])
 })
 
 test('the terminal band has no battle buttons, as /pokemon catch runs there mid-turn', async ($, on) => {

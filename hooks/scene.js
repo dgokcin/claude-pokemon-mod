@@ -7,7 +7,7 @@ import { dizzyStamps } from './faint.js'
 import { SPRITES } from './frames.js'
 import { atCenter, centerStamps, RECALL_RED, recallFlash, recallTint, sparkleStamps } from './joy.js'
 import {
-  bandRows, bandZoom, foeBox, foeMiddle, foeName, homeXOf, isHome, isSmall, sceneColumns, stripColumns, wildAt,
+  bandRows, bandZoom, foeBox, foeMiddle, foeName, homeBox, homeXOf, isHome, isSmall, sceneColumns, stripColumns, wildAt,
 } from './layout.js'
 import { flinchJolt, foodPixel, heartStamps, isWalking, smallBerryStamp } from './motion.js'
 import { BALL, BALL_COLORS, FLASH, LEANS, LIGHT_COLORS, OPEN, partyStamps } from './party.js'
@@ -17,7 +17,7 @@ import {
 } from './sprites.js'
 import { S } from './state.js'
 import { isAsleep, isBackingUp, isDown, isHealing, isHopping, isShaking, isWincing } from './status.js'
-import { foeBlinks, foeJolt, foeLunge, foeX, HP_BAR, hpBar, isHere, isOnStage, THROW_TICKS, throwStage } from './wild.js'
+import { foeBlinks, foeJolt, foeX, HP_BAR, hpBar, isHere, isOnStage, THROW_TICKS, throwStage } from './wild.js'
 import { zoomedAt, zoomedPixel } from './zoom.js'
 
 // One frame of the scene put together: the mon as its pose and move leave it, the foe,
@@ -68,7 +68,7 @@ const NO_EFFECT = {
 const STRIDE_TICKS = 2
 
 // Where the sprite stands in strip pixels, for aiming an attack
-function attackGeometry(sprite, frame, colors, flip, at, top, rows, pixel) {
+function attackGeometry(sprite, frame, colors, flip, at, top, rows, pixel, side, target) {
   const box = boxOf(frame, colors)
   return {
     x: at,
@@ -78,10 +78,10 @@ function attackGeometry(sprite, frame, colors, flip, at, top, rows, pixel) {
     bottom: top + box.bottom,
     columns: S.columns,
     pixels: rows * 2,
-    side: S.attack.side === 'left' ? -1 : 1,
+    side: side === 'left' ? -1 : 1,
     body: bodyOf(frame, colors),
     solid: (cx, py) => pixel(cx - at, py - top) !== null,
-    foe: S.attack.atFoe && isHere(S.wild) ? foeBox(rows) : null,
+    foe: target,
   }
 }
 
@@ -152,7 +152,8 @@ function hpStamps(rows) {
 
 // The foe as a color per strip pixel or null: walk frames on the way in, idle frames in
 // battle, and walk frames mirrored on the way out. A hit jolts it and makes it blink, and
-// a strike lunges it at the home mon. Fainted, it lies in its X-eyed frame.
+// a strike plays one of its moves at the home mon, with the move's drawing on the
+// returned pixel as effect. Fainted, it lies in its X-eyed frame.
 // A ball that opens on it shades it red and shrinks it into the ball, and it stays
 // inside until it breaks out.
 function foePixel(rows) {
@@ -164,19 +165,33 @@ function foePixel(rows) {
   const sheet = sprite.variants[S.wild.variant]
   const walking = S.wild.phase === 'entering' || S.wild.phase === 'fleeing'
   const fainted = S.wild.phase === 'fainted'
-  const frame = fainted ? faintedFrame(foe, S.wild.variant) : frameAt(walking ? sheet.walk : sheet.idle, S.tick * TICK_MS)
+  const strike = S.wild.phase === 'battle' && S.wild.strike && S.tick - S.wild.strike.start < S.wild.strike.attack.ticks ? S.wild.strike : null
+  const age = strike ? S.tick - strike.start : 0
+  const pose = strike ? attackPose(strike.attack, age) : null
+  const sideOn = walking || pose?.view === 'side'
+  let frame = frameAt(walking ? sheet.walk : sheet.idle, S.tick * TICK_MS)
+  if (fainted) frame = faintedFrame(foe, S.wild.variant)
+  else if (pose && sideOn) frame = sheet.walk[pose.stride ? Math.floor(age / STRIDE_TICKS) % sheet.walk.length : 0].rows
   const colors = fainted ? faintedColors(foe, S.wild.variant) : COLORS[foe][S.wild.variant]
   const flip = S.wild.phase === 'fleeing'
-  const drop = fainted ? gapOf(frame) - gapUnder(sheet.idle) : walking ? WALK_DROP[foe][S.wild.variant] : 0
+  const drop = fainted ? gapOf(frame) - gapUnder(sheet.idle) : sideOn ? WALK_DROP[foe][S.wild.variant] : 0
   const top = rows * 2 - sprite.height + drop
-  const left = foeX(S.wild, wildAt()) + foeJolt(S.wild, S.tick) + foeLunge(S.wild, S.tick)
-  const pixel = (cx, py) => {
-    const px = cx - left
-    const row = frame[py - top]
+  const left = foeX(S.wild, wildAt()) + foeJolt(S.wild, S.tick)
+  const rawOf = (mirror) => (px, qy) => {
+    const row = frame[qy]
     if (!row || px < 0 || px >= sprite.width) return null
-    return colors[row[flip ? sprite.width - 1 - px : px]] ?? null
+    return colors[row[mirror ? sprite.width - 1 - px : px]] ?? null
   }
+  const raw = rawOf(flip)
+  const pixel = (cx, py) => raw(cx - left, py - top)
   if (fainted) return pixel
+  if (strike) {
+    const effect = attackFrame(strike.attack, age, attackGeometry(sprite, frame, colors, false, left, top, rows, raw, 'right', homeBox(rows)))
+    const body = bodyPixel(effect, rawOf(effect.flipX), boxOf(frame, colors), sprite.width, effect.flipX, left + effect.dx, top + effect.dy)
+    const drawn = effect.hidden ? () => null : body
+    drawn.effect = effect
+    return drawn
+  }
   if (held?.stage !== 'open') {
     pixel.pupils = pupilsAt(foe, S.wild.variant, walking ? 'walk' : 'idle', frame, { left, top, mirrored: flip })
     return pixel
@@ -341,11 +356,18 @@ export function frameNow(full = false) {
   }
   const pixel = pixelOf(flip)
   let effect = NO_EFFECT
-  if (playing) effect = attackFrame(S.attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel))
+  if (playing) {
+    const target = S.attack.atFoe && isHere(S.wild) ? foeBox(rows) : null
+    effect = attackFrame(S.attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel, S.attack.side, target))
+  }
   else if (away) effect = { ...NO_EFFECT, hidden: true }
   else if (red > 0) effect = { ...NO_EFFECT, shade: (cx, py, c) => mixed(c, RECALL_RED, red * 0.8) }
-  const overlay = overlayOf(effect.dots, rows)
-  const underlay = overlayOf(effect.under, rows)
+  // With a foe on stage the bubble has no room, so only the "!" shows, over the foe
+  const onStage = isOnStage(S.wild)
+  const foe = onStage ? foePixel(rows) : null
+  const foeEffect = foe?.effect ?? NO_EFFECT
+  const overlay = overlayOf([...effect.dots, ...foeEffect.dots], rows)
+  const underlay = overlayOf([...effect.under, ...foeEffect.under], rows)
   const jolt = flinchJolt(baseX, sprite.width)
   const hopUp = !S.attack && !down && !isShaking() && isHopping() && Math.floor((S.tick - S.hopStart) / 3) % 2 === 0
   const top = baseTop + effect.dy - (hopUp ? 2 : 0)
@@ -354,9 +376,6 @@ export function frameNow(full = false) {
   const body = bodyPixel(effect, pixelOf(mirrored), box, sprite.width, mirrored, left, top)
   const ghost = ghostPixel(effect.ghosts, pixel, box, sprite.width, flip, baseX, baseTop)
   const head = headColumns(pixel, sprite.width, left)
-  // With a foe on stage the bubble has no room, so only the "!" shows, over the foe
-  const onStage = isOnStage(S.wild)
-  const foe = onStage ? foePixel(rows) : null
   // A party mon's bubble stops short of the foe's columns, or else the lead's head
   const mates = crewDrawn(rows, onStage ? S.crewWidth : head[0] - 1)
   const wanted = bubbleIcon()
@@ -429,7 +448,7 @@ export function frameNow(full = false) {
 
   // Shake the full-size scene, then shrink it to the band's size on screen. The scene's
   // columns start at the margin's left edge, the strip's at the margin's right.
-  const [shakeX, shakeY] = effect.shake
+  const [shakeX, shakeY] = playing ? effect.shake : foeEffect.shake
   const shaken = (cx, py) => (cx - shakeX < 0 || cx - shakeX >= scene ? null : colorAt(cx - shakeX - S.margin, py - shakeY))
   // The eyes kept through the shrink: the mon's, unless a move hides or reshapes it, and the foe's
   const reshaped = effect.hidden || effect.sx !== 1 || effect.sy !== 1 || effect.skew || effect.flipY
@@ -477,9 +496,10 @@ export function frameNow(full = false) {
   const spare = zoom.rows * 2 - Math.round(pixels * zoom.scale)
   const at = spare > 0 ? (tx, ty) => drawn(tx, ty - spare) : drawn
   const glyphs = new Map()
-  for (let k = 0; k < effect.chars.length; k += 4) {
-    const gx = zoomedAt(effect.chars[k] + shakeX + S.margin, zoom.scale)
-    glyphs.set(gx + ',' + zoomedAt(effect.chars[k + 1], zoom.scale), [effect.chars[k + 2], effect.chars[k + 3]])
+  const chars = [...effect.chars, ...foeEffect.chars]
+  for (let k = 0; k < chars.length; k += 4) {
+    const gx = zoomedAt(chars[k] + shakeX + S.margin, zoom.scale)
+    glyphs.set(gx + ',' + zoomedAt(chars[k + 1], zoom.scale), [chars[k + 2], chars[k + 3]])
   }
   return { at, glyphs, zoom }
 }

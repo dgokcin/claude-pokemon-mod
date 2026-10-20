@@ -330,8 +330,8 @@ most, and the mon spends one every 6 to 8 s on a random move aimed at the foe. E
 shrinks the HP bar over the foe's head. A common foe takes about 3 hits, a legendary about 10.
 Once another hit could knock the foe out, it's weak, and the mon holds off. Only
 `/pokemon attack` lands the last hit. A foe at 0 HP faints and blinks away, and can't be
-caught. Every 10 to 15 s the foe lunges back at the mon, which flinches and puts its next
-move off. A strike never touches the mon's meters.
+caught. Every 10 to 15 s the foe plays one of its own moves at the mon, which flinches and puts
+its next move off. A strike never touches the mon's meters.
 
 `/pokemon catch` throws a Poké Ball. The odds rise as HP falls, so a weak foe is the best
 catch. At full HP the ball always breaks free. The ball rocks once per shake before it

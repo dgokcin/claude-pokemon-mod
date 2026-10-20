@@ -129,6 +129,14 @@ export function foeBox(rows) {
   return { left: left + box.left, right: left + box.right, top: top + box.top, bottom: top + box.bottom }
 }
 
+// The home mon's idle box where it stands at home
+export function homeBox(rows) {
+  const box = idleBox(S.mon, S.variant)
+  const left = homeX()
+  const top = rows * 2 - SPRITES[S.mon].height
+  return { left: left + box.left, right: left + box.right, top: top + box.top, bottom: top + box.bottom }
+}
+
 export function foeMiddle(rows) {
   const box = foeBox(rows)
   return { x: Math.round((box.left + box.right) / 2), y: Math.round((box.top + box.bottom) / 2) }
