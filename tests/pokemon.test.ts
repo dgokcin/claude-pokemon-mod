@@ -2061,6 +2061,10 @@ test('only kitty, Ghostty, and iTerm2 builds whose Image swaps work draw the sma
   const iterm = (version?: string) => (version ? { TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: version } : { TERM_PROGRAM: 'iTerm.app' })
   const cases: [Record<string, string>, boolean][] = [
     [iterm('3.7.3'), false],
+    [iterm('3.7.4'), false],
+    [iterm('3.6.9'), false],
+    [iterm('3.7.5'), true],
+    [iterm('3.7.6'), true],
     [iterm('3.7.20260901-nightly'), false],
     [iterm(), false],
     [iterm('3.7.20261008-nightly'), true],
