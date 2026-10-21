@@ -805,7 +805,7 @@ test('time with Claude Code closed or the laptop off drains at a quarter speed',
 
 test('switching away parks a mon, and its meters pick up where they stopped when it comes back', async ($, on) => {
   const full = { value: 100, at: 0 }
-  const saved: Record<string, any> = { stats: { abra: { food: full, happiness: full } }, seenAt: 0 }
+  const saved: Record<string, any> = { trainer: false, stats: { abra: { food: full, happiness: full } }, seenAt: 0 }
   await startedWith($, on, saved, 0)
   await $.command.run({ command: 'pokemon', args: 'bulbasaur' })
   expect(saved.stats.abra.parked).toBe(true)
@@ -1137,7 +1137,7 @@ test('a mon picked in another session doesn\'t switch this one', async ($, on) =
 })
 
 test('a mon evolved in another session evolves here too, and picking the old one shows it again', async ($, on) => {
-  const saved: Record<string, any> = { mon: 'charmander', stats: { charmander: { xp: 3000, nickname: 'Embers' } } }
+  const saved: Record<string, any> = { trainer: false, mon: 'charmander', stats: { charmander: { xp: 3000, nickname: 'Embers' } } }
   const { clock } = await startedWith($, on, saved, 0)
   // Another session evolves it, as its moveRecord would
   saved.stats = { charmeleon: { xp: 4096, nickname: 'Embers' } }
@@ -4052,40 +4052,32 @@ test('with nuzlocke on, a mon is lost where it would faint, and the band shows t
   expect(await run($, 'box')).toBe('1 mon in your box:\nPikachu, Lv. 10 ●●●●○ ♥♥♥♥♡ (active)\nOnly Pikachu so far. /pokemon <mon> picks another.')
 })
 
-test('trainer mode is on by default: one starter, then only mons in the box, and fetched mons stay free', async ($, on) => {
+test('trainer mode is on by default: an existing box keeps its mons, and only they and fetched mons can be shown', async ($, on) => {
   const saved: Record<string, any> = { stats: { abra: { xp: 10 ** 3 }, pidgey: { xp: 5 ** 3, caught: true, parked: true } }, 'custom:torchic': { gen: 3, sprite: SPRITES.diglett, moves: ['Ember'] } }
   await startedWith($, on, saved, 0)
-  const off = ' /pokemon trainer turns trainer mode off.'
-  expect(await run($, 'vulpix')).toBe('Vulpix isn\'t in your box. Catch a wild one to raise it. Or pick your starter: Bulbasaur, Charmander, Squirtle, or Pikachu.' + off)
+  const boxOnly = (mon: string) => 'Trainer mode is on, so you can only switch to mons in your box. Catch a wild ' + mon + ' to raise one, or turn trainer mode off with /pokemon trainer.'
+  expect(await run($, 'vulpix')).toBe(boxOnly('Vulpix'))
+  expect(await run($, 'squirtle')).toBe(boxOnly('Squirtle'))
   expect(await run($, 'pidgey')).toBe('Now showing default Pidgey.')
-  expect(await run($, 'squirtle')).toBe('Now showing default Squirtle.')
-  expect(saved.starter).toBe('squirtle')
-  expect(saved.stats.squirtle).toEqual({ xp: 5 ** 3 })
-  expect(await run($, 'charmander')).toBe('Charmander isn\'t in your box. Catch a wild one to raise it. You picked Squirtle as your starter.' + off)
   expect(await run($, 'abra')).toBe('Now showing default Abra.')
-  expect(await run($, 'squirtle')).toBe('Now showing default Squirtle.')
   expect(await run($, 'torchic')).toBe('Now showing default Torchic.')
   expect(await run($, 'trainer')).toBe('Trainer mode is off. /pokemon <mon> shows any mon.')
   expect(saved.trainer).toBe(false)
   expect(await run($, 'vulpix')).toBe('Now showing default Vulpix.')
-  expect(await run($, 'trainer')).toBe('Trainer mode is on. Your starter is Squirtle. Every other mon has to be caught in the wild first. Mons fetched with /pokemon new stay free to show.')
-  expect(await run($, 'charmander')).toBe('Charmander isn\'t in your box. Catch a wild one to raise it. You picked Squirtle as your starter.' + off)
+  expect(await run($, 'trainer')).toBe('Trainer mode is on. You can only switch to mons in your box, so catch the rest in the wild. Mons fetched with /pokemon new stay free to show.')
 })
 
-test('in trainer mode a starter already in the box is the one picked, and a box with no mon left picks again', async ($, on) => {
-  const off = ' /pokemon trainer turns trainer mode off.'
-  const saved: Record<string, any> = { stats: { charmander: { xp: 10 ** 3 } } }
+test('in trainer mode an empty box picks one starter, and picks again once every mon in it is gone', async ($, on) => {
+  const saved: Record<string, any> = {}
   await startedWith($, on, saved, 0)
-  expect(await run($, 'squirtle')).toBe('Squirtle isn\'t in your box. Catch a wild one to raise it. You picked Charmander as your starter.' + off)
   await run($, 'trainer')
-  expect(await run($, 'trainer')).toBe('Trainer mode is on. Your starter is Charmander. Every other mon has to be caught in the wild first. Mons fetched with /pokemon new stay free to show.')
-  saved.starter = 'squirtle'
-  expect(await run($, 'squirtle')).toBe('Squirtle isn\'t in your box. Catch a wild one to raise it.' + off)
-  saved.stats = { charmander: { dead: { at: 0 } } }
-  await run($, 'trainer')
-  expect(await run($, 'trainer')).toBe('Trainer mode is on. Pick your starter: Bulbasaur, Charmander, Squirtle, or Pikachu. Every other mon has to be caught in the wild first. Mons fetched with /pokemon new stay free to show.')
+  expect(await run($, 'trainer')).toBe('Trainer mode is on. Pick your starter, Bulbasaur, Charmander, Squirtle, or Pikachu, then catch the rest in the wild. Mons fetched with /pokemon new stay free to show.')
+  expect(await run($, 'vulpix')).toBe('Trainer mode is on, so pick your starter first: Bulbasaur, Charmander, Squirtle, or Pikachu. Catch the rest in the wild, or turn trainer mode off with /pokemon trainer.')
+  expect(await run($, 'squirtle')).toBe('Now showing default Squirtle.')
+  expect(saved.stats.squirtle).toEqual({ xp: 5 ** 3 })
+  expect(await run($, 'charmander')).toBe('Trainer mode is on, so you can only switch to mons in your box. Catch a wild Charmander to raise one, or turn trainer mode off with /pokemon trainer.')
+  saved.stats = { squirtle: { dead: { at: 0 } } }
   expect(await run($, 'bulbasaur')).toBe('Now showing default Bulbasaur.')
-  expect(saved.starter).toBe('bulbasaur')
 })
 
 test('a species lost in a nuzlocke comes back only by catching a new one, at its first level', async ($, on) => {

@@ -1041,43 +1041,31 @@ async function trainerCommand($) {
   S.trainerOn = !S.trainerOn
   await $.store.set('trainer', S.trainerOn)
   if (!S.trainerOn) return { text: 'Trainer mode is off. /pokemon <mon> shows any mon.' }
-  const { starter, canPick } = await starterOf($)
-  const pick = canPick ? 'Pick your starter: ' + orList(STARTERS.map(displayName)) + '.' : 'Your starter is ' + displayName(starter) + '.'
-  return { text: 'Trainer mode is on. ' + pick + ' Every other mon has to be caught in the wild first. Mons fetched with /pokemon new stay free to show.' }
+  const pick = (await boxIsEmpty($)) ? 'Pick your starter, ' + orList(STARTERS.map(displayName)) + ', then catch the rest in the wild.' : 'You can only switch to mons in your box, so catch the rest in the wild.'
+  return { text: 'Trainer mode is on. ' + pick + ' Mons fetched with /pokemon new stay free to show.' }
 }
 
-// With trainer mode on, the first mon you pick is one of the starters, and after it only
-// mons in your box can be shown. Mons fetched with /pokemon new are left out of it.
+// With trainer mode on, only mons in your box can be shown. A box with no mon in it, new
+// or with every mon gone, picks one of the starters, so it's never stuck with nothing to
+// show or catch with. Mons fetched with /pokemon new are left out of it.
 const STARTERS = ['bulbasaur', 'charmander', 'squirtle', 'pikachu']
 
-// The starter picked, and whether one may be picked now. A starter in the box counts as
-// the one picked, and a box with no mon left in it gets a new pick, so it can't be stuck
-// with nothing to show or catch with.
-async function starterOf($) {
+async function boxIsEmpty($) {
   const saved = await $.store.get('stats')
   if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
-  const owned = Object.keys(S.stats).filter((name) => MONS.includes(name) && !isGone(name))
-  const picked = await $.store.get('starter')
-  const starter = MONS.includes(picked) ? picked : STARTERS.find((name) => owned.includes(name))
-  return { starter, canPick: !starter || owned.length === 0 }
+  return !Object.keys(S.stats).some((name) => MONS.includes(name) && !isGone(name))
 }
 
 // Why trainer mode keeps asked off the band, or null when it may be shown. The caller has
-// freshened asked's record. A starter picked is saved, and joins the box at its first level.
+// freshened asked's record. A starter picked joins the box at its first level.
 async function trainerWait($, asked) {
   if (!S.trainerOn || asked === S.mon || S.stats[asked] || (await $.store.get(CUSTOM_PREFIX + asked))) return null
-  const { starter, canPick } = await starterOf($)
-  if (canPick && STARTERS.includes(asked)) {
-    await $.store.set('starter', asked)
-    S.stats[asked] = { xp: xpAt(startLevel(asked)) }
-    await saveRecords($, [asked])
-    return null
-  }
-  const off = ' /pokemon trainer turns trainer mode off.'
-  const catchIt = displayName(asked) + ' isn\'t in your box. Catch a wild one to raise it.'
-  if (canPick) return { text: catchIt + ' Or pick your starter: ' + orList(STARTERS.map(displayName)) + '.' + off }
-  const other = STARTERS.includes(asked) && asked !== starter ? ' You picked ' + displayName(starter) + ' as your starter.' : ''
-  return { text: catchIt + other + off }
+  const off = ', or turn trainer mode off with /pokemon trainer.'
+  if (!(await boxIsEmpty($))) return { text: 'Trainer mode is on, so you can only switch to mons in your box. Catch a wild ' + displayName(asked) + ' to raise one' + off }
+  if (!STARTERS.includes(asked)) return { text: 'Trainer mode is on, so pick your starter first: ' + orList(STARTERS.map(displayName)) + '. Catch the rest in the wild' + off }
+  S.stats[asked] = { xp: xpAt(startLevel(asked)) }
+  await saveRecords($, [asked])
+  return null
 }
 
 // A broken frame goes to the debug log, each distinct message once
