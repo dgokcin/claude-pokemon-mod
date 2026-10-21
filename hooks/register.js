@@ -1041,8 +1041,8 @@ async function trainerCommand($) {
   S.trainerOn = !S.trainerOn
   await $.store.set('trainer', S.trainerOn)
   if (!S.trainerOn) return { text: 'Trainer mode is off. /pokemon <mon> shows any mon.' }
-  const starter = await $.store.get('starter')
-  const pick = MONS.includes(starter) ? 'Your starter is ' + displayName(starter) + '.' : 'Pick your starter: ' + orList(STARTERS.map(displayName)) + '.'
+  const { starter, canPick } = await starterOf($)
+  const pick = canPick ? 'Pick your starter: ' + orList(STARTERS.map(displayName)) + '.' : 'Your starter is ' + displayName(starter) + '.'
   return { text: 'Trainer mode is on. ' + pick + ' Every other mon has to be caught in the wild first. Mons fetched with /pokemon new stay free to show.' }
 }
 
@@ -1050,18 +1050,23 @@ async function trainerCommand($) {
 // mons in your box can be shown. Mons fetched with /pokemon new are left out of it.
 const STARTERS = ['bulbasaur', 'charmander', 'squirtle', 'pikachu']
 
-// Why trainer mode keeps asked off the band, or null when it may be shown. The caller has
-// freshened asked's record. A starter in the box counts as the one picked, and a box with
-// no mon left in it gets a new pick, so it can't be stuck with nothing to show or catch
-// with. A starter picked is saved, and joins the box at its first level.
-async function trainerWait($, asked) {
-  if (!S.trainerOn || asked === S.mon || S.stats[asked] || (await $.store.get(CUSTOM_PREFIX + asked))) return null
+// The starter picked, and whether one may be picked now. A starter in the box counts as
+// the one picked, and a box with no mon left in it gets a new pick, so it can't be stuck
+// with nothing to show or catch with.
+async function starterOf($) {
   const saved = await $.store.get('stats')
   if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
   const owned = Object.keys(S.stats).filter((name) => MONS.includes(name) && !isGone(name))
   const picked = await $.store.get('starter')
   const starter = MONS.includes(picked) ? picked : STARTERS.find((name) => owned.includes(name))
-  const canPick = !starter || owned.length === 0
+  return { starter, canPick: !starter || owned.length === 0 }
+}
+
+// Why trainer mode keeps asked off the band, or null when it may be shown. The caller has
+// freshened asked's record. A starter picked is saved, and joins the box at its first level.
+async function trainerWait($, asked) {
+  if (!S.trainerOn || asked === S.mon || S.stats[asked] || (await $.store.get(CUSTOM_PREFIX + asked))) return null
+  const { starter, canPick } = await starterOf($)
   if (canPick && STARTERS.includes(asked)) {
     await $.store.set('starter', asked)
     S.stats[asked] = { xp: xpAt(startLevel(asked)) }

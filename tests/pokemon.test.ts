@@ -4077,9 +4077,13 @@ test('in trainer mode a starter already in the box is the one picked, and a box 
   const saved: Record<string, any> = { stats: { charmander: { xp: 10 ** 3 } } }
   await startedWith($, on, saved, 0)
   expect(await run($, 'squirtle')).toBe('Squirtle isn\'t in your box. Catch a wild one to raise it. You picked Charmander as your starter.' + off)
+  await run($, 'trainer')
+  expect(await run($, 'trainer')).toBe('Trainer mode is on. Your starter is Charmander. Every other mon has to be caught in the wild first. Mons fetched with /pokemon new stay free to show.')
   saved.starter = 'squirtle'
   expect(await run($, 'squirtle')).toBe('Squirtle isn\'t in your box. Catch a wild one to raise it.' + off)
   saved.stats = { charmander: { dead: { at: 0 } } }
+  await run($, 'trainer')
+  expect(await run($, 'trainer')).toBe('Trainer mode is on. Pick your starter: Bulbasaur, Charmander, Squirtle, or Pikachu. Every other mon has to be caught in the wild first. Mons fetched with /pokemon new stay free to show.')
   expect(await run($, 'bulbasaur')).toBe('Now showing default Bulbasaur.')
   expect(saved.starter).toBe('bulbasaur')
 })
