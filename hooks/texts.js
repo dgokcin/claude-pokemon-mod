@@ -145,6 +145,7 @@ export const HELP = [
     ['sync', 'Same mon in every open session', () => onOff(S.syncOn)],
     ['autoevolve', 'Evolve on its own at its level', () => onOff(S.autoEvolve)],
     ['nuzlocke', 'A fainted mon is lost for good', () => onOff(S.nuzlockeOn)],
+    ['trainer', 'One starter, then only mons you catch', () => onOff(S.trainerOn)],
   ]],
 ]
 // The hidden debug options, at the top of /pokemon help only while debug is on

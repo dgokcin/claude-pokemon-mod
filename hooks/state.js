@@ -81,6 +81,8 @@ export const S = {
   seenPick: null,
   // With /pokemon nuzlocke on, a mon that faints is gone for good
   nuzlockeOn: false,
+  // With /pokemon trainer on, you pick one starter and show only mons in your box
+  trainerOn: true,
   // The party picked with /pokemon party add and remove, in order, or null for the box's
   // highest level mons
   partyPicks: null,

@@ -561,6 +561,7 @@ async function followPick($) {
 async function syncSessions($) {
   S.syncOn = (await $.store.get('sync')) === true
   S.nuzlockeOn = (await $.store.get('nuzlocke')) === true
+  S.trainerOn = (await $.store.get('trainer')) !== false
   if (S.syncOn && (await followPick($))) return
   const writes = statWrites
   const saved = await $.store.get('stats')
@@ -1036,6 +1037,44 @@ async function nuzlockeCommand($) {
   return { text: 'Nuzlocke is on. A mon that faints is gone for good, with no revive and no coming back. Keep them fed and happy.' + warning }
 }
 
+async function trainerCommand($) {
+  S.trainerOn = !S.trainerOn
+  await $.store.set('trainer', S.trainerOn)
+  if (!S.trainerOn) return { text: 'Trainer mode is off. /pokemon <mon> shows any mon.' }
+  const starter = await $.store.get('starter')
+  const pick = MONS.includes(starter) ? 'Your starter is ' + displayName(starter) + '.' : 'Pick your starter: ' + orList(STARTERS.map(displayName)) + '.'
+  return { text: 'Trainer mode is on. ' + pick + ' Every other mon has to be caught in the wild first. Mons fetched with /pokemon new stay free to show.' }
+}
+
+// With trainer mode on, the first mon you pick is one of the starters, and after it only
+// mons in your box can be shown. Mons fetched with /pokemon new are left out of it.
+const STARTERS = ['bulbasaur', 'charmander', 'squirtle', 'pikachu']
+
+// Why trainer mode keeps asked off the band, or null when it may be shown. The caller has
+// freshened asked's record. A starter in the box counts as the one picked, and a box with
+// no mon left in it gets a new pick, so it can't be stuck with nothing to show or catch
+// with. A starter picked is saved, and joins the box at its first level.
+async function trainerWait($, asked) {
+  if (!S.trainerOn || asked === S.mon || S.stats[asked] || (await $.store.get(CUSTOM_PREFIX + asked))) return null
+  const saved = await $.store.get('stats')
+  if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
+  const owned = Object.keys(S.stats).filter((name) => MONS.includes(name) && !isGone(name))
+  const picked = await $.store.get('starter')
+  const starter = MONS.includes(picked) ? picked : STARTERS.find((name) => owned.includes(name))
+  const canPick = !starter || owned.length === 0
+  if (canPick && STARTERS.includes(asked)) {
+    await $.store.set('starter', asked)
+    S.stats[asked] = { xp: xpAt(startLevel(asked)) }
+    await saveRecords($, [asked])
+    return null
+  }
+  const off = ' /pokemon trainer turns trainer mode off.'
+  const catchIt = displayName(asked) + ' isn\'t in your box. Catch a wild one to raise it.'
+  if (canPick) return { text: catchIt + ' Or pick your starter: ' + orList(STARTERS.map(displayName)) + '.' + off }
+  const other = STARTERS.includes(asked) && asked !== starter ? ' You picked ' + displayName(starter) + ' as your starter.' : ''
+  return { text: catchIt + other + off }
+}
+
 // A broken frame goes to the debug log, each distinct message once
 const logged = new Set()
 function logOnce($, err) {
@@ -1167,6 +1206,7 @@ export function register(on) {
     S.seenPick = savedMon ?? null
     S.syncOn = (await $.store.get('sync')) === true
     S.nuzlockeOn = (await $.store.get('nuzlocke')) === true
+    S.trainerOn = (await $.store.get('trainer')) !== false
     await loadPartyPicks($)
     forgetOldKeys($).catch((err) => logOnce($, err))
     const savedVariant = await $.store.get('variant')
@@ -1270,6 +1310,7 @@ export function register(on) {
       if (isDead(asked)) return { text: displayName(asked) + ' is gone. Catch a new one in the wild to raise it again.' }
       if (hasRunAway(asked)) return { text: goneLine(asked) }
       if (asked !== S.mon && (await stillHealing($))) return healingReply()
+      if ((reply = await trainerWait($, asked))) return reply
       await switchTo($, asked)
     } else if (asked === 'new' || asked.startsWith('new ')) {
       if (await stillHealing($)) return healingReply()
@@ -1391,6 +1432,8 @@ export function register(on) {
       return reviveCommand($, asked.slice('revive'.length).trim())
     } else if (asked === 'nuzlocke') {
       return nuzlockeCommand($)
+    } else if (asked === 'trainer') {
+      return trainerCommand($)
     } else if (asked === 'evolve' || asked.startsWith('evolve ')) {
       return evolveCommand($, asked.slice('evolve'.length).trim())
     } else if (asked === 'stop') {

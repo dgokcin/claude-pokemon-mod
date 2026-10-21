@@ -102,6 +102,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon stop` | Cancel an evolution |
 | `/pokemon revive`, `/pokemon revive <mon>` | Take a fainted mon to a Pokémon Center. Nurse Joy heals it in 5 minutes, and it stands up at 50% food and 30% happiness |
 | `/pokemon nuzlocke` | Toggle nuzlocke (off by default, saved across sessions). On, a mon that faints is gone for good |
+| `/pokemon trainer` | Toggle trainer mode (on by default, saved across sessions). On, your first pick is one starter, Bulbasaur, Charmander, Squirtle, or Pikachu, and `/pokemon <mon>` shows only mons in your box, so the rest have to be caught in the wild. Mons fetched with `/pokemon new` stay free to show. Off, `/pokemon <mon>` shows any mon |
 | `/pokemon sleep` | Tuck the mon in, so its meters drain slower until Claude starts working in a session showing it. Run it again to wake it |
 | `/pokemon needs` | Toggle food and happiness (on by default). Off, the faint and runaway clocks stop too |
 | `/pokemon sync` | Toggle syncing the mon across sessions (off by default, saved across sessions). On, every open session switches to the mon picked last in any of them, fetched mons included. Off, each session keeps its own |
