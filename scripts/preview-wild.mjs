@@ -8,7 +8,8 @@
 // node scripts/preview-wild.mjs <mon> <foe> [options]
 //   --move <name>   play just this move at the foe once it arrives
 //   --tools <n>     tool calls that bank a move each, two at most (default 2)
-//   --throw <how>   throw a ball: 'fail' at full HP, or 'catch' once tool calls wear the foe out
+//   --strike        wait for the foe to play one of its moves at the home mon
+//   --throw <how>   throw a ball: 'fail' at full HP, or 'catch' once tool calls make the foe weak
 //   --every <n>     keep every nth frame (default 4)
 //   --balls <n>     subagents running, drawn as Poké Balls (default 0)
 //   --scale <n>     screen pixels per sprite pixel (default 4)
@@ -25,6 +26,7 @@ const { values: opts, positionals } = parseArgs({
   options: {
     move: { type: 'string' },
     tools: { type: 'string', default: '2' },
+    strike: { type: 'boolean', default: false },
     throw: { type: 'string' },
     every: { type: 'string', default: '4' },
     balls: { type: 'string', default: '0' },
@@ -36,7 +38,7 @@ const { values: opts, positionals } = parseArgs({
 })
 const [mon, foe] = positionals
 if (!SPRITES[mon] || !SPRITES[foe]) {
-  console.error('usage: node scripts/preview-wild.mjs <mon> <foe> [--move name] [--tools n] [--throw fail|catch] [--every n] [--balls n] [--scale n] [--shiny] [--light] [--out file]')
+  console.error('usage: node scripts/preview-wild.mjs <mon> <foe> [--move name] [--strike] [--tools n] [--throw fail|catch] [--every n] [--balls n] [--scale n] [--shiny] [--light] [--out file]')
   process.exit(1)
 }
 
@@ -66,13 +68,18 @@ const playFor = async (ticks) => {
 
 // Walk in, fight, then flee until the strip shrinks back. A lone move is the whole sheet.
 await play(() => host.toasts.length > 0)
-if (opts.move) {
+if (opts.strike) {
+  const struck = () => host.toasts.some((text) => /^Wild .+ used .+!$/.test(text))
+  await play(struck)
+  played.length = 0
+  await playFor(60)
+} else if (opts.move) {
   played.length = 0
   console.log(await host.command('attack ' + opts.move))
   await playFor(BATTLE_TICKS * 4)
 } else if (opts.throw) {
-  const worn = () => host.toasts.some((text) => text.includes('worn out'))
-  for (let k = 0; k < 8 && opts.throw === 'catch' && !worn(); k++) {
+  const weak = () => host.toasts.some((text) => text.includes('is weak'))
+  for (let k = 0; k < 8 && opts.throw === 'catch' && !weak(); k++) {
     await host.fire('tool.call', { tool: 'Read' }, {})
     await playFor(ATTACK_TICKS)
   }
@@ -95,7 +102,7 @@ console.log(host.toasts.join('\n'))
 
 const frames = played.filter((f, i) => i % EVERY === 0 || i === played.length - 1)
 const moveKey = (name) => name.toLowerCase().replace(/[\s\-_'.]/g, '')
-const suffix = opts.move ? '-' + moveKey(opts.move) : opts.throw ? '-' + opts.throw : ''
+const suffix = opts.move ? '-' + moveKey(opts.move) : opts.strike ? '-strike' : opts.throw ? '-' + opts.throw : ''
 const out = opts.out ?? '/tmp/' + mon + '-vs-' + foe + suffix + '.png'
 const { rows, columns } = contactSheet(frames, { out, scale: Number(opts.scale), light: opts.light, perRow: 6 })
 console.log(out + ': ' + frames.length + ' frames, up to ' + columns + ' columns and ' + rows + ' rows')

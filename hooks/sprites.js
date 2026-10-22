@@ -166,12 +166,12 @@ export function sleepingFrame(shown, view) {
 // A fainted mon's first idle frame with X eyes, cached per frame. Eyes drawn as lines get
 // their X too.
 const faintedFrames = new Map()
-export function faintedFrame(shown) {
-  const sheet = SPRITES[shown].variants[S.variant]
+export function faintedFrame(shown, variant = S.variant) {
+  const sheet = SPRITES[shown].variants[variant]
   const rows = sheet.idle[0].rows
   if (!faintedFrames.has(rows)) {
-    const open = eyesOf(shown, S.variant, 'idle', 0)
-    const boxes = open?.length ? open : keptEyesOf(shown, S.variant, 'idle', 0).boxes
+    const open = eyesOf(shown, variant, 'idle', 0)
+    const boxes = open?.length ? open : keptEyesOf(shown, variant, 'idle', 0).boxes
     faintedFrames.set(rows, faintedRows(rows, sheet.palette, boxes))
   }
   return faintedFrames.get(rows)
@@ -186,12 +186,12 @@ export function dizzyRows(name) {
 
 // The fainted palette as letter to 0xRRGGBB, per mon and variant
 const FAINTED_COLORS = {}
-export function faintedColors(shown) {
+export function faintedColors(shown, variant = S.variant) {
   FAINTED_COLORS[shown] ??= {}
-  FAINTED_COLORS[shown][S.variant] ??= Object.fromEntries(
-    faintedPalette(SPRITES[shown].variants[S.variant].palette).map((hex, i) => [String.fromCharCode(97 + i), parseInt(hex.slice(1), 16)]),
+  FAINTED_COLORS[shown][variant] ??= Object.fromEntries(
+    faintedPalette(SPRITES[shown].variants[variant].palette).map((hex, i) => [String.fromCharCode(97 + i), parseInt(hex.slice(1), 16)]),
   )
-  return FAINTED_COLORS[shown][S.variant]
+  return FAINTED_COLORS[shown][variant]
 }
 
 // The most common color of a frame, leaving out dark outlines and shading, cached per frame

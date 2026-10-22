@@ -4,17 +4,24 @@ import { rnd } from './effects/draw.js'
 // A wild mon's visit, kept as plain data. The home mon walks home while the foe is
 // calling, then the foe walks in from the scene's left edge, stands facing the home mon
 // in battle, and walks back off the way it came when it flees. A thrown ball holds it
-// in the throw phase until it's caught or breaks free. A function that moves the visit on
+// in the throw phase until it's caught or breaks free. Knocked out, it lies fainted a
+// moment and blinks away, and can't be caught. A function that moves the visit on
 // returns a new wild, or null once it's gone, and leaves its input alone.
 
 const WILD_LEFT = 2
 const WILD_GAP = 8
 export const WILD_STAY_MS = 4 * 60 * 1000
-// How long a worn out foe waits for a ball
-export const WORN_OUT_MS = 90 * 1000
+// How long a weak foe waits for a ball
+export const WEAK_MS = 90 * 1000
 // The fewest milliseconds between the home mon's moves at the foe, and the most added at random
 export const ATTACK_GAP_MS = 6000
 export const ATTACK_JITTER_MS = 2000
+// The same for the foe's strikes back, which only make the home mon flinch
+export const STRIKE_GAP_MS = 10000
+export const STRIKE_JITTER_MS = 5000
+// A fainted foe lies still, then blinks away over FAINT_BLINK_TICKS
+const FAINT_TICKS = 40
+const FAINT_BLINK_TICKS = 12
 // Main turns that may end before an uncaught foe leaves
 export const WILD_TURNS = 4
 const WALK_TICKS = 2
@@ -45,15 +52,18 @@ export const newWild = (pick, seed) => ({
   nextAttackAt: 0,
   hitAt: null,
   turns: 0,
+  nextStrikeAt: 0,
+  strike: null,
+  faintedAt: null,
 })
 
 // Work done while the foe is in battle, or held in a ball, banks a move, up to MAX_CHARGE
 export const chargedWild = (wild) =>
   wild?.phase === 'battle' || wild?.phase === 'throw' ? { ...wild, charge: Math.min(MAX_CHARGE, wild.charge + 1) } : wild
 
-// A worn out foe is a sure catch. Otherwise the odds grow from 0 at full HP to its tier's best.
-// A foe with a catchScale, like a mon that ran away from you, is that much harder to hold.
-const catchChance = (wild) => (wild.hp === 0 ? 1 : TIERS[wild.tier].catch * (1 - wild.hp / wild.maxHp)) * (wild.catchScale ?? 1)
+// The odds grow from 0 at full HP to the foe's tier's best. A foe with a catchScale, like a
+// mon that ran away from you, is that much harder to hold.
+const catchChance = (wild) => TIERS[wild.tier].catch * (1 - wild.hp / wild.maxHp) * (wild.catchScale ?? 1)
 
 // The times the ball rocks before it clicks shut, or before the foe breaks out
 const shakesFor = (chance, caught) => (caught ? 3 : Math.min(3, Math.floor(chance * 4)))
@@ -87,10 +97,22 @@ export function throwStage(thrown, tick) {
 // and half again for a power 2 move
 export const damageOf = (wild, power, roll) => (wild.maxHp / TIERS[wild.tier].hits) * (0.8 + 0.4 * roll) * (power >= 2 ? 1.5 : 1)
 
+// Weak when the strongest move at its best roll could knock it out
+export const isWeak = (wild) => wild.hp <= damageOf(wild, 2, 1)
+
+export const faintedWild = (wild, tick) => ({ ...wild, hp: 0, phase: 'fainted', faintedAt: tick })
+
+// Start one of the foe's moves at the home mon. attack is the move as prepareAttack
+// settles it, played from start.
+export const strikingWild = (wild, move, attack, tick, nextStrikeAt) => ({ ...wild, strike: { move, attack, start: tick, landed: false }, nextStrikeAt })
+
 export const foeJolt = (wild, tick) =>
   wild.hitAt !== null && tick - wild.hitAt < JOLT_TICKS ? (Math.floor((tick - wild.hitAt) / 2) % 2 === 0 ? -1 : 1) : 0
 
-export const foeBlinks = (wild, tick) => wild.hitAt !== null && tick - wild.hitAt < BLINK_TICKS && Math.floor((tick - wild.hitAt) / 2) % 2 === 1
+export function foeBlinks(wild, tick) {
+  if (wild.phase === 'fainted') return tick - wild.faintedAt >= FAINT_TICKS && Math.floor((tick - wild.faintedAt) / 2) % 2 === 1
+  return wild.hitAt !== null && tick - wild.hitAt < BLINK_TICKS && Math.floor((tick - wild.hitAt) / 2) % 2 === 1
+}
 
 // The HP bar as stamp rows and colors: filled from the left in green, yellow, or red by
 // what's left, the rest in empty
@@ -101,7 +123,7 @@ export function hpBar(wild, empty, width = HP_BAR) {
   return { rows: ['f'.repeat(filled) + 'e'.repeat(width - filled)], colors: { f: color, e: empty }, width }
 }
 
-// Drawn in the scene, from walking in to walking off
+// Drawn in the scene, from walking in to walking off or blinking away fainted
 export const isOnStage = (wild) => wild !== null && wild.phase !== 'calling'
 
 // Here to fight: walking in, standing, or held in a ball for now
@@ -125,13 +147,14 @@ export function foeX(wild, { spot, offLeft }) {
 // Walk off from where it is. One still calling hasn't shown up, so it just goes.
 export function fleeingWild(wild, at) {
   if (wild.phase === 'calling') return null
-  if (wild.phase === 'fleeing') return wild
+  if (wild.phase === 'fleeing' || wild.phase === 'fainted') return wild
   return { ...wild, phase: 'fleeing', x: foeX(wild, at) }
 }
 
 // One tick of the visit, with the event it reached: 'arrived' when the foe takes its
 // spot, 'timeout' when it leaves for want of a fight, 'caught' when the ball clicks shut,
-// 'brokefree' when the foe breaks out, and 'gone' once it's out of sight or in the ball.
+// 'brokefree' when the foe breaks out, and 'gone' once it's out of sight, in the ball, or
+// blinked away fainted.
 // at holds spot and offLeft as foeX takes them, and stayTicks is how long it waits for a fight.
 export function stepWild(wild, { tick, atHome, at, stayTicks }) {
   const moves = tick % WALK_TICKS === 0
@@ -154,6 +177,7 @@ export function stepWild(wild, { tick, atHome, at, stayTicks }) {
     if (wild.throw.caught) return { wild: null, event: 'gone' }
     return { wild: { ...wild, phase: 'battle', throw: null, leaveAt: tick + stayTicks } }
   }
+  if (wild.phase === 'fainted') return tick - wild.faintedAt < FAINT_TICKS + FAINT_BLINK_TICKS ? { wild } : { wild: null, event: 'gone' }
   if (!moves) return { wild }
   if (wild.x - 1 <= at.offLeft) return { wild: null, event: 'gone' }
   return { wild: { ...wild, x: wild.x - 1 } }

@@ -1,4 +1,5 @@
 import { INKS } from './art.js'
+import { prepareAttack } from './attacks.js'
 import { drawScene, inkFor } from './band.js'
 import { clearAlert, isAlerted, raiseAlert } from './bubble.js'
 import {
@@ -9,7 +10,7 @@ import { IMAGE_WAIT_TICKS, TICK_MS } from './constants.js'
 import { CREW_SIZE, crewThinking, crewToolEnds, crewToolStarts, isOut, joinCrew } from './crew.js'
 import { CUSTOM_PREFIX, fetchMon, monsOfGen } from './custom.js'
 import { dexKey, mergedDexEntry, pickWild, tierOf } from './dex.js'
-import { catchCommand, foeMoves, runawayFoe, wildName } from './encounter.js'
+import { catchCommand, foeMoves, runawayFoe, wildMoves, wildName } from './encounter.js'
 import { evolutionsOf, startLevel } from './evolutions.js'
 import { SPRITES } from './frames.js'
 import { bandRows, bandZoom, battleFits, clampX, homeX, isHome, stripTarget, wildAt } from './layout.js'
@@ -33,7 +34,8 @@ import {
 import { assignedTo, canWork, crewVariant, endAgent, partyMons, stepCrewMons, typesOf } from './team.js'
 import { andList, boxText, dexText, evolutionText, HELP, helpText, orList, statsText } from './texts.js'
 import {
-  chargedWild, damageOf, fleeingWild, isHere, isOnStage, newWild, stepWild, WILD_STAY_MS, WILD_TURNS, WORN_OUT_MS,
+  chargedWild, damageOf, faintedWild, fleeingWild, foeX, isHere, isOnStage, isWeak, newWild, STRIKE_GAP_MS, STRIKE_JITTER_MS,
+  stepWild, strikingWild, WEAK_MS, WILD_STAY_MS, WILD_TURNS,
 } from './wild.js'
 import { SIZES } from './zoom.js'
 
@@ -167,8 +169,10 @@ function evolveCommand($, wanted) {
   return { text: 'You let ' + name + ' evolve.' }
 }
 
-// Send the foe off, with a toast unless quiet. One still calling just doesn't come.
+// Send the foe off, with a toast unless quiet. One still calling just doesn't come, and
+// a fainted one blinks away where it lies.
 function fleeWild($, quiet = false) {
+  if (S.wild?.phase === 'fainted') return
   const shown = isOnStage(S.wild) && S.wild.phase !== 'fleeing'
   if (shown && !quiet) $.ui.toast('Wild ' + displayName(S.wild.mon) + ' fled!')
   S.wild = fleeingWild(S.wild, wildAt())
@@ -186,11 +190,12 @@ async function markDex($, key, patch) {
 // Move the visit on a tick. Asleep or fainted, the home mon can't fight, so the foe leaves.
 function stepWildPhase($) {
   if (!S.wild) return
-  if (S.wild.phase !== 'fleeing' && (isTuckedIn() || isAsleep() || isDown())) return fleeWild($)
+  if (!['fleeing', 'fainted'].includes(S.wild.phase) && (isTuckedIn() || isAsleep() || isDown())) return fleeWild($)
   const result = stepWild(S.wild, { tick: S.tick, atHome: isHome() && !S.attack, at: wildAt(), stayTicks: WILD_STAY_MS / TICK_MS })
   if (result.event === 'timeout') fleeWild($)
   else S.wild = result.wild
   if (result.event === 'arrived') {
+    S.wild = { ...S.wild, nextStrikeAt: S.tick + strikeGap() }
     const yours = S.wild.runaway ? ' It looks a lot like ' + (S.stats[S.wild.mon]?.nickname ?? 'your ' + displayName(S.wild.mon)) + '.' : ''
     $.ui.toast('A ' + wildName() + ' (Lv. ' + S.wild.level + ') appeared!' + yours)
     markDex($, S.wild.key, { seen: S.nowMs }).catch((err) => logOnce($, err))
@@ -258,15 +263,21 @@ function battleButtons($, { Box, Button }) {
   ]
 }
 
+const strikeGap = () => Math.round((STRIKE_GAP_MS + Math.random() * STRIKE_JITTER_MS) / TICK_MS)
+const STRIKE_DELAY_TICKS = 2000 / TICK_MS
+
 // Land a move on the foe 60% of the way through it, and spend banked work on the next
-// move once the mon is free, awake, at home, and its last move is long enough ago
+// move once the mon is free, awake, at home, and its last move is long enough ago. The
+// mon holds off a weak foe, so only /pokemon attack knocks it out.
 function stepBattle($) {
   if (S.attack?.atFoe && !S.attack.landed && !S.attack.backing && S.tick >= S.attack.start + Math.round(S.attack.ticks * 0.6)) {
     S.attack.landed = true
     hitFoe($)
+    if (S.wild.phase !== 'battle') return
   }
-  const ready = !S.attack && !S.food && !S.evolving && !isAlerted() && !isFlinching() && !isAsleep() && S.x === homeX()
-  if (!ready || S.wild.hp === 0 || S.wild.charge === 0 || S.tick < S.wild.nextAttackAt) return
+  strikeBack($)
+  const ready = !S.wild.strike && !S.attack && !S.food && !S.evolving && !isAlerted() && !isFlinching() && !isAsleep() && S.x === homeX()
+  if (!ready || isWeak(S.wild) || S.wild.charge === 0 || S.tick < S.wild.nextAttackAt) return
   const moves = foeMoves()
   const move = moves[Math.floor(Math.random() * moves.length)]
   S.wild = { ...S.wild, charge: S.wild.charge - 1 }
@@ -274,13 +285,40 @@ function stepBattle($) {
   $.ui.toast(nameOf(S.mon) + ' used ' + move.name + '!')
 }
 
-// A hit resets the foe's wait for a fight. Worn out, it waits WORN_OUT_MS for a ball.
+// Now and then the foe plays one of its own moves at the free mon. It lands 60% of the
+// way through, and only makes the mon flinch and puts its next move off, so a fight
+// never touches the mon's meters.
+function strikeBack($) {
+  const { strike } = S.wild
+  if (strike && !strike.landed && S.tick >= strike.start + Math.round(strike.attack.ticks * 0.6)) {
+    S.wild = { ...S.wild, strike: { ...strike, landed: true }, nextAttackAt: Math.max(S.wild.nextAttackAt, S.tick + STRIKE_DELAY_TICKS) }
+    flinch()
+  }
+  if (strike && S.tick >= strike.start + strike.attack.ticks) S.wild = { ...S.wild, strike: null }
+  const free = !S.wild.strike && !S.attack && !S.food && !S.evolving && !isAsleep() && S.x === homeX()
+  if (!free || S.tick < S.wild.nextStrikeAt) return
+  const moves = wildMoves()
+  const move = moves[Math.floor(Math.random() * moves.length)]
+  const seed = Math.floor(Math.random() * 0x7fffffff)
+  const attack = prepareAttack(move, { side: 'right', seed, x: foeX(S.wild, wildAt()), home: homeX() })
+  S.wild = strikingWild(S.wild, move, attack, S.tick, S.tick + strikeGap())
+  $.ui.toast('Wild ' + displayName(S.wild.mon) + ' used ' + move.name + '!')
+}
+
+// A hit resets the foe's wait for a fight. Weak, it waits WEAK_MS for a ball, and at 0 HP
+// it faints.
 function hitFoe($) {
-  if (S.wild.hp === 0) return
+  const name = displayName(S.wild.mon)
   const hp = Math.max(0, Math.round(S.wild.hp - damageOf(S.wild, S.attack.power, Math.random())))
-  const stay = (hp === 0 ? WORN_OUT_MS : WILD_STAY_MS) / TICK_MS
+  if (hp === 0) {
+    S.wild = faintedWild(S.wild, S.tick)
+    $.ui.toast('Wild ' + name + ' fainted! It can\'t be caught now.')
+    return
+  }
+  const weak = isWeak({ ...S.wild, hp })
+  const stay = (weak ? WEAK_MS : WILD_STAY_MS) / TICK_MS
+  if (weak && !isWeak(S.wild)) $.ui.toast('Wild ' + name + ' is weak! Throw a ball with /pokemon catch. Another hit could knock it out.')
   S.wild = { ...S.wild, hp, hitAt: S.tick, leaveAt: S.tick + stay }
-  if (hp === 0) $.ui.toast('Wild ' + displayName(S.wild.mon) + ' is worn out! Throw a ball with /pokemon catch.')
 }
 
 const SPAWN_CHECK_TICKS = (30 * 1000) / TICK_MS

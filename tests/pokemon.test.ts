@@ -3368,7 +3368,8 @@ test('a wild mon flees after four minutes without a fight, and the strip shrinks
     await clock.advance(60 * 1000)
   }
   await clock.advance(10000)
-  expect(toasts).toEqual(['A wild Pidgeot (Lv. 36) appeared!', 'Wild Pidgeot fled!'])
+  // Its own strikes don't count as a fight
+  expect(toasts.filter((text) => !/^Wild Pidgeot used .+!$/.test(text))).toEqual(['A wild Pidgeot (Lv. 36) appeared!', 'Wild Pidgeot fled!'])
   expect(widths[widths.length - 1]).toBe(RASTER)
   const status = await $.command.run({ command: 'pokemon', args: '' })
   expect(status.text).not.toContain('wild')
@@ -3439,7 +3440,8 @@ async function inBattle($, on, saved: Record<string, any>, foe = 'pidgey') {
   return { ...started, toasts, band }
 }
 
-const movesIn = (toasts: string[]) => toasts.filter((text) => / used .+!$/.test(text))
+// The home mon's moves, leaving out the foe's
+const movesIn = (toasts: string[]) => toasts.filter((text) => / used .+!$/.test(text) && !text.startsWith('Wild '))
 
 test('work during a battle fires a move at the foe, and the hit shrinks its HP bar', async ($, on) => {
   const { clock, blits, widths, toasts } = await inBattle($, on, {})
@@ -3497,7 +3499,8 @@ test('banked work fires one move at a time, at most one every six seconds', asyn
   expect(movesIn(toasts).length).toBe(1)
   await clock.advance(5800)
   expect(movesIn(toasts).length).toBe(1)
-  await clock.advance(2200)
+  // A strike from the foe can put the next move off a little
+  for (let k = 0; k < 8 && movesIn(toasts).length < 2; k++) await clock.advance(1000)
   expect(movesIn(toasts).length).toBe(2)
   // Work banks two moves at most
   await clock.advance(20000)
@@ -3520,7 +3523,8 @@ test('an evolving mon makes no moves until it has evolved', async ($, on) => {
   await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
   await clock.advance(6000)
   expect(movesIn(toasts)).toEqual([])
-  await clock.advance(3000)
+  // A strike from the foe can put the first move off a little
+  for (let k = 0; k < 8 && movesIn(toasts).length === 0; k++) await clock.advance(1000)
   expect(movesIn(toasts)).toEqual([expect.stringMatching(/^Charmeleon used /)])
 })
 
@@ -3530,25 +3534,69 @@ test('/pokemon feed waits until the foe is gone', async ($, on) => {
   expect(feed.text).toBe('Not now, a wild Pidgey is right there!')
 })
 
-test('a foe at 0 HP is worn out, and leaves if no ball comes in time', async ($, on) => {
-  const { clock, toasts } = await inBattle($, on, {})
-  const worn = 'Wild Pidgey is worn out! Throw a ball with /pokemon catch.'
-  // A common foe takes three hits, give or take one
-  for (let k = 0; k < 6 && !toasts.includes(worn); k++) {
+const WEAK = 'Wild Pidgey is weak! Throw a ball with /pokemon catch. Another hit could knock it out.'
+
+// Bank work until the foe in battle is weak
+async function weaken($, clock, toasts: string[]) {
+  for (let k = 0; k < 6 && !toasts.includes(WEAK); k++) {
     await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
     await clock.advance(9000)
   }
-  expect(toasts).toContain(worn)
+  expect(toasts).toContain(WEAK)
+}
+
+// Throw balls at the foe until one holds
+async function catchFoe($, clock, toasts: string[], tries = 24) {
+  for (let k = 0; k < tries && !toasts.some((text) => text.startsWith('Gotcha!')); k++) {
+    await $.command.run({ command: 'pokemon', args: 'catch' })
+    await clock.advance(6000)
+  }
+}
+
+test('work wears a foe down until it is weak, the mon holds off then, and the foe leaves if no ball comes in time', async ($, on) => {
+  const { clock, toasts } = await inBattle($, on, {})
+  await weaken($, clock, toasts)
   const moves = movesIn(toasts).length
-  expect(moves).toBeGreaterThanOrEqual(2)
-  expect(moves).toBeLessThanOrEqual(5)
-  // Nothing left to hit, so work banks no more moves
-  await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
-  await clock.advance(9000)
+  // A common foe takes three hits, give or take one, so it's weak after one or two
+  expect(moves).toBeGreaterThanOrEqual(1)
+  expect(moves).toBeLessThanOrEqual(2)
+  // The mon won't knock out a weak foe by itself
+  for (let k = 0; k < 3; k++) {
+    await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
+    await clock.advance(9000)
+  }
   expect(movesIn(toasts).length).toBe(moves)
   expect(toasts).not.toContain('Wild Pidgey fled!')
   await clock.advance(90 * 1000)
   expect(toasts).toContain('Wild Pidgey fled!')
+})
+
+test('/pokemon attack knocks out a weak foe, which can\'t be caught and blinks away', async ($, on) => {
+  const { clock, widths, toasts } = await inBattle($, on, {})
+  await weaken($, clock, toasts)
+  const fainted = 'Wild Pidgey fainted! It can\'t be caught now.'
+  for (let k = 0; k < 60 && !toasts.includes(fainted); k++) {
+    if (k % 12 === 0) await run($, 'attack')
+    await clock.advance(500)
+  }
+  expect(toasts).toContain(fainted)
+  expect(await run($, 'catch')).toBe('There\'s no wild Pokémon here.')
+  expect(widths[widths.length - 1]).toBeGreaterThan(RASTER)
+  await clock.advance(3000)
+  expect(widths[widths.length - 1]).toBe(RASTER)
+  expect(toasts).not.toContain('Wild Pidgey fled!')
+  expect(toasts.some((text) => text.startsWith('Gotcha!'))).toBe(false)
+})
+
+test('the foe strikes back now and then with its own moves, leaving the mon\'s meters alone', async ($, on) => {
+  const saved: Record<string, any> = {}
+  const { clock, toasts } = await inBattle($, on, saved)
+  const before = structuredClone(saved.stats)
+  await clock.advance(16000)
+  const strikes = toasts.filter((text) => /^Wild Pidgey used (Gust|Sand Attack|Quick Attack)!$/.test(text))
+  expect(strikes.length).toBeGreaterThanOrEqual(1)
+  expect(movesIn(toasts)).toEqual([])
+  expect(saved.stats).toEqual(before)
 })
 
 test('a foe left uncaught for four main turns moves on', async ($, on) => {
@@ -3561,17 +3609,6 @@ test('a foe left uncaught for four main turns moves on', async ($, on) => {
   await $.turn.complete(aborted)
   expect(toasts).toContain('Wild Pidgey fled!')
 })
-
-const WORN = 'Wild Pidgey is worn out! Throw a ball with /pokemon catch.'
-
-// Bank work until the foe in battle is worn out
-async function wearOut($, clock, toasts: string[]) {
-  for (let k = 0; k < 6 && !toasts.includes(WORN); k++) {
-    await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
-    await clock.advance(9000)
-  }
-  expect(toasts).toContain(WORN)
-}
 
 test('a ball thrown at full HP always breaks free, and the foe fights on', async ($, on) => {
   const { clock, blits, widths, toasts } = await inBattle($, on, {})
@@ -3609,7 +3646,7 @@ test('the desktop battle buttons draw dim and only say why while the mon is busy
   expect(toasts).toContain('Abra is enjoying the pets. Try again in a moment.')
   expect(toasts).not.toContain('You threw a Poké Ball!')
   await ui.press({ key: 'attack' })
-  expect(toasts.filter((text) => / used .+!/.test(text))).toEqual([])
+  expect(movesIn(toasts)).toEqual([])
 })
 
 test('the terminal band has no battle buttons, as /pokemon catch runs there mid-turn', async ($, on) => {
@@ -3623,12 +3660,11 @@ test('/pokemon catch needs a foe in battle', async ($, on) => {
   expect(answer.text).toBe('There\'s no wild Pokémon here.')
 })
 
-test('a worn out foe is caught, joins the box parked at its first level, and the strip shrinks back', async ($, on) => {
+test('a weak foe is caught, joins the box parked at its first level, and the strip shrinks back', async ($, on) => {
   const saved: Record<string, any> = {}
   const { clock, widths, toasts } = await inBattle($, on, saved)
-  await wearOut($, clock, toasts)
-  await $.command.run({ command: 'pokemon', args: 'catch' })
-  await clock.advance(6000)
+  await weaken($, clock, toasts)
+  await catchFoe($, clock, toasts)
   expect(toasts).toContain('Gotcha! Pidgey was caught! It joined your box.')
   expect(saved.dex.pidgey).toEqual({ seen: expect.any(Number), caught: expect.any(Number) })
   expect(saved.stats.pidgey).toEqual({ xp: 5 ** 3, caught: true, parked: true })
@@ -3641,9 +3677,8 @@ test('catching a species already in the box leaves its record as it was', async 
   const pidgey = { xp: 20 ** 3, nickname: 'Pidge', parked: true, food: { value: 40, at: 0 } }
   const saved: Record<string, any> = { stats: { pidgey: structuredClone(pidgey) } }
   const { clock, toasts } = await inBattle($, on, saved)
-  await wearOut($, clock, toasts)
-  await $.command.run({ command: 'pokemon', args: 'catch' })
-  await clock.advance(6000)
+  await weaken($, clock, toasts)
+  await catchFoe($, clock, toasts)
   expect(toasts).toContain('Gotcha! Pidgey was caught! Pidgey is already in your box, so it\'s marked in your Pokédex.')
   expect(saved.stats.pidgey).toEqual(pidgey)
   expect(saved.dex.pidgey.caught).toEqual(expect.any(Number))
@@ -3652,9 +3687,8 @@ test('catching a species already in the box leaves its record as it was', async 
 test('release keeps a caught species in the Pokédex, and the box marks it when raised again', async ($, on) => {
   const saved: Record<string, any> = {}
   const { clock, toasts } = await inBattle($, on, saved)
-  await wearOut($, clock, toasts)
-  await $.command.run({ command: 'pokemon', args: 'catch' })
-  await clock.advance(6000)
+  await weaken($, clock, toasts)
+  await catchFoe($, clock, toasts)
   const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
   expect(await run('box')).toContain('\nPidgey ◓, Lv. 5')
 
@@ -3675,9 +3709,8 @@ test('a shiny foe paints the shiny palette, and catching it marks the Pokédex s
   const shiny = foeColor('abra', 'pidgey', 'shiny')
   expect(SPRITES.pidgey.variants.default.palette.map((hex) => parseInt(hex.slice(1), 16))).not.toContain(shiny)
   expect(columnsIn(blits[blits.length - 1], widths[widths.length - 1], shiny).length).toBeGreaterThan(0)
-  await wearOut($, clock, toasts)
-  await $.command.run({ command: 'pokemon', args: 'catch' })
-  await clock.advance(6000)
+  await weaken($, clock, toasts)
+  await catchFoe($, clock, toasts)
   expect(saved.dex.pidgey.shiny).toBe(true)
   const dex = await $.command.run({ command: 'pokemon', args: 'dex' })
   expect(dex.text).toBe('Pokédex: seen 1, caught 1 of 151 (1 shiny).\n#016 Pidgey ◓ ✦')
@@ -4000,19 +4033,15 @@ test('a mon that ran away is the first wild mon half an hour on, and catching it
   await clock.advance(10000)
   expect(toasts).toContain('A wild Abra (Lv. 35) appeared! It looks a lot like Spoon.')
   expect(saved.stats.abra.ranAway.met).toBe(true)
-  const worn = 'Wild Abra is worn out! Throw a ball with /pokemon catch.'
-  for (let k = 0; k < 12 && !toasts.includes(worn); k++) {
+  const weak = 'Wild Abra is weak! Throw a ball with /pokemon catch. Another hit could knock it out.'
+  for (let k = 0; k < 12 && !toasts.includes(weak); k++) {
     await read()
     await clock.advance(9000)
   }
-  expect(toasts).toContain(worn)
-  // Even worn out, it breaks free half the time
-  const back = 'Gotcha! Spoon came back to you.'
-  for (let k = 0; k < 16 && !toasts.includes(back); k++) {
-    await run($, 'catch')
-    await clock.advance(5000)
-  }
-  expect(toasts).toContain(back)
+  expect(toasts).toContain(weak)
+  // Weak, it still breaks free most of the time
+  await catchFoe($, clock, toasts, 40)
+  expect(toasts).toContain('Gotcha! Spoon came back to you.')
   expect(saved.stats.abra).toEqual({ xp: 35 ** 3, nickname: 'Spoon', parked: true, food: { value: 50, at: expect.any(Number) }, happiness: { value: 30, at: expect.any(Number) } })
   expect(saved.dex.abra.caught).toEqual(expect.any(Number))
 })
@@ -4057,9 +4086,8 @@ test('a species lost in a nuzlocke comes back only by catching a new one, at its
   const { clock, toasts } = await inBattle($, on, saved)
   expect(await run($, 'pidgey')).toBe('Pidgey is gone. Catch a new one in the wild to raise it again.')
   expect(await run($, 'dex')).toBe('Pokédex: seen 1, caught 1 of 151.\n#016 Pidgey ◓ †\nRest well: Pidgey, Lv. 30, on 1970-01-01.')
-  await wearOut($, clock, toasts)
-  await run($, 'catch')
-  await clock.advance(6000)
+  await weaken($, clock, toasts)
+  await catchFoe($, clock, toasts)
   expect(toasts).toContain('Gotcha! Pidgey was caught! It joined your box.')
   expect(saved.stats.pidgey).toEqual({ xp: 5 ** 3, caught: true, parked: true })
   expect(await run($, 'dex')).toBe('Pokédex: seen 1, caught 1 of 151.\n#016 Pidgey ◓\nRest well: Pidgey, Lv. 30, on 1970-01-01.')
