@@ -599,6 +599,7 @@ async function followPick($) {
 async function syncSessions($) {
   S.syncOn = (await $.store.get('sync')) === true
   S.nuzlockeOn = (await $.store.get('nuzlocke')) === true
+  S.trainerOn = (await $.store.get('trainer')) !== false
   if (S.syncOn && (await followPick($))) return
   const writes = statWrites
   const saved = await $.store.get('stats')
@@ -1074,6 +1075,37 @@ async function nuzlockeCommand($) {
   return { text: 'Nuzlocke is on. A mon that faints is gone for good, with no revive and no coming back. Keep them fed and happy.' + warning }
 }
 
+async function trainerCommand($) {
+  S.trainerOn = !S.trainerOn
+  await $.store.set('trainer', S.trainerOn)
+  if (!S.trainerOn) return { text: 'Trainer mode is off. /pokemon <mon> shows any mon.' }
+  const pick = (await boxIsEmpty($)) ? 'Pick your starter, ' + orList(STARTERS.map(displayName)) + ', then catch the rest in the wild.' : 'You can only switch to mons in your box, so catch the rest in the wild.'
+  return { text: 'Trainer mode is on. ' + pick + ' Mons fetched with /pokemon new stay free to show.' }
+}
+
+// With trainer mode on, only mons in your box can be shown. A box with no mon in it, new
+// or with every mon gone, picks one of the starters, so it's never stuck with nothing to
+// show or catch with. Mons fetched with /pokemon new are left out of it.
+const STARTERS = ['bulbasaur', 'charmander', 'squirtle', 'pikachu']
+
+async function boxIsEmpty($) {
+  const saved = await $.store.get('stats')
+  if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
+  return !Object.keys(S.stats).some((name) => MONS.includes(name) && !isGone(name))
+}
+
+// Why trainer mode keeps asked off the band, or null when it may be shown. The caller has
+// freshened asked's record. A starter picked joins the box at its first level.
+async function trainerWait($, asked) {
+  if (!S.trainerOn || asked === S.mon || S.stats[asked] || (await $.store.get(CUSTOM_PREFIX + asked))) return null
+  const off = ', or turn trainer mode off with /pokemon trainer.'
+  if (!(await boxIsEmpty($))) return { text: 'Trainer mode is on, so you can only switch to mons in your box. Catch a wild ' + displayName(asked) + ' to raise one' + off }
+  if (!STARTERS.includes(asked)) return { text: 'Trainer mode is on, so pick your starter first: ' + orList(STARTERS.map(displayName)) + '. Catch the rest in the wild' + off }
+  S.stats[asked] = { xp: xpAt(startLevel(asked)) }
+  await saveRecords($, [asked])
+  return null
+}
+
 // A broken frame goes to the debug log, each distinct message once
 const logged = new Set()
 function logOnce($, err) {
@@ -1205,6 +1237,7 @@ export function register(on) {
     S.seenPick = savedMon ?? null
     S.syncOn = (await $.store.get('sync')) === true
     S.nuzlockeOn = (await $.store.get('nuzlocke')) === true
+    S.trainerOn = (await $.store.get('trainer')) !== false
     await loadPartyPicks($)
     forgetOldKeys($).catch((err) => logOnce($, err))
     const savedVariant = await $.store.get('variant')
@@ -1308,6 +1341,7 @@ export function register(on) {
       if (isDead(asked)) return { text: displayName(asked) + ' is gone. Catch a new one in the wild to raise it again.' }
       if (hasRunAway(asked)) return { text: goneLine(asked) }
       if (asked !== S.mon && (await stillHealing($))) return healingReply()
+      if ((reply = await trainerWait($, asked))) return reply
       await switchTo($, asked)
     } else if (asked === 'new' || asked.startsWith('new ')) {
       if (await stillHealing($)) return healingReply()
@@ -1429,6 +1463,8 @@ export function register(on) {
       return reviveCommand($, asked.slice('revive'.length).trim())
     } else if (asked === 'nuzlocke') {
       return nuzlockeCommand($)
+    } else if (asked === 'trainer') {
+      return trainerCommand($)
     } else if (asked === 'evolve' || asked.startsWith('evolve ')) {
       return evolveCommand($, asked.slice('evolve'.length).trim())
     } else if (asked === 'stop') {

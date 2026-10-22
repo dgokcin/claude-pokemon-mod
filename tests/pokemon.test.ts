@@ -326,7 +326,7 @@ async function started($, on) {
   on('session.start', () => ({ cwd: '/work' }))
   on('env.get', () => ({ value: undefined }))
   on('command.register', () => ({ value: undefined }))
-  on('store.get', () => ({ value: undefined }))
+  on('store.get', ($, e) => ({ value: e.key === 'trainer' ? false : undefined }))
   on('store.set', () => ({ value: undefined }))
   on('store.keys', () => ({ value: [] }))
   on('store.delete', () => ({ value: undefined }))
@@ -805,7 +805,7 @@ test('time with Claude Code closed or the laptop off drains at a quarter speed',
 
 test('switching away parks a mon, and its meters pick up where they stopped when it comes back', async ($, on) => {
   const full = { value: 100, at: 0 }
-  const saved: Record<string, any> = { stats: { abra: { food: full, happiness: full } }, seenAt: 0 }
+  const saved: Record<string, any> = { trainer: false, stats: { abra: { food: full, happiness: full } }, seenAt: 0 }
   await startedWith($, on, saved, 0)
   await $.command.run({ command: 'pokemon', args: 'bulbasaur' })
   expect(saved.stats.abra.parked).toBe(true)
@@ -1137,7 +1137,7 @@ test('a mon picked in another session doesn\'t switch this one', async ($, on) =
 })
 
 test('a mon evolved in another session evolves here too, and picking the old one shows it again', async ($, on) => {
-  const saved: Record<string, any> = { mon: 'charmander', stats: { charmander: { xp: 3000, nickname: 'Embers' } } }
+  const saved: Record<string, any> = { trainer: false, mon: 'charmander', stats: { charmander: { xp: 3000, nickname: 'Embers' } } }
   const { clock } = await startedWith($, on, saved, 0)
   // Another session evolves it, as its moveRecord would
   saved.stats = { charmeleon: { xp: 4096, nickname: 'Embers' } }
@@ -1153,7 +1153,7 @@ test('a mon evolved in another session evolves here too, and picking the old one
 })
 
 test('a new session starts with the mon last picked in any session, and old per-session keys are cleared', async ($, on) => {
-  const saved: Record<string, any> = { mon: 'abra', 'mon:old-session': { name: 'ditto', at: 0 }, 'busy:old-session': 0 }
+  const saved: Record<string, any> = { trainer: false, mon: 'abra', 'mon:old-session': { name: 'ditto', at: 0 }, 'busy:old-session': 0 }
   await startedWith($, on, saved, 0)
   await $.command.run({ command: 'pokemon', args: 'ditto' })
   expect(saved.mon).toBe('ditto')
@@ -1344,7 +1344,7 @@ test('/pokemon stop during the evolution keeps Charmander', { timeoutMs: 30000 }
 test('/pokemon evolve uses a stone or a trade, lists Eevee\'s choices, and says when a level evolution comes', { timeoutMs: 30000 }, async ($, on) => {
   const toasts = toastsOf(on)
   // Charmander at Lv. 9
-  const saved: Record<string, any> = { mon: 'pikachu', stats: { charmander: { xp: 9 ** 3 } } }
+  const saved: Record<string, any> = { trainer: false, mon: 'pikachu', stats: { charmander: { xp: 9 ** 3 } } }
   const { clock } = await startedWith($, on, saved, 0)
   const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
 
@@ -2126,7 +2126,7 @@ test('/pokemon images off draws half blocks and text hearts even where the termi
 })
 
 test('a half block small band shrinks no shorter than a full-size Diglett', async ($, on) => {
-  const { clock } = await startedWith($, on, { size: 'small' }, 0, { TERM_PROGRAM: 'Apple_Terminal' })
+  const { clock } = await startedWith($, on, { trainer: false, size: 'small' }, 0, { TERM_PROGRAM: 'Apple_Terminal' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   // Diglett stays at its full 7 rows, Bulbasaur's 10 stop at 7, and Gyarados's 17 halve to 9
   for (const [mon, rows] of [['diglett', 7], ['bulbasaur', 7], ['gyarados', 9]] as const) {
@@ -2355,7 +2355,7 @@ test('a half block small band draws a short foe as tall as its own small band, n
 
 // A small band's rows with the home mon alone, as the second mon, and then beside a wild first
 async function smallBattleRows($, on, env: Record<string, string>, [first, second]: [string, string]) {
-  const { clock } = await startedWith($, on, { mon: first, size: 'small', wander: false, debug: true }, 0, env)
+  const { clock } = await startedWith($, on, { trainer: false, mon: first, size: 'small', wander: false, debug: true }, 0, env)
   const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: 120 } })
   const rows = async () => {
@@ -2444,7 +2444,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('env.get', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|new|list|pet|feed|sleep|revive|nickname|attack|moves|catch|run|evolve|stop|stats|box|party|dex|release|wander|needs|emoji|size|images|pane|sync|autoevolve|nuzlocke|help]')
+  expect(hint).toBe('[<mon>|default|shiny|new|list|pet|feed|sleep|revive|nickname|attack|moves|catch|run|evolve|stop|stats|box|party|dex|release|wander|needs|emoji|size|images|pane|sync|autoevolve|nuzlocke|trainer|help]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
@@ -2652,7 +2652,7 @@ test('the sweat drop goes on the other side of the head from a bubble in the lef
 })
 
 test('a mon released in another session stays released when this one switches to it', async ($, on) => {
-  const saved: Record<string, any> = { mon: 'abra', stats: { abra: { xp: 900 }, pikachu: { xp: 1728, nickname: 'Zappy' } } }
+  const saved: Record<string, any> = { trainer: false, mon: 'abra', stats: { abra: { xp: 900 }, pikachu: { xp: 1728, nickname: 'Zappy' } } }
   await startedWith($, on, saved, 0)
   // Another session releases Pikachu after this one loaded it
   saved.stats = { abra: { xp: 900 } }
@@ -3402,7 +3402,7 @@ test('a wild mon leaves when the shown mon goes to sleep', async ($, on) => {
 })
 
 test('the widest battles fit the desktop Svg in its size limit', { timeoutMs: 60000 }, async ($, on) => {
-  const { clock } = await startedWith($, on, { wander: false, debug: true }, 0)
+  const { clock } = await startedWith($, on, { trainer: false, wander: false, debug: true }, 0)
   const widest = ['gyarados', 'pidgeot', 'fearow', 'dragonair']
   for (const home of widest) {
     for (const foe of widest) {
@@ -3685,7 +3685,7 @@ test('catching a species already in the box leaves its record as it was', async 
 })
 
 test('release keeps a caught species in the Pokédex, and the box marks it when raised again', async ($, on) => {
-  const saved: Record<string, any> = {}
+  const saved: Record<string, any> = { trainer: false }
   const { clock, toasts } = await inBattle($, on, saved)
   await weaken($, clock, toasts)
   await catchFoe($, clock, toasts)
@@ -4079,6 +4079,34 @@ test('with nuzlocke on, a mon is lost where it would faint, and the band shows t
   expect(saved.stats.abra).toEqual({ dead: { at: expect.any(Number) } })
   expect(saved.mon).toBe('pikachu')
   expect(await run($, 'box')).toBe('1 mon in your box:\nPikachu, Lv. 10 ●●●●○ ♥♥♥♥♡ (active)\nOnly Pikachu so far. /pokemon <mon> picks another.')
+})
+
+test('trainer mode is on by default: an existing box keeps its mons, and only they and fetched mons can be shown', async ($, on) => {
+  const saved: Record<string, any> = { stats: { abra: { xp: 10 ** 3 }, pidgey: { xp: 5 ** 3, caught: true, parked: true } }, 'custom:torchic': { gen: 3, sprite: SPRITES.diglett, moves: ['Ember'] } }
+  await startedWith($, on, saved, 0)
+  const boxOnly = (mon: string) => 'Trainer mode is on, so you can only switch to mons in your box. Catch a wild ' + mon + ' to raise one, or turn trainer mode off with /pokemon trainer.'
+  expect(await run($, 'vulpix')).toBe(boxOnly('Vulpix'))
+  expect(await run($, 'squirtle')).toBe(boxOnly('Squirtle'))
+  expect(await run($, 'pidgey')).toBe('Now showing default Pidgey.')
+  expect(await run($, 'abra')).toBe('Now showing default Abra.')
+  expect(await run($, 'torchic')).toBe('Now showing default Torchic.')
+  expect(await run($, 'trainer')).toBe('Trainer mode is off. /pokemon <mon> shows any mon.')
+  expect(saved.trainer).toBe(false)
+  expect(await run($, 'vulpix')).toBe('Now showing default Vulpix.')
+  expect(await run($, 'trainer')).toBe('Trainer mode is on. You can only switch to mons in your box, so catch the rest in the wild. Mons fetched with /pokemon new stay free to show.')
+})
+
+test('in trainer mode an empty box picks one starter, and picks again once every mon in it is gone', async ($, on) => {
+  const saved: Record<string, any> = {}
+  await startedWith($, on, saved, 0)
+  await run($, 'trainer')
+  expect(await run($, 'trainer')).toBe('Trainer mode is on. Pick your starter, Bulbasaur, Charmander, Squirtle, or Pikachu, then catch the rest in the wild. Mons fetched with /pokemon new stay free to show.')
+  expect(await run($, 'vulpix')).toBe('Trainer mode is on, so pick your starter first: Bulbasaur, Charmander, Squirtle, or Pikachu. Catch the rest in the wild, or turn trainer mode off with /pokemon trainer.')
+  expect(await run($, 'squirtle')).toBe('Now showing default Squirtle.')
+  expect(saved.stats.squirtle).toEqual({ xp: 5 ** 3 })
+  expect(await run($, 'charmander')).toBe('Trainer mode is on, so you can only switch to mons in your box. Catch a wild Charmander to raise one, or turn trainer mode off with /pokemon trainer.')
+  saved.stats = { squirtle: { dead: { at: 0 } } }
+  expect(await run($, 'bulbasaur')).toBe('Now showing default Bulbasaur.')
 })
 
 test('a species lost in a nuzlocke comes back only by catching a new one, at its first level', async ($, on) => {
