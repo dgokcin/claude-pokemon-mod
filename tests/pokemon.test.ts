@@ -3034,9 +3034,10 @@ test('/pokemon party assign ties a mon to an agent type, and the rest of the par
   expect(paints(out, CHARMANDER)).toBe(true)
   expect(paints(out, PIKACHU)).toBe(false)
 
-  // Another agent type gets the party, which no longer holds Charmander
+  // Another agent type gets the party, which no longer holds Charmander. Pikachu waits in
+  // its ball while Charmander's stroll has it standing in Pikachu's spot.
   await $.agent.spawn({ ...spawnOf('t2'), subagentType: 'Plan' })
-  await clock.advance(4000)
+  for (let k = 0; k < 60 && !paints(await shown(ui, blits), PIKACHU); k++) await clock.advance(1000)
   out = await shown(ui, blits)
   expect(paints(out, PIKACHU)).toBe(true)
   expect(await party('party')).toBe(['2 mons in your party, beside Abra:', 'Charmander, Lv. 8, for explore, working for Count files', 'Pikachu, Lv. 12, working for Count files'].join('\n'))
@@ -3493,7 +3494,8 @@ for (const foe of ['snorlax', 'raichu']) {
 }
 
 test('banked work fires one move at a time, at most one every six seconds', async ($, on) => {
-  const { clock, toasts } = await inBattle($, on, {})
+  // A common Pidgey can turn weak after one strong hit, and the mon holds off a weak foe
+  const { clock, toasts } = await inBattle($, on, {}, 'pidgeotto')
   for (let k = 0; k < 3; k++) await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
   await clock.advance(100)
   expect(movesIn(toasts).length).toBe(1)
