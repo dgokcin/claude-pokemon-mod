@@ -2,14 +2,14 @@
 
 # claude-pokemon
 
-**A pixel Pokémon that lives above your Claude Code prompt and reacts to everything Claude does.**
+**A pixel Pokémon that lives above your Claude Code prompt, in the terminal or the desktop app, and reacts to everything Claude does.**
 
 [![CI](https://github.com/dgokcin/claude-pokemon-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/dgokcin/claude-pokemon-mod/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/dgokcin/claude-pokemon-mod)](https://github.com/dgokcin/claude-pokemon-mod/releases)
 ![151 Pokémon](https://img.shields.io/badge/Pok%C3%A9mon-151-ffcb05)
 ![135 moves](https://img.shields.io/badge/moves-135-ee1515)
 
-![Bulbasaur gets petted and eats an oran berry above the Claude Code prompt](gifs/bulbasaur-pet-feed.gif)
+![A wild Bulbasaur strikes Charmander with Vine Whip, goes weak as Claude works, and gets caught in a Poké Ball](gifs/wild-catch.gif)
 
 </div>
 
@@ -18,7 +18,7 @@ claude plugin marketplace add dgokcin/claude-pokemon-mod
 claude plugin install pokemon@claude-pokemon
 ```
 
-Then pick your partner with `/pokemon <mon>`.
+Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squirtle, and Pikachu are on offer, and the rest you catch in the wild.
 
 > [!TIP]
 > It works best in kitty, Ghostty, or a recent iTerm2, which draw images, so the small band keeps every pixel. iTerm2 also needs images turned on in the `env` block of `~/.claude/settings.json`:
@@ -39,27 +39,40 @@ Then pick your partner with `/pokemon <mon>`.
 - 💦 **It flinches when a tool fails.** A shake and a sweat drop, so you notice.
 - 📈 **It levels up as you ship.** Every answered turn earns XP, and mons evolve at their levels from the games.
 - 🫐 **It needs you too.** Feed it and pet it, or it gets hungry and lonely. Leave it long enough and it faints, and then it runs away.
+- 🎒 **You start with one starter.** Bulbasaur, Charmander, Squirtle, or Pikachu. Every other mon has to be caught.
+- 🌿 **Wild Pokémon show up, and they fight back.** Your work wears them down while they strike your mon with their own moves. Once one is weak, `/pokemon catch` fills your Pokédex, but knock it out and it's gone.
 - ⚡ **It fights.** 135 moves from gen 1, each with its own pixel animation.
-- 🌿 **Wild Pokémon show up.** Your work wears them down, and `/pokemon catch` fills your Pokédex.
-- 🎨 **All 151 gen 1 Pokémon**, each in default and shiny.
+- 🎨 **All 151 gen 1 Pokémon**, each in default and shiny, and gen 2 to 5 with `/pokemon new`.
 
 ## See it
 
-**Watch it follow Claude's tools.** A magnifier for reads, a pencil for writes, and a level-up when the answer lands.
+**Watch it follow Claude's tools.** `>_` for shell commands, a TM disc for skills, a magnifier for reads, a pencil for writes.
 
-![Pikachu's bubble shows a magnifier, then a pencil, while Claude reads files and writes a haiku](gifs/pikachu-haiku.gif)
+![Mew's bubble shows a shell prompt while Claude reads files, then a TM disc while a skill runs](gifs/tool-bubbles.gif)
 
-**Run subagents and watch the balls drop.**
+**Run subagents and your party steps out.** Each subagent drops a ball, a mon from your box works beside yours, and it goes back in when the subagent is done.
 
-![Four Poké Balls drop beside Squirtle while four subagents run, and pop as they finish](gifs/squirtle-subagents.gif)
+![Three Explore subagents start, and three party mons step out beside Squirtle and run shell commands in their bubbles](gifs/party-subagents.gif)
 
 **Evolve it.** At the right level, or with a stone.
 
-![Growlithe glows, flickers into Arcanine's silhouette, and flashes into Arcanine](gifs/growlithe-evolution.gif)
+![Growlithe gets a Fire Stone, glows white, sparkles, and flashes into Arcanine](gifs/evolve.gif)
 
-**Make it attack.** Magikarp uses Splash. Nothing happens. Gengar uses Night Shade.
+**Make it attack.** Magikarp uses Splash. Nothing happens. Gengar uses Hypnosis.
 
-![Magikarp splashes to no effect, then Gengar casts Night Shade](gifs/magikarp-gengar-attack.gif)
+![Magikarp splashes to no effect, then Gengar casts Hypnosis](gifs/attack.gif)
+
+**Look after it.** Feed it berries and pet it, so it stays happy.
+
+![Gengar eats a razz berry and an oran berry, then hearts float up as it gets petted](gifs/gengar-feed-pet.gif)
+
+**Revive it.** Neglect it long enough and it faints. Nurse Joy gets it back on its feet.
+
+![A fainted Bulbasaur with dizzy stars is taken to a Pokémon Center, and Nurse Joy starts healing it](gifs/revive.gif)
+
+**Use it in the desktop app.** The same mon, in the Code tab.
+
+![Bulbasaur grows to the large band and attacks above the prompt in the Claude desktop app's Code tab](gifs/desktop.gif)
 
 ## Commands
 
@@ -77,6 +90,7 @@ Then pick your partner with `/pokemon <mon>`.
 | `/pokemon party add <mon>` | Put a mon from your box in your party, like `/pokemon party add dratini` |
 | `/pokemon party assign <agent> <mon>` | Send the same mon out for every subagent of a type, like `/pokemon party assign explore abra` |
 | `/pokemon catch` | Throw a Poké Ball at a wild mon |
+| `/pokemon trainer` | Turn trainer mode off to show any mon without catching it, or back on |
 | `/pokemon dex` | Every wild mon you've seen and caught |
 | `/pokemon new <mon>` | Fetch a mon from gen 2 to 5, like `/pokemon new mudkip`, or a random one with `/pokemon new gen3` |
 
