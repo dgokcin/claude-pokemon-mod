@@ -1,4 +1,4 @@
-import { ALERT_ICON, INKS, shrunkBubble, SMALL_ZS, SPARKLE, SPARKLES, stamp, stampPixel } from './art.js'
+import { ALERT_ICON, INKS, OWNED_BALL, OWNED_COLORS, shrunkBubble, SMALL_ZS, SPARKLE, SPARKLES, stamp, stampPixel } from './art.js'
 import { attackFrame, attackPose } from './attacks.js'
 import { bubbleIcon, bubbleStamps, dotsIcon, sleepStamps, sweatStamps, toolIcon, toolKind } from './bubble.js'
 import { FLINCH_TICKS, HEAD_PIXELS, SHAKE_TICKS, TICK_MS } from './constants.js'
@@ -138,7 +138,8 @@ function ghostPixel(ghosts, pixel, box, width, flip, baseX, baseTop) {
 
 // The HP bar, a pixel row centred over the standing foe's head with a row of space
 // between, so a tail or an arm out to one side doesn't pull it off. It takes a pixel more
-// over a head an odd number of pixels wide, so it can sit exactly in the middle.
+// over a head an odd number of pixels wide, so it can sit exactly in the middle. A foe
+// whose species is caught has a tiny ball a pixel right of the bar.
 function hpStamps(rows) {
   if (S.wild.phase !== 'battle') return []
   const box = foeBox(rows)
@@ -147,7 +148,10 @@ function hpStamps(rows) {
   const span = head.right - head.left + 1
   const bar = hpBar(S.wild, S.ink.hpEmpty, HP_BAR + ((span - HP_BAR) & 1))
   const left = at + head.left + (span - bar.width) / 2
-  return [stamp(left, Math.max(0, box.top - 2), bar.rows, bar.colors)]
+  const y = Math.max(0, box.top - 2)
+  const hp = stamp(left, y, bar.rows, bar.colors)
+  if (!S.wild.owned) return [hp]
+  return [hp, stamp(left + bar.width + 1, Math.max(0, y - 1), OWNED_BALL, { ...OWNED_COLORS, w: S.ink.ball })]
 }
 
 // The foe as a color per strip pixel or null: walk frames on the way in, idle frames in

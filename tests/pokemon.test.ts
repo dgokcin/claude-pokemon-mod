@@ -3493,6 +3493,25 @@ for (const foe of ['snorlax', 'raichu']) {
   })
 }
 
+// A caught species shows a tiny ball a pixel right of its HP bar, red on top
+const OWNED_RED = 0xe03030
+const ownedBallAt = (cells: string, width: number) => {
+  const pixels = rasterPixels(cells, width)
+  const barRow = pixels.findIndex((row) => row.includes(HP_GREEN))
+  const right = pixels[barRow].lastIndexOf(HP_GREEN)
+  return pixels[barRow - 1]?.[right + 2] === OWNED_RED
+}
+
+test('a wild foe already caught in the Pokédex has a ball beside its HP bar', async ($, on) => {
+  const { blits, widths } = await inBattle($, on, { dex: { pidgey: { seen: 0, caught: 0 } } })
+  expect(ownedBallAt(blits[blits.length - 1], widths[widths.length - 1])).toBe(true)
+})
+
+test('a wild foe only seen in the Pokédex has no ball beside its HP bar', async ($, on) => {
+  const { blits, widths } = await inBattle($, on, { dex: { pidgey: { seen: 0 } } })
+  expect(ownedBallAt(blits[blits.length - 1], widths[widths.length - 1])).toBe(false)
+})
+
 test('banked work fires one move at a time, at most one every six seconds', async ($, on) => {
   // A common Pidgey can turn weak after one strong hit, and the mon holds off a weak foe
   const { clock, toasts } = await inBattle($, on, {}, 'pidgeotto')

@@ -9,7 +9,7 @@ import {
 import { IMAGE_WAIT_TICKS, TICK_MS } from './constants.js'
 import { CREW_SIZE, crewThinking, crewToolEnds, crewToolStarts, isOut, joinCrew } from './crew.js'
 import { CUSTOM_PREFIX, fetchMon, monsOfGen } from './custom.js'
-import { dexKey, mergedDexEntry, pickWild, tierOf } from './dex.js'
+import { dexKey, isCaught, mergedDexEntry, pickWild, tierOf } from './dex.js'
 import { catchCommand, foeMoves, runawayFoe, wildMoves, wildName } from './encounter.js'
 import { evolutionsOf, startLevel } from './evolutions.js'
 import { SPRITES } from './frames.js'
@@ -187,6 +187,12 @@ async function markDex($, key, patch) {
   await $.store.set('dex', dex)
 }
 
+// Mark the foe owned when its species is caught in the Pokédex, so a ball shows beside its HP bar
+async function markOwned($, seed) {
+  const dex = await $.store.get('dex')
+  if (S.wild?.seed === seed && dex && typeof dex === 'object' && isCaught(dex[S.wild.key])) S.wild = { ...S.wild, owned: true }
+}
+
 // Move the visit on a tick. Asleep or fainted, the home mon can't fight, so the foe leaves.
 function stepWildPhase($) {
   if (!S.wild) return
@@ -198,6 +204,7 @@ function stepWildPhase($) {
     S.wild = { ...S.wild, nextStrikeAt: S.tick + strikeGap() }
     const yours = S.wild.runaway ? ' It looks a lot like ' + (S.stats[S.wild.mon]?.nickname ?? 'your ' + displayName(S.wild.mon)) + '.' : ''
     $.ui.toast('A ' + wildName() + ' (Lv. ' + S.wild.level + ') appeared!' + yours)
+    markOwned($, S.wild.seed).catch((err) => logOnce($, err))
     markDex($, S.wild.key, { seen: S.nowMs }).catch((err) => logOnce($, err))
     if (S.wild.runaway) metRunaway($, S.wild.mon).catch((err) => logOnce($, err))
   } else if (result.event === 'caught') {

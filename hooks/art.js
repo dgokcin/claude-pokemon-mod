@@ -29,6 +29,10 @@ export const INKS = {
 }
 
 // Pixel art stamps: rows of letters, each letter a color, '.' transparent
+// A tiny Poké Ball beside a wild foe's HP bar when its species is caught: r top, g band,
+// w bottom, drawn in the theme's ball ink
+export const OWNED_BALL = ['rrr', 'gwg', 'www']
+export const OWNED_COLORS = { r: 0xe03030, g: 0x4a4a56 }
 // The thought bubble is an outline with no fill, drawn in the theme's bubble ink
 const BUBBLE = ['.OOOOOOO.', 'O.......O', 'O.......O', 'O.......O', 'O.......O', 'O.......O', 'O.......O', '.OOOOOOO.']
 const BUBBLE_WIDTH = BUBBLE[0].length
