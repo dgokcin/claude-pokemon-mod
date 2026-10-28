@@ -3914,7 +3914,7 @@ test('time off only moves a heal on by the part of the gap it ran through', asyn
   expect(await run($, 'revive')).toBe('Abra is resting at the Pokémon Center. It\'s back in 4 min.')
 })
 
-test('/pokemon revive heals a fainted mon in five minutes, standing it up at half food and some happiness', { timeoutMs: 60000 }, async ($, on) => {
+test('/pokemon revive heals a fainted mon in five minutes, filling its hearts on the way, and stands it up at half food and full happiness', { timeoutMs: 60000 }, async ($, on) => {
   const toasts = toastsOf(on)
   const saved: Record<string, any> = { stats: { abra: { food: EMPTY, happiness: EMPTY, fainted: { ms: 0, at: 0 } }, pikachu: { xp: 1000, parked: true } } }
   const { clock } = await startedWith($, on, saved, 0)
@@ -3928,9 +3928,11 @@ test('/pokemon revive heals a fainted mon in five minutes, standing it up at hal
   expect(await run($, 'new mudkip')).toBe(resting + ' Wait for it before switching.')
   expect(await run($, 'abra')).toBe('Now showing default Abra.')
   expect(await run($, '')).toContain('Abra Lv. 5, healing, ')
-  await clock.advance(5 * MINUTE + 1000)
+  await clock.advance(2.5 * MINUTE)
+  expect(await run($, '')).toContain('happiness 50%')
+  await clock.advance(2.5 * MINUTE + 1000)
   expect(toasts).toContain('Abra is healed and back on its feet!')
-  expect(await run($, '')).toContain('food 50%, happiness 30%')
+  expect(await run($, '')).toContain('food 50%, happiness 100%')
   expect(saved.stats.abra.fainted).toBeUndefined()
   expect(saved.stats.abra.healing).toBeUndefined()
   expect(await run($, 'revive')).toBe('Abra hasn\'t fainted.')

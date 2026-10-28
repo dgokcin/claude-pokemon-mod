@@ -1,6 +1,7 @@
 import { METER_STYLES } from './art.js'
+import { HEAL_MS, HEALED_HAPPINESS } from './records.js'
 import { S } from './state.js'
-import { isDead } from './status.js'
+import { isDead, isHealing } from './status.js'
 
 // Food and happiness: how they drain, fill, and park, and the icons that show them
 
@@ -25,9 +26,18 @@ const SLEEP_DRAIN = { food: 0.5, happiness: 0.25 }
 
 const clampStat = (v) => Math.max(0, Math.min(100, v))
 
+// At the Pokémon Center, happiness fills from where it fainted to full over the heal
+function healedHappiness(name, fainted) {
+  const { from, until } = S.stats[name].healing
+  const start = Math.min(from ?? until - HEAL_MS, until)
+  const share = until > start ? Math.max(0, Math.min(1, (S.nowMs - start) / (until - start))) : 1
+  return clampStat(fainted + (HEALED_HAPPINESS - fainted) * share)
+}
+
 export function statNow(name, key) {
   const saved = S.stats[name]?.[key]
   if (!saved) return START_STAT
+  if (key === 'happiness' && isHealing(name)) return healedHappiness(name, saved.value)
   if (S.stats[name].parked) return clampStat(saved.value)
   const perMs = (100 / (STATS[key].hoursToEmpty * 3600 * 1000)) * (S.stats[name]?.asleep ? SLEEP_DRAIN[key] : 1)
   return clampStat(saved.value - perMs * Math.max(0, S.nowMs - saved.at))
