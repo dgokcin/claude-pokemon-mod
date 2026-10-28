@@ -29,6 +29,8 @@ export function readyToEvolve() {
 
 export const HEAL_MS = 5 * 60 * 1000
 const REVIVED = { food: 50, happiness: 30 }
+// A heal at the Pokémon Center fills the hearts all the way
+export const HEALED_HAPPINESS = 100
 
 export const revivedMeters = () => ({ food: { value: REVIVED.food, at: S.nowMs }, happiness: { value: REVIVED.happiness, at: S.nowMs } })
 
@@ -55,11 +57,11 @@ export function healTicks() {
   return { startTick: S.tick - Math.max(0, Math.round((S.nowMs - start) / TICK_MS)), endTick: S.tick + Math.round((until - S.nowMs) / TICK_MS) }
 }
 
-// A heal that's over stands the mon up with some food and happiness, and a fresh faint clock
+// A heal that's over stands the mon up with half its food, full happiness, and a fresh faint clock
 export function settleHeal(name) {
   if (!isHealing(name) || S.nowMs < S.stats[name].healing.until) return false
   const { fainted, healing, starving, ...record } = S.stats[name]
-  S.stats[name] = { ...record, ...revivedMeters() }
+  S.stats[name] = { ...record, ...revivedMeters(), happiness: { value: HEALED_HAPPINESS, at: S.nowMs } }
   return true
 }
 
