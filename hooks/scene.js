@@ -5,6 +5,7 @@ import { FLINCH_TICKS, HEAD_PIXELS, SHAKE_TICKS, TICK_MS } from './constants.js'
 import { ballOpen, crewFlash, crewHidden, crewHopping, crewPhase, crewRed, crewTool, crewWalking, isShown } from './crew.js'
 import { dizzyStamps } from './faint.js'
 import { SPRITES } from './frames.js'
+import { dropStamps } from './items.js'
 import { atCenter, centerStamps, RECALL_RED, recallFlash, recallTint, sparkleStamps } from './joy.js'
 import {
   bandRows, bandZoom, foeBox, foeMiddle, foeName, homeBox, homeXOf, isHome, isSmall, sceneColumns, stripColumns, wildAt,
@@ -400,8 +401,11 @@ export function frameNow(full = false) {
   const bubble = icon && !shrunk ? bubbleStamps(icon, head, bubbleSide) : []
   const mateBubbles = shrunk ? [] : mates.flatMap((m) => (m.icon ? bubbleStamps(m.icon, m.head, m.side, m.room) : []))
   const ball = throwStamps(rows, { x: Math.round((head[0] + head[1]) / 2), y: top + box.top })
+  // A knocked out foe's item pops out of it and lies by it until it blinks away
+  const dropped = S.wild?.phase === 'fainted' && S.wild.drop ? dropStamps(S.wild.drop, S.tick, foeMiddle(rows), { x: foeBox(rows).right + 4, y: rows * 2 - 1 }) : []
   const over = [
     ...ball.over,
+    ...dropped,
     ...(onStage ? [...bubble, ...hpStamps(rows)] : []),
     ...heartStamps(),
     ...(isWincing() ? sweatStamps(head, top + box.top, bubbleSide) : []),

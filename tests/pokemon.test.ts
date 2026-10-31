@@ -3,6 +3,7 @@ import { DOT_EYED, closedEyes, eyesOf, keptEyesOf, pupilsOf } from '../hooks/eye
 import { DIZZY_COLORS, faintedPalette, faintedRows } from '../hooks/faint.js'
 import { SPRITES } from '../hooks/frames.js'
 import { atCenter, CENTER_ROWS, centerPhase, centerSpan, centerStamps, JOY_COLORS, recallFlash, recallTint } from '../hooks/joy.js'
+import { dropOf, findItem, stoneOfType } from '../hooks/items.js'
 import { encodePng } from '../hooks/png.js'
 import { zoomedPixel } from '../hooks/zoom.js'
 
@@ -1343,8 +1344,8 @@ test('/pokemon stop during the evolution keeps Charmander', { timeoutMs: 30000 }
 
 test('/pokemon evolve uses a stone or a trade, lists Eevee\'s choices, and says when a level evolution comes', { timeoutMs: 30000 }, async ($, on) => {
   const toasts = toastsOf(on)
-  // Charmander at Lv. 9
-  const saved: Record<string, any> = { trainer: false, mon: 'pikachu', stats: { charmander: { xp: 9 ** 3 } } }
+  // Charmander at Lv. 9, and a stone each for Pikachu and Eevee and a cable for Kadabra
+  const saved: Record<string, any> = { trainer: false, mon: 'pikachu', stats: { charmander: { xp: 9 ** 3 } }, bag: { thunderstone: 2, linkcable: 1 } }
   const { clock } = await startedWith($, on, saved, 0)
   const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
 
@@ -1365,6 +1366,8 @@ test('/pokemon evolve uses a stone or a trade, lists Eevee\'s choices, and says 
   expect(await run('evolve')).toBe('You trade Kadabra to a friend, and they trade it right back.')
   await clock.advance(7100)
   expect(saved.mon).toBe('alakazam')
+
+  expect(saved.bag).toEqual({})
 
   await run('charizard')
   expect(await run('evolve')).toBe('Charizard doesn\'t evolve.')
@@ -2444,7 +2447,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('env.get', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|new|list|pet|feed|sleep|revive|nickname|attack|moves|catch|run|evolve|stop|stats|box|party|dex|release|wander|needs|emoji|size|images|pane|sync|autoevolve|nuzlocke|trainer|help]')
+  expect(hint).toBe('[<mon>|default|shiny|new|list|pet|feed|sleep|revive|nickname|attack|moves|catch|run|evolve|stop|bag|use|stats|box|party|dex|release|wander|needs|emoji|size|images|pane|sync|autoevolve|nuzlocke|trainer|help]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
@@ -3595,12 +3598,12 @@ test('work wears a foe down until it is weak, the mon holds off then, and the fo
 test('/pokemon attack knocks out a weak foe, which can\'t be caught and blinks away', async ($, on) => {
   const { clock, widths, toasts } = await inBattle($, on, {})
   await weaken($, clock, toasts)
-  const fainted = 'Wild Pidgey fainted! It can\'t be caught now.'
-  for (let k = 0; k < 60 && !toasts.includes(fainted); k++) {
+  const fainted = (text: string) => text.startsWith('Wild Pidgey fainted! It can\'t be caught now.')
+  for (let k = 0; k < 60 && !toasts.some(fainted); k++) {
     if (k % 12 === 0) await run($, 'attack')
     await clock.advance(500)
   }
-  expect(toasts).toContain(fainted)
+  expect(toasts.some(fainted)).toBe(true)
   expect(await run($, 'catch')).toBe('There\'s no wild Pokémon here.')
   expect(widths[widths.length - 1]).toBeGreaterThan(RASTER)
   await clock.advance(3000)
@@ -4210,4 +4213,162 @@ test('a session that left the scene in the pane opens it again on start', async 
   const { opened } = paneEngine(on)
   await startedWith($, on, { mon: 'abra', pane: true, paneColumns: 90 }, 0)
   expect(opened.map((e) => [e.id, e.columns])).toEqual([['pokemon', 90]])
+})
+
+test('a knockout drops a stone, often its own type\'s, now and then a Link Cable or Rare Candy, the same for the same foe', () => {
+  const count = (key: string) => {
+    const drops: Record<string, number> = {}
+    for (let seed = 0; seed < 6000; seed++) drops[dropOf(key, seed)] = (drops[dropOf(key, seed)] ?? 0) + 1
+    return drops
+  }
+  const vulpix = count('vulpix')
+  const pidgey = count('pidgey')
+  expect(dropOf('vulpix', 42)).toBe(dropOf('vulpix', 42))
+  expect(vulpix.firestone / 6000).toBeGreaterThan(0.5)
+  expect(pidgey.firestone / 6000).toBeLessThan(0.25)
+  expect(stoneOfType('pikachu')).toBe('thunderstone')
+  expect(stoneOfType('pidgey')).toBeNull()
+  for (const drops of [vulpix, pidgey]) {
+    expect(drops.rarecandy / 6000).toBeGreaterThan(0.04)
+    expect(drops.rarecandy / 6000).toBeLessThan(0.09)
+    expect(drops.linkcable / 6000).toBeGreaterThan(0.04)
+    expect(drops.linkcable / 6000).toBeLessThan(0.11)
+  }
+})
+
+test('item names match loosely', () => {
+  expect(['Thunder Stone', 'thunderstone', 'THUNDER', 'thunder-stone'].map(findItem)).toEqual(Array(4).fill('thunderstone'))
+  expect(findItem('candy')).toBe('rarecandy')
+  expect(findItem('link cable')).toBe('linkcable')
+  expect(findItem('stone')).toBeNull()
+  expect(findItem('potion')).toBeNull()
+})
+
+test('the first bag grants the item every stone or trade mon in the box needs, and /pokemon bag lists it', async ($, on) => {
+  const stats = {
+    pikachu: { xp: 12 ** 3 }, eevee: { xp: 10 ** 3 }, kadabra: { xp: 20 ** 3 }, charmander: { xp: 9 ** 3 },
+    growlithe: { xp: 15 ** 3, ranAway: { at: 0, variant: 'default' } }, vulpix: { dead: { at: 0 } },
+  }
+  const saved: Record<string, any> = { mon: 'charmander', stats }
+  await startedWith($, on, saved, 0)
+  expect(await run($, 'bag')).toBe('Your bag:\nFire Stone, 1\nWater Stone, 1\nThunder Stone, 2\nLink Cable, 1')
+  expect(saved.bag).toEqual({ thunderstone: 2, waterstone: 1, firestone: 1, linkcable: 1 })
+  // Made once, the bag is never granted again
+  saved.bag = {}
+  expect(await run($, 'bag')).toBe('Your bag is empty. Knock out a wild mon with /pokemon attack, and it drops an item.')
+})
+
+test('a stone or trade evolution needs its item, says which is missing, and spends it once the evolution is done', { timeoutMs: 30000 }, async ($, on) => {
+  const saved: Record<string, any> = { trainer: false, mon: 'pikachu', bag: { moonstone: 1 } }
+  const { clock } = await startedWith($, on, saved, 0)
+  expect(await run($, 'evolve')).toBe('Pikachu needs a Thunder Stone to evolve into Raichu. Wild mons you knock out drop items, and /pokemon bag lists yours.')
+  await run($, 'kadabra')
+  expect(await run($, 'evolve')).toBe('Kadabra needs a Link Cable to evolve into Alakazam. Wild mons you knock out drop items, and /pokemon bag lists yours.')
+
+  saved.bag = { thunderstone: 1 }
+  await run($, 'pikachu')
+  expect(await run($, 'evolve')).toBe('You use a Thunder Stone on Pikachu.')
+  await clock.advance(1000)
+  // Stopped, the evolution keeps the stone
+  expect(await run($, 'stop')).toBe('Huh? Pikachu stopped evolving!')
+  expect(saved.bag).toEqual({ thunderstone: 1 })
+  expect(await run($, 'use thunder stone')).toBe('You use a Thunder Stone on Pikachu.')
+  await clock.advance(7100)
+  expect(saved.mon).toBe('raichu')
+  expect(saved.bag).toEqual({})
+})
+
+test('/pokemon use takes an item by a loose name, and a stone on a mon is the same as evolve', { timeoutMs: 30000 }, async ($, on) => {
+  const saved: Record<string, any> = { trainer: false, mon: 'eevee', bag: { firestone: 1, waterstone: 1 } }
+  const { clock } = await startedWith($, on, saved, 0)
+  expect(await run($, 'use')).toBe('Name the item, like /pokemon use rare candy. /pokemon bag lists yours.')
+  expect(await run($, 'use potion')).toBe('Unknown item "potion". Items: Fire Stone, Water Stone, Thunder Stone, Leaf Stone, Moon Stone, Link Cable, Rare Candy.')
+  expect(await run($, 'use leaf stone')).toBe('Eevee can\'t use a Leaf Stone.')
+  expect(await run($, 'use fire stone growlithe')).toBe('Show Growlithe first with /pokemon growlithe, then use the Fire Stone.')
+  expect(await run($, 'use FireStone eevee')).toBe('You use a Fire Stone on Eevee.')
+  await clock.advance(7100)
+  expect(saved.mon).toBe('flareon')
+  expect(saved.bag).toEqual({ waterstone: 1 })
+})
+
+test('Rare Candy raises a level, evolves the shown mon at its level, and a box mon once it\'s shown', { timeoutMs: 30000 }, async ($, on) => {
+  const toasts = toastsOf(on)
+  const stats = {
+    charmander: { xp: 15 ** 3 + 10 },
+    bulbasaur: { xp: 15 ** 3, parked: true },
+    abra: { xp: 30 ** 3, fainted: { ms: 0, at: 0 }, parked: true },
+    pidgey: { xp: 9 ** 3, ranAway: { at: 0, variant: 'default' } },
+  }
+  const saved: Record<string, any> = { mon: 'charmander', wander: false, stats, bag: { rarecandy: 2 } }
+  const { clock } = await startedWith($, on, saved, 0)
+  expect(await run($, 'use rare candy abra')).toBe('Abra has fainted, and a Rare Candy won\'t revive it. /pokemon revive takes it to a Pokémon Center.')
+  expect(await run($, 'use rare candy pidgey')).toBe('Pidgey ran away. It may turn up in the wild.')
+  expect(await run($, 'use rare candy squirtle')).toBe('Squirtle isn\'t in your box. /pokemon box lists yours.')
+  expect(saved.bag).toEqual({ rarecandy: 2 })
+
+  expect(await run($, 'use candy bulbasaur')).toBe('You give Bulbasaur a Rare Candy. It grew to Lv. 16!')
+  expect(saved.stats.bulbasaur).toEqual({ xp: 16 ** 3, parked: true, evolveReady: true })
+  expect(await run($, 'use rare candy')).toBe('You give Charmander a Rare Candy. It grew to Lv. 16!')
+  expect(saved.bag).toEqual({})
+  expect(await run($, 'use rare candy')).toBe('You have no Rare Candy. Wild mons you knock out drop one now and then.')
+  await clock.advance(9000)
+  expect(saved.mon).toBe('charmeleon')
+
+  await run($, 'bulbasaur')
+  await clock.advance(9000)
+  expect(saved.mon).toBe('ivysaur')
+  expect(saved.stats.ivysaur.evolveReady).toBeUndefined()
+  expect(toasts).toContain('Congratulations! Your Bulbasaur evolved into Ivysaur!')
+})
+
+test('a knocked out foe drops an item into the bag', async ($, on) => {
+  const saved: Record<string, any> = {}
+  const { clock, toasts } = await inBattle($, on, saved)
+  await weaken($, clock, toasts)
+  const fainted = /^Wild Pidgey fainted! It can't be caught now\. It dropped a (Fire Stone|Water Stone|Thunder Stone|Leaf Stone|Moon Stone|Link Cable|Rare Candy), and it's in your bag\.$/
+  for (let k = 0; k < 60 && !toasts.some((text) => fainted.test(text)); k++) {
+    if (k % 12 === 0) await run($, 'attack')
+    await clock.advance(500)
+  }
+  expect(toasts.some((text) => fainted.test(text))).toBe(true)
+  expect(Object.values(saved.bag)).toEqual([1])
+})
+
+test('a long answered turn now and then turns up a Rare Candy, and a short one never does', { timeoutMs: 60000 }, async ($, on) => {
+  on('turn.complete', () => ({ text: '' }))
+  const saved: Record<string, any> = { bag: {} }
+  await startedWith($, on, saved, 0)
+  for (let k = 0; k < 40; k++) await $.turn.complete(ANSWERED)
+  expect(saved.bag).toEqual({})
+  for (let k = 0; k < 150; k++) await $.turn.complete({ ...ANSWERED, durationMs: 150000 })
+  expect(saved.bag.rarecandy).toBeGreaterThan(0)
+})
+
+test('a party mon earns half XP for its own subagent\'s answered turns, and evolves once it\'s shown', { timeoutMs: 30000 }, async ($, on) => {
+  runningAgents(on)
+  on('turn.complete', () => ({ text: '' }))
+  const toasts = toastsOf(on)
+  const saved: Record<string, any> = { wander: false, stats: { abra: { xp: 20 ** 3 }, charmander: { xp: 16 ** 3 - 5, parked: true } } }
+  const { clock } = await startedWith($, on, saved, 0)
+  await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.agent.spawn(spawnOf('t1'))
+  await clock.advance(4000)
+  await $.turn.complete({ ...ANSWERED, agentId: 'agent-t1', reason: 'aborted', isAborted: true })
+  expect(saved.stats.charmander.xp).toBe(16 ** 3 - 5)
+  expect(saved.stats.abra.xp).toBe(20 ** 3)
+  await clock.advance(4000)
+
+  await $.agent.spawn(spawnOf('t2'))
+  await clock.advance(4000)
+  await $.turn.complete({ ...ANSWERED, agentId: 'agent-t2' })
+  // Half of 10 + 2 x 15, 1.25 times for a 30 s turn, 1.3 times at 80% meters
+  expect(saved.stats.charmander.xp).toBe(16 ** 3 - 5 + 33)
+  expect(saved.stats.charmander.evolveReady).toBe(true)
+  expect(saved.stats.abra.xp).toBe(20 ** 3)
+  expect(toasts).toContain('Charmander grew to Lv. 16 working beside Abra!')
+  expect(await run($, 'party')).toBe('1 mon in your party, beside Abra:\nCharmander, Lv. 16, ready to evolve, free')
+
+  await run($, 'charmander')
+  await clock.advance(9000)
+  expect(saved.mon).toBe('charmeleon')
 })

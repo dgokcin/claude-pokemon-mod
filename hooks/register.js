@@ -11,10 +11,13 @@ import { CREW_SIZE, crewThinking, crewToolEnds, crewToolStarts, isOut, joinCrew 
 import { CUSTOM_PREFIX, fetchMon, monsOfGen } from './custom.js'
 import { dexKey, isCaught, mergedDexEntry, pickWild, tierOf } from './dex.js'
 import { catchCommand, foeMoves, runawayFoe, wildMoves, wildName } from './encounter.js'
-import { evolutionsOf, startLevel } from './evolutions.js'
+import { evolutionsOf, levelEvolutionOf, startLevel } from './evolutions.js'
 import { SPRITES } from './frames.js'
+import {
+  addedTo, bagOf, bagText, dropOf, findItem, itemFor, itemName, ITEMS, LONG_TURN_CANDY_ODDS, migratedBag, RARE_CANDY, takenFrom,
+} from './items.js'
 import { bandRows, bandZoom, battleFits, clampX, homeX, isHome, stripTarget, wildAt } from './layout.js'
-import { careOf, turnXp, xpAt } from './levels.js'
+import { careOf, LONG_TURN_MS, MAX_LEVEL, turnXp, xpAt } from './levels.js'
 import { bumpStat, filledIcons, iconsFor, isFull, isHappiest, park, STAT_ICONS, statNow, STATS, unpark } from './meters.js'
 import { feed, flinch, pet, startAttack, step } from './motion.js'
 import { displayName } from './names.js'
@@ -55,6 +58,7 @@ import { SIZES } from './zoom.js'
 // A main-loop tool call that fails makes it flinch, with a sweat drop by its head.
 // Answered turns earn XP, and the mon evolves at the levels from the games.
 // Now and then a wild mon walks in from the left, and the strip widens to fit both.
+// One knocked out drops an item into a bag, which stone and trade evolutions and Rare Candy draw on.
 // Each open session shows its own mon, starting with the one last picked anywhere. XP,
 // meters, nickname, and sleep belong to the mon, so sessions showing the same mon share them.
 // Left with empty meters for hours it faints until /pokemon revive heals it, and left fainted it runs away.
@@ -93,12 +97,13 @@ async function markSkillCommand($, command) {
 const DOWN_WAITS = ['pet', 'feed', 'attack', 'catch', 'evolve', 'sleep']
 const GONE_WAITS = [...DOWN_WAITS, ...VARIANTS, 'nickname']
 
-// Play the evolve effect with the evolved mon swapped in, in a band grown to fit both
-function startEvolution($, into) {
+// Play the evolve effect with the evolved mon swapped in, in a band grown to fit both.
+// The item it needs, if any, leaves the bag once the evolution is done.
+function startEvolution($, into, item = null) {
   $.ui.toast('What? ' + nameOf(S.mon) + ' is evolving!')
   startAttack({ effect: 'evolve', color: S.ink.silhouette })
   S.attack.swap = into
-  S.evolving = { from: S.mon, into }
+  S.evolving = { from: S.mon, into, item }
   S.evolveDue = null
   $.ui.invalidate('ui.render')
 }
@@ -122,7 +127,7 @@ async function moveRecord($, from, into) {
 
 // The mon becomes the evolved one. Its record moves along, so level, XP, and meters carry over.
 function finishEvolution($) {
-  const { from, into } = S.evolving
+  const { from, into, item } = S.evolving
   const wasHome = isHome()
   S.evolving = null
   S.mon = into
@@ -131,6 +136,7 @@ function finishEvolution($) {
   const name = nameOf(from)
   saveMon($).catch((err) => logOnce($, err))
   moveRecord($, from, into).catch((err) => logOnce($, err))
+  if (item) changeBag($, (bag) => takenFrom(bag, item)).catch((err) => logOnce($, err))
   $.ui.toast('Congratulations! Your ' + name + ' evolved into ' + displayName(into) + '!')
   $.ui.invalidate('ui.render')
 }
@@ -146,9 +152,9 @@ function stopEvolution($) {
   return { text: 'Huh? ' + name + ' stopped evolving!' }
 }
 
-// A stone, a trade, or a level the mon has reached starts its evolution now. Several
-// ways and none named get a list.
-function evolveCommand($, wanted) {
+// A stone, a trade, or a level the mon has reached starts its evolution now. A stone or
+// a trade needs its item in the bag. Several ways and none named get a list.
+async function evolveCommand($, wanted) {
   const name = nameOf(S.mon)
   const entries = evolutionsOf(S.mon)
   if (entries.length === 0) return { text: name + ' doesn\'t evolve.' }
@@ -163,7 +169,12 @@ function evolveCommand($, wanted) {
   if (entry.level && level < entry.level) {
     return { text: name + ' evolves into ' + displayName(entry.into) + ' at Lv. ' + entry.level + '. It\'s Lv. ' + level + '.' }
   }
-  startEvolution($, entry.into)
+  const item = itemFor(entry)
+  if (item && !(await loadBag($))[item]) {
+    return { text: name + ' needs a ' + itemName(item) + ' to evolve into ' + displayName(entry.into) + '. Wild mons you knock out drop items, and /pokemon bag lists yours.' }
+  }
+  if (S.attack || S.food) return { text: name + ' is busy right now.' }
+  startEvolution($, entry.into, item)
   if (entry.item) return { text: 'You use a ' + entry.item + ' on ' + name + '.' }
   if (entry.trade) return { text: 'You trade ' + name + ' to a friend, and they trade it right back.' }
   return { text: 'You let ' + name + ' evolve.' }
@@ -313,13 +324,15 @@ function strikeBack($) {
 }
 
 // A hit resets the foe's wait for a fight. Weak, it waits WEAK_MS for a ball, and at 0 HP
-// it faints.
+// it faints and drops an item into the bag.
 function hitFoe($) {
   const name = displayName(S.wild.mon)
   const hp = Math.max(0, Math.round(S.wild.hp - damageOf(S.wild, S.attack.power, Math.random())))
   if (hp === 0) {
-    S.wild = faintedWild(S.wild, S.tick)
-    $.ui.toast('Wild ' + name + ' fainted! It can\'t be caught now.')
+    const item = dropOf(S.wild.key, S.wild.seed)
+    S.wild = { ...faintedWild(S.wild, S.tick), drop: { item, at: S.tick } }
+    $.ui.toast('Wild ' + name + ' fainted! It can\'t be caught now. It dropped a ' + itemName(item) + ', and it\'s in your bag.')
+    changeBag($, (bag) => addedTo(bag, item)).catch((err) => logOnce($, err))
     return
   }
   const weak = isWeak({ ...S.wild, hp })
@@ -675,6 +688,121 @@ async function gainXp($, durationMs) {
   else $.ui.toast(nameOf(S.mon) + ' is ready to evolve into ' + displayName(into) + '! /pokemon evolve lets it.')
 }
 
+// A party mon earns this share of what its own subagent's answered turn would earn the lead
+const PARTY_XP_SHARE = 0.5
+
+// A level-up off show can't evolve the mon, so a box mon at its evolution level is marked
+// ready, and it evolves once it's shown
+function markedReady(name, was) {
+  const evolution = levelEvolutionOf(name)
+  const level = levelOf(name)
+  return level > was && evolution && level >= evolution.level ? { ...S.stats[name], evolveReady: true } : S.stats[name]
+}
+
+// The party mon out for a subagent earns XP for that subagent's answered turn, scaled by
+// its own meters
+async function partyXp($, name, durationMs) {
+  if (!name || name === S.mon) return
+  S.nowMs = await $.clock.now()
+  await freshen($, [name])
+  if (!S.stats[name] || isGone(name) || isFainted(name)) return
+  const was = levelOf(name)
+  const care = S.needsOn ? careOf(statNow(name, 'food'), statNow(name, 'happiness')) : 1
+  const xp = Math.max(1, Math.round(turnXp({ level: was, durationMs, care }) * PARTY_XP_SHARE))
+  S.stats[name] = { ...S.stats[name], xp: xpOf(name) + xp }
+  S.stats[name] = markedReady(name, was)
+  await saveRecords($, [name])
+  if (levelOf(name) > was) $.ui.toast(nameOf(name) + ' grew to Lv. ' + levelOf(name) + ' working beside ' + nameOf(S.mon) + '!')
+}
+
+// A mon marked ready off show evolves now it's shown, or waits for /pokemon evolve with
+// autoevolve off
+async function evolveIfReady($) {
+  if (!S.stats[S.mon]?.evolveReady) return
+  const { evolveReady, ...record } = S.stats[S.mon]
+  S.stats[S.mon] = record
+  await saveRecords($, [S.mon])
+  const into = readyToEvolve()
+  if (!into) return
+  if (S.autoEvolve) S.evolveDue = into
+  else $.ui.toast(nameOf(S.mon) + ' is ready to evolve into ' + displayName(into) + '! /pokemon evolve lets it.')
+}
+
+// The bag as last saved. The first time it's made, every stone or trade mon already in
+// the box, or on show, gets the item it needs, so nobody raised before the bag is stranded.
+async function loadBag($) {
+  const saved = await $.store.get('bag')
+  if (saved && typeof saved === 'object') return bagOf(saved)
+  const stats = await $.store.get('stats')
+  const boxed = stats && typeof stats === 'object' ? Object.keys(stats).filter((name) => !stats[name]?.ranAway && !stats[name]?.dead) : []
+  const bag = migratedBag(new Set([...boxed, ...(isGone(S.mon) ? [] : [S.mon])]))
+  await $.store.set('bag', bag)
+  return bag
+}
+
+async function changeBag($, change) {
+  const bag = change(await loadBag($))
+  await $.store.set('bag', bag)
+  return bag
+}
+
+// A long main turn now and then turns up a Rare Candy
+async function maybeFindCandy($, durationMs) {
+  if (durationMs < LONG_TURN_MS || isDown() || Math.random() >= LONG_TURN_CANDY_ODDS) return
+  await changeBag($, (bag) => addedTo(bag, RARE_CANDY))
+  $.ui.toast(nameOf(S.mon) + ' found a Rare Candy! It\'s in your bag.')
+}
+
+// Rare Candy raises the shown mon, or a box mon named, one level, to the start of the
+// next. It never revives a fainted mon or brings back one that's gone.
+async function candyCommand($, wanted) {
+  const name = wanted || S.mon
+  if (!MONS.includes(name)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
+  await freshen($, [name])
+  const shown = nameOf(name)
+  if (isDead(name)) return { text: displayName(name) + ' is gone. A Rare Candy can\'t bring it back.' }
+  if (hasRunAway(name)) return { text: goneLine(name) }
+  if (name !== S.mon && !S.stats[name]) return { text: displayName(name) + ' isn\'t in your box. /pokemon box lists yours.' }
+  if (isFainted(name)) return { text: shown + ' has fainted, and a Rare Candy won\'t revive it. /pokemon revive takes it to a Pokémon Center.' }
+  const was = levelOf(name)
+  if (was >= MAX_LEVEL) return { text: shown + ' is already Lv. ' + MAX_LEVEL + '.' }
+  if (!(await loadBag($))[RARE_CANDY]) return { text: 'You have no Rare Candy. Wild mons you knock out drop one now and then.' }
+  await changeBag($, (bag) => takenFrom(bag, RARE_CANDY))
+  await freshen($, [name])
+  S.stats[name] = { ...S.stats[name], xp: xpAt(was + 1) }
+  if (name !== S.mon) S.stats[name] = markedReady(name, was)
+  await saveRecords($, [name])
+  $.ui.invalidate('ui.render')
+  const grew = 'You give ' + shown + ' a Rare Candy. It grew to Lv. ' + (was + 1) + '!'
+  const into = name === S.mon ? readyToEvolve() : null
+  if (!into) return { text: grew }
+  if (S.autoEvolve) {
+    S.evolveDue = into
+    return { text: grew }
+  }
+  return { text: grew + ' It\'s ready to evolve into ' + displayName(into) + '. /pokemon evolve lets it.' }
+}
+
+// /pokemon use <item> [mon]. The item's name may take several words, so the longest
+// start of the words that names an item is the item, and the rest the mon.
+async function useCommand($, rest) {
+  const words = rest.split(/\s+/).filter(Boolean)
+  const names = ITEMS.map((item) => item.name).join(', ')
+  if (words.length === 0) return { text: 'Name the item, like /pokemon use rare candy. /pokemon bag lists yours.' }
+  let n = words.length
+  while (n > 0 && !findItem(words.slice(0, n).join(' '))) n--
+  if (n === 0) return { text: 'Unknown item "' + rest.trim() + '". Items: ' + names + '.' }
+  const item = findItem(words.slice(0, n).join(' '))
+  const wanted = words.slice(n).join('_')
+  if (item === RARE_CANDY) return candyCommand($, wanted)
+  if (wanted && !MONS.includes(wanted)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
+  if (wanted && wanted !== S.mon) return { text: 'Show ' + nameOf(wanted) + ' first with /pokemon ' + wanted + ', then use the ' + itemName(item) + '.' }
+  if (isDown()) return downReply()
+  const entry = evolutionsOf(S.mon).find((e) => itemFor(e) === item)
+  if (!entry) return { text: nameOf(S.mon) + ' can\'t use a ' + itemName(item) + '.' }
+  return evolveCommand($, entry.into)
+}
+
 // The box's mons beside the one on show that come out of subagents' balls, one a line,
 // like "Sparky (Pikachu), Lv. 12, working for Count files", with the agent named by its
 // description in the agent list
@@ -691,7 +819,8 @@ async function partyText($) {
   const lines = mons.map((name) => {
     const member = S.crew.find((m) => m.mon === name && m.endAt === null)
     const types = typesOf(name)
-    const shown = fullNameOf(name) + ', Lv. ' + levelOf(name) + (types.length > 0 ? ', for ' + types.join(' and ') : '')
+    const ready = S.stats[name]?.evolveReady ? ', ready to evolve' : ''
+    const shown = fullNameOf(name) + ', Lv. ' + levelOf(name) + ready + (types.length > 0 ? ', for ' + types.join(' and ') : '')
     if (!member) return shown + ', free'
     const waiting = isOut(member, S.tick) ? '' : ', waiting in its ball for room'
     return shown + ', working for ' + (described.get(member.id) ?? member.id) + waiting
@@ -1153,6 +1282,7 @@ async function switchTo($, asked, { save = true } = {}) {
   if (wasHome) S.x = homeX()
   clampX()
   if (save) await saveMon($)
+  await evolveIfReady($)
 }
 
 // Load the mons fetched with /pokemon new, in this session or another, not loaded yet
@@ -1382,6 +1512,10 @@ async function runPokemon($, e) {
     return evolveCommand($, asked.slice('evolve'.length).trim())
   } else if (asked === 'stop') {
     return stopEvolution($)
+  } else if (asked === 'bag') {
+    return { text: bagText(await loadBag($)) }
+  } else if (asked === 'use' || asked.startsWith('use ')) {
+    return useCommand($, asked.slice('use'.length))
   } else if (asked === 'stats') {
     const pets = Number((await $.store.get('pets')) ?? 0)
     const feeds = Number((await $.store.get('feeds')) ?? 0)
@@ -1491,6 +1625,7 @@ export function register(on) {
       unpark(S.mon)
       await saveStats($, [S.mon]).catch((err) => logOnce($, err))
     }
+    await evolveIfReady($).catch((err) => logOnce($, err))
     // The mon last picked ran away or was lost, so the session starts with the next one
     if (isGone(S.mon)) await leaveBand($).catch((err) => logOnce($, err))
     await checkNeglect($).catch((err) => logOnce($, err))
@@ -1566,6 +1701,7 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     S.thinking = false
     markActive()
+    const worker = e.agentId ? S.crew.find((m) => m.id === e.agentId)?.mon : null
     if (e.agentId) endAgent(e.agentId)
     if (!e.agentId) {
       S.turnRunning = false
@@ -1581,7 +1717,11 @@ export function register(on) {
       S.wild = { ...S.wild, turns: S.wild.turns + 1 }
       if (S.wild.turns >= WILD_TURNS) fleeWild($)
     }
-    if (!e.agentId && e.reason === 'answer') await gainXp($, e.durationMs ?? 0).catch((err) => logOnce($, err))
+    if (!e.agentId && e.reason === 'answer') {
+      await gainXp($, e.durationMs ?? 0).catch((err) => logOnce($, err))
+      await maybeFindCandy($, e.durationMs ?? 0).catch((err) => logOnce($, err))
+    }
+    if (worker && e.reason === 'answer') await partyXp($, worker, e.durationMs ?? 0).catch((err) => logOnce($, err))
     return next(e)
   })
 

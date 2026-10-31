@@ -125,8 +125,12 @@ export const HELP = [
     ['run', 'Send the wild mon away'],
   ]],
   ['Evolve', [
-    ['evolve [mon]', 'Evolve with a stone or a trade, or pick what Eevee becomes'],
+    ['evolve [mon]', 'Evolve with a stone or a Link Cable from your bag, or pick what Eevee becomes'],
     ['stop', 'Cancel an evolution'],
+  ]],
+  ['Items', [
+    ['bag', 'The items you hold, dropped by wild mons you knock out'],
+    ['use <item> [mon]', 'Use an item, like use rare candy or use thunder stone'],
   ]],
   ['Records', [
     ['stats', 'Its level, XP, evolution, and meters'],
