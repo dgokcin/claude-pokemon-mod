@@ -16,9 +16,14 @@ export const WEAK_MS = 90 * 1000
 // The fewest milliseconds between the home mon's moves at the foe, and the most added at random
 export const ATTACK_GAP_MS = 6000
 export const ATTACK_JITTER_MS = 2000
-// The same for the foe's strikes back, which only make the home mon flinch
+// The same for the foe's strikes back
 export const STRIKE_GAP_MS = 10000
 export const STRIKE_JITTER_MS = 5000
+// The happiness a landed strike takes, by how many strikes in a row have landed since you
+// last caught at, attacked, or ran from the foe: a quarter heart, a half, then a full one
+export const STRIKE_BITES = [5, 10, 20]
+// What a foe ignored for its whole visit takes as it leaves on its own
+export const PARTING_BITE = 20
 // A fainted foe lies still, then blinks away over FAINT_BLINK_TICKS
 const FAINT_TICKS = 40
 const FAINT_BLINK_TICKS = 12
@@ -54,6 +59,8 @@ export const newWild = (pick, seed) => ({
   turns: 0,
   nextStrikeAt: 0,
   strike: null,
+  ignored: 0,
+  engaged: false,
   faintedAt: null,
 })
 
@@ -105,6 +112,15 @@ export const faintedWild = (wild, tick) => ({ ...wild, hp: 0, phase: 'fainted', 
 // Start one of the foe's moves at the home mon. attack is the move as prepareAttack
 // settles it, played from start.
 export const strikingWild = (wild, move, attack, tick, nextStrikeAt) => ({ ...wild, strike: { move, attack, start: tick, landed: false }, nextStrikeAt })
+
+export const strikeBite = (wild) => STRIKE_BITES[Math.min(wild.ignored, STRIKE_BITES.length - 1)]
+
+export const struckWild = (wild) => ({ ...wild, ignored: wild.ignored + 1 })
+
+// You caught at, attacked, or ran from the foe, so its next strike is small again
+export const engagedWild = (wild) => (wild ? { ...wild, ignored: 0, engaged: true } : wild)
+
+export const partingBite = (wild) => (wild && !wild.engaged ? PARTING_BITE : 0)
 
 export const foeJolt = (wild, tick) =>
   wild.hitAt !== null && tick - wild.hitAt < JOLT_TICKS ? (Math.floor((tick - wild.hitAt) / 2) % 2 === 0 ? -1 : 1) : 0

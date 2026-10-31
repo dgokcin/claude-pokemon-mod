@@ -1,6 +1,6 @@
 import { ALERT_ICON, INKS, OWNED_BALL, OWNED_COLORS, shrunkBubble, SMALL_ZS, SPARKLE, SPARKLES, stamp, stampPixel } from './art.js'
 import { attackFrame, attackPose } from './attacks.js'
-import { bubbleIcon, bubbleStamps, dotsIcon, sleepStamps, sweatStamps, toolIcon, toolKind } from './bubble.js'
+import { bubbleIcon, bubbleStamps, dotsIcon, heartbreakStamps, isHeartbroken, sleepStamps, sweatStamps, toolIcon, toolKind } from './bubble.js'
 import { FLINCH_TICKS, HEAD_PIXELS, SHAKE_TICKS, TICK_MS } from './constants.js'
 import { ballOpen, crewFlash, crewHidden, crewHopping, crewPhase, crewRed, crewTool, crewWalking, isShown } from './crew.js'
 import { dizzyStamps } from './faint.js'
@@ -409,6 +409,7 @@ export function frameNow(full = false) {
     ...(onStage ? [...bubble, ...hpStamps(rows)] : []),
     ...heartStamps(),
     ...(isWincing() ? sweatStamps(head, top + box.top, bubbleSide) : []),
+    ...(isHeartbroken() && !down ? heartbreakStamps(head, top + box.top, bubbleSide) : []),
     ...mates.flatMap((m) => m.front),
     ...mateBubbles,
     ...(asleep && !shrunk ? sleepStamps(sleeper) : []),

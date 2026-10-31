@@ -66,6 +66,10 @@ export function shrunkBubble(icon) {
 export const bubbleSpan = (look) => look.frame[0].length + 3
 // A sweat drop on the head when a tool call fails: d drop, h shine
 export const SWEAT = ['..d.', '.dd.', 'dhdd', 'dddd', '.dd.']
+// A heart cracked in two halves that drift apart over the head when a wild mon's strike
+// takes happiness: p body
+export const HEARTBREAK = [['pp...', 'ppp..', '.p...', '..p..'], ['...pp', '...pp', '..pp.', '.....']]
+export const HEARTBREAK_COLOR = 0xff4f8b
 // The "!" of a trainer who spots you, shown while Claude waits on you
 export const ALERT_ICON = { rows: ['..a..', '..a..', '.....', '..a..'], small: ['a', 'a', '.', 'a'], colors: { a: 0xff3d3d } }
 // What the bubble shows while a tool runs: a pencil (p body, e eraser, t wood, g lead),

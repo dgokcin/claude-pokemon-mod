@@ -18,7 +18,7 @@ import {
 } from './items.js'
 import { bandRows, bandZoom, battleFits, clampX, homeX, isHome, stripTarget, wildAt } from './layout.js'
 import { careOf, LONG_TURN_MS, MAX_LEVEL, turnXp, xpAt } from './levels.js'
-import { bumpStat, filledIcons, iconsFor, isFull, isHappiest, park, STAT_ICONS, statNow, STATS, unpark } from './meters.js'
+import { bittenHappiness, bumpStat, filledIcons, iconsFor, isFull, isHappiest, park, STAT_ICONS, statNow, STATS, unpark } from './meters.js'
 import { feed, flinch, pet, startAttack, step } from './motion.js'
 import { displayName } from './names.js'
 import {
@@ -37,8 +37,8 @@ import {
 import { assignedTo, canWork, crewVariant, endAgent, partyMons, stepCrewMons, typesOf } from './team.js'
 import { andList, boxText, dexText, evolutionText, HELP, helpText, orList, statsText } from './texts.js'
 import {
-  chargedWild, damageOf, faintedWild, fleeingWild, foeX, isHere, isOnStage, isWeak, newWild, STRIKE_GAP_MS, STRIKE_JITTER_MS,
-  stepWild, strikingWild, WEAK_MS, WILD_STAY_MS, WILD_TURNS,
+  chargedWild, damageOf, engagedWild, faintedWild, fleeingWild, foeX, isHere, isOnStage, isWeak, newWild, partingBite,
+  STRIKE_GAP_MS, STRIKE_JITTER_MS, stepWild, strikeBite, strikingWild, struckWild, WEAK_MS, WILD_STAY_MS, WILD_TURNS,
 } from './wild.js'
 import { SIZES } from './zoom.js'
 
@@ -189,6 +189,21 @@ function fleeWild($, quiet = false) {
   S.wild = fleeingWild(S.wild, wildAt())
 }
 
+// Take a foe's bite out of the shown mon's happiness, never below one heart, with a broken
+// heart over its head when it takes any. With needs off, or the mon down, it takes nothing.
+async function biteMon($, amount) {
+  const name = S.mon
+  if (!S.needsOn || amount <= 0 || isDown()) return
+  S.nowMs = await $.clock.now()
+  await freshen($, [name])
+  const taken = bittenHappiness(amount, name)
+  if (name !== S.mon || taken <= 0 || isDown()) return
+  bumpStat('happiness', -taken, name)
+  S.heartbreakAt = S.tick
+  await saveRecords($, [name])
+  $.ui.invalidate('ui.render')
+}
+
 // Mark a mon in the Pokédex as last saved by any session, so two sessions marking at once
 // lose a mark at worst
 async function markDex($, key, patch) {
@@ -209,8 +224,10 @@ function stepWildPhase($) {
   if (!S.wild) return
   if (!['fleeing', 'fainted'].includes(S.wild.phase) && (isTuckedIn() || isAsleep() || isDown())) return fleeWild($)
   const result = stepWild(S.wild, { tick: S.tick, atHome: isHome() && !S.attack, at: wildAt(), stayTicks: WILD_STAY_MS / TICK_MS })
-  if (result.event === 'timeout') fleeWild($)
-  else S.wild = result.wild
+  if (result.event === 'timeout') {
+    biteMon($, partingBite(S.wild)).catch((err) => logOnce($, err))
+    fleeWild($)
+  } else S.wild = result.wild
   if (result.event === 'arrived') {
     S.wild = { ...S.wild, nextStrikeAt: S.tick + strikeGap() }
     const yours = S.wild.runaway ? ' It looks a lot like ' + (S.stats[S.wild.mon]?.nickname ?? 'your ' + displayName(S.wild.mon)) + '.' : ''
@@ -263,6 +280,7 @@ async function caughtFoe($, caught) {
 function battleButtons($, { Box, Button }) {
   if (S.wild?.phase !== 'battle') return []
   const press = (act) => {
+    S.wild = engagedWild(S.wild)
     const reply = battleWait() ?? act()
     markActive()
     $.ui.toast(reply.text)
@@ -304,13 +322,15 @@ function stepBattle($) {
 }
 
 // Now and then the foe plays one of its own moves at the free mon. It lands 60% of the
-// way through, and only makes the mon flinch and puts its next move off, so a fight
-// never touches the mon's meters.
+// way through, makes the mon flinch, puts its next move off, and bites into its
+// happiness, more with each strike in a row you leave the foe alone.
 function strikeBack($) {
   const { strike } = S.wild
   if (strike && !strike.landed && S.tick >= strike.start + Math.round(strike.attack.ticks * 0.6)) {
-    S.wild = { ...S.wild, strike: { ...strike, landed: true }, nextAttackAt: Math.max(S.wild.nextAttackAt, S.tick + STRIKE_DELAY_TICKS) }
+    const bite = strikeBite(S.wild)
+    S.wild = { ...struckWild(S.wild), strike: { ...strike, landed: true }, nextAttackAt: Math.max(S.wild.nextAttackAt, S.tick + STRIKE_DELAY_TICKS) }
     flinch()
+    biteMon($, bite).catch((err) => logOnce($, err))
   }
   if (strike && S.tick >= strike.start + strike.attack.ticks) S.wild = { ...S.wild, strike: null }
   const free = !S.wild.strike && !S.attack && !S.food && !S.evolving && !isAsleep() && S.x === homeX()
@@ -1359,6 +1379,9 @@ async function paneCommand($, presentation) {
   return { text: nameOf(S.mon) + ' moved to a pane beside the transcript. /pokemon pane brings it back to the band.' }
 }
 
+// The commands that count as facing a wild foe, so its strikes stay small
+const FIGHT_VERBS = ['catch', 'attack', 'run']
+
 // Served from the one command.run hook below. Claude Code keeps a command out of the
 // up-arrow history when more than one command.run hook could answer it.
 async function runPokemon($, e) {
@@ -1370,6 +1393,7 @@ async function runPokemon($, e) {
   if (asked !== 'pet' || !isAsleep()) markActive()
   clearAlert()
   S.nowMs = await $.clock.now()
+  if (FIGHT_VERBS.includes(asked.split(' ')[0]) && asked !== 'attack list') S.wild = engagedWild(S.wild)
   if (waitsForEvolution(asked)) return evolvingReply()
   if (waitsForCare(asked)) return careReply()
   const verb = asked.split(' ')[0]
@@ -1715,7 +1739,12 @@ export function register(on) {
     // A foe left uncaught for WILD_TURNS main turns moves on
     if (!e.agentId && S.wild?.phase === 'battle') {
       S.wild = { ...S.wild, turns: S.wild.turns + 1 }
-      if (S.wild.turns >= WILD_TURNS) fleeWild($)
+      if (S.wild.turns >= WILD_TURNS) {
+        const bite = partingBite(S.wild)
+        fleeWild($)
+        // Before gainXp, which would otherwise save over the bite with the record it read
+        await biteMon($, bite).catch((err) => logOnce($, err))
+      }
     }
     if (!e.agentId && e.reason === 'answer') {
       await gainXp($, e.durationMs ?? 0).catch((err) => logOnce($, err))

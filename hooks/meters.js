@@ -47,6 +47,12 @@ export function bumpStat(key, amount, name = S.mon) {
   S.stats[name] = { ...S.stats[name], [key]: { value: clampStat(statNow(name, key) + amount), at: S.nowMs } }
 }
 
+// A wild mon's strikes never take happiness below one full heart, so they can't empty it
+// and start the faint clock. Returns what a bite of amount takes.
+const BITE_FLOOR = 100 / STAT_ICONS
+
+export const bittenHappiness = (amount, name = S.mon) => Math.max(0, Math.min(amount, statNow(name, 'happiness') - BITE_FLOOR))
+
 // Only the mons on show drain. Switching away parks a mon's meters where they are, and
 // they pick up from there when it's shown again, so a mon left alone for weeks isn't
 // starving when it comes back. XP is the shown mon's alone already. A mon parked while

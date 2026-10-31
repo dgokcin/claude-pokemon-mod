@@ -71,7 +71,7 @@ export async function stubHost({ saved = {}, light = false, seed = 1, bodyColumn
         Object.assign(screen, { cells: args.cells, columns: args.columns })
         return {}
       },
-      resolve: () => ({ Box: (props) => ({ props }), Image: (props) => ({ props }), Raster: (props) => ({ props }), Text: (props) => ({ props }) }),
+      resolve: () => ({ Box: (props) => ({ props }), Button: (props) => ({ props }), Image: (props) => ({ props }), Raster: (props) => ({ props }), Text: (props) => ({ props }) }),
     },
   }
 
