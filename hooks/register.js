@@ -1229,6 +1229,217 @@ async function paneCommand($, presentation) {
   return { text: nameOf(S.mon) + ' moved to a pane beside the transcript. /pokemon pane brings it back to the band.' }
 }
 
+// Served from the one command.run hook below. Claude Code keeps a command out of the
+// up-arrow history when more than one command.run hook could answer it.
+async function runPokemon($, e) {
+  const asked = e.args.trim().toLowerCase()
+  let reply
+  // Another session may have fetched a mon since this one started
+  await loadCustom($).catch(() => {})
+  // A pet doesn't wake a sleeping mon, so it doesn't count as activity
+  if (asked !== 'pet' || !isAsleep()) markActive()
+  clearAlert()
+  S.nowMs = await $.clock.now()
+  if (waitsForEvolution(asked)) return evolvingReply()
+  if (waitsForCare(asked)) return careReply()
+  const verb = asked.split(' ')[0]
+  const blocked = DOWN_WAITS.includes(verb) || (isGone(S.mon) && GONE_WAITS.includes(verb))
+  if (asked !== 'attack list' && isDown() && blocked) {
+    // Healed or caught back in another session since the last sync, it carries on
+    await freshen($, [S.mon])
+    if (isDown()) return downReply()
+  }
+  if (MONS.includes(asked)) {
+    await freshen($, [asked])
+    if (isDead(asked)) return { text: displayName(asked) + ' is gone. Catch a new one in the wild to raise it again.' }
+    if (hasRunAway(asked)) return { text: goneLine(asked) }
+    if (asked !== S.mon && (await stillHealing($))) return healingReply()
+    if ((reply = await trainerWait($, asked))) return reply
+    await switchTo($, asked)
+  } else if (asked === 'new' || asked.startsWith('new ')) {
+    if (await stillHealing($)) return healingReply()
+    return newCommand($, asked.slice('new'.length).trim())
+  } else if (VARIANTS.includes(asked)) {
+    S.variant = asked
+    await $.store.set('variant', S.variant)
+  } else if (asked === 'wander') {
+    S.wander = !S.wander
+    S.wanderTarget = null
+    await $.store.set('wander', S.wander)
+    return { text: nameOf(S.mon) + (S.wander ? ' is free to wander.' : ' is heading home.') }
+  } else if (asked === 'pet') {
+    // A mon as happy as can be, every heart filled, still enjoys it, but it fills no
+    // meter and doesn't count as a pet
+    const happiest = isHappiest()
+    const sleeping = isAsleep()
+    pet()
+    const line = nameOf(S.mon) + ' ' + (sleeping ? 'smiles in its sleep' : PET_LINES[Math.floor(Math.random() * PET_LINES.length)]) + ' ♥'
+    if (happiest) return { text: line + ' ' + nameOf(S.mon) + ' is already as happy as can be.' }
+    S.pettingFills = S.mon
+    const pets = Number((await $.store.get('pets')) ?? 0) + 1
+    await $.store.set('pets', pets)
+    return { text: line }
+  } else if (asked === 'feed') {
+    if (isHere(S.wild)) return { text: 'Not now, a ' + wildName() + ' is right there!' }
+    // A full mon, every food icon filled, still eats the berry, but it fills no meter
+    // and doesn't count as a feed
+    const full = isFull()
+    const berry = feed()
+    const article = /^[aeiou]/.test(berry.name) ? 'an ' : 'a '
+    const tossed = 'You toss ' + nameOf(S.mon) + ' ' + article + berry.name + ' ' + berry.emoji
+    if (full) return { text: tossed + '. ' + nameOf(S.mon) + ' is already full, so it just nibbles it.' }
+    // The meters fill once it has eaten the berry
+    S.food.fills = S.mon
+    const feeds = Number((await $.store.get('feeds')) ?? 0) + 1
+    await $.store.set('feeds', feeds)
+    return { text: tossed }
+  } else if (asked === 'sleep') {
+    const name = nameOf(S.mon)
+    if (isTuckedIn()) {
+      await setAsleep($, false)
+      return { text: name + ' wakes up.' }
+    }
+    if (S.turnRunning) return { text: name + " can't sleep while Claude is working." }
+    await setAsleep($, true)
+    return { text: name + ' curls up and falls asleep. Its meters drain slower until Claude starts working.' }
+  } else if (asked === 'attack' || asked.startsWith('attack ')) {
+    return attackCommand(asked.slice('attack'.length).trim())
+  } else if (asked === 'catch') {
+    return catchCommand()
+  } else if (asked === 'run') {
+    if (!S.wild || S.wild.phase === 'fleeing') return { text: 'There\'s no wild Pokémon here.' }
+    fleeWild($, true)
+    return { text: 'Got away safely!' }
+  } else if ((asked === 'wild' || asked.startsWith('wild ')) && (reply = await wildCommand($, asked.slice('wild'.length)))) {
+    return reply
+  } else if (asked === 'kill' && (reply = await killCommand($))) {
+    return reply
+  } else if (asked === 'moves' || asked.startsWith('moves ')) {
+    const whose = asked.slice('moves'.length).trim() || S.mon
+    if (!MONS.includes(whose)) return { text: 'Unknown mon "' + whose + '". See /pokemon list for every mon.' }
+    return movesText(whose)
+  } else if (asked === 'needs') {
+    S.needsOn = !S.needsOn
+    await $.store.set('needs', S.needsOn)
+    $.ui.invalidate('ui.render')
+    const name = nameOf(S.mon)
+    const still = isFainted(S.mon) ? ' It\'s still fainted, so /pokemon revive takes it to a Pokémon Center.' : ''
+    return { text: (S.needsOn ? 'Needs are on. Keep ' + name + ' fed and happy.' : 'Needs are off. ' + name + ' won\'t get hungry or lonely.') + still }
+  } else if (asked === 'emoji') {
+    S.emojiOn = !S.emojiOn
+    await $.store.set('emoji', S.emojiOn)
+    $.ui.invalidate('ui.render')
+    const icons = iconsFor('food').trimEnd() + ' ' + iconsFor('happiness').trimEnd()
+    return { text: (S.emojiOn ? 'The meters show emoji: ' : 'The meters show text icons: ') + icons }
+  } else if (asked === 'size' || asked.startsWith('size ')) {
+    const wanted = asked.slice('size'.length).trim()
+    const sizes = Object.keys(SIZES).join(', ')
+    if (!wanted) return { text: 'The band is ' + S.size + '. Sizes: ' + sizes + '.' }
+    if (!Object.hasOwn(SIZES, wanted)) return { text: 'Unknown size "' + wanted + '". Try one of: ' + sizes + '.' }
+    S.size = wanted
+    await $.store.set('size', S.size)
+    $.ui.invalidate('ui.render')
+    return { text: 'The band is ' + S.size + '.' }
+  } else if (asked === 'images' || asked.startsWith('images ')) {
+    const wanted = asked.slice('images'.length).trim()
+    const modes = Object.keys(IMAGE_MODES).join(', ')
+    const drawn = () => (S.noImages ? 'half blocks' : 'images')
+    if (!wanted) return { text: 'Images are ' + S.imageMode + ', so the band draws ' + drawn() + '. Modes: ' + modes + '.' }
+    if (!Object.hasOwn(IMAGE_MODES, wanted)) return { text: 'Unknown mode "' + wanted + '". Try one of: ' + modes + '.' }
+    S.imageMode = wanted
+    await $.store.set('images', S.imageMode)
+    applyImageMode()
+    $.ui.invalidate('ui.render')
+    return { text: 'Images are ' + S.imageMode + ', so the band draws ' + drawn() + '.' }
+  } else if (asked === 'pane') {
+    return paneCommand($, e.presentation)
+  } else if (asked === 'sync') {
+    S.syncOn = !S.syncOn
+    await $.store.set('sync', S.syncOn)
+    const name = nameOf(S.mon)
+    if (!S.syncOn) return { text: 'Sync is off. Each session keeps the mon picked in it.' }
+    // This session's mon becomes the pick the others follow
+    await saveMon($)
+    return { text: 'Sync is on. Every open session shows ' + name + ', and follows the next mon you pick.' }
+  } else if (asked === 'autoevolve') {
+    S.autoEvolve = !S.autoEvolve
+    await $.store.set('autoEvolve', S.autoEvolve)
+    const name = nameOf(S.mon)
+    if (!S.autoEvolve) {
+      S.evolveDue = null
+      return { text: name + ' waits for /pokemon evolve when it reaches its evolution level.' }
+    }
+    // Already at its level, it evolves once idle
+    S.evolveDue = readyToEvolve()
+    return { text: name + ' evolves on its own once idle at its evolution level.' }
+  } else if (asked === 'revive' || asked.startsWith('revive ')) {
+    return reviveCommand($, asked.slice('revive'.length).trim())
+  } else if (asked === 'nuzlocke') {
+    return nuzlockeCommand($)
+  } else if (asked === 'trainer') {
+    return trainerCommand($)
+  } else if (asked === 'evolve' || asked.startsWith('evolve ')) {
+    return evolveCommand($, asked.slice('evolve'.length).trim())
+  } else if (asked === 'stop') {
+    return stopEvolution($)
+  } else if (asked === 'stats') {
+    const pets = Number((await $.store.get('pets')) ?? 0)
+    const feeds = Number((await $.store.get('feeds')) ?? 0)
+    return { text: statsText(pets, feeds) }
+  } else if (asked === 'box') {
+    // List every record as last saved by any session
+    const saved = await $.store.get('stats')
+    if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
+    const healed = Object.keys(S.stats).filter((name) => name !== S.mon && settleHeal(name))
+    if (healed.length > 0) await saveRecords($, healed)
+    const dex = await $.store.get('dex')
+    return { text: boxText(dex && typeof dex === 'object' ? dex : {}) }
+  } else if (asked === 'party') {
+    return { text: await partyText($) }
+  } else if (asked.startsWith('party assign') || asked.startsWith('party unassign')) {
+    const [, verb, ...rest] = asked.split(/\s+/)
+    return assignCommand($, verb, rest)
+  } else if (asked.startsWith('party add') || asked.startsWith('party remove')) {
+    const [, verb, ...rest] = asked.split(/\s+/)
+    return partyCommand($, verb, rest.join(' '))
+  } else if (asked === 'dex' || asked.startsWith('dex ')) {
+    const saved = await $.store.get('stats')
+    if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
+    const dex = await $.store.get('dex')
+    return { text: dexText(dex && typeof dex === 'object' ? dex : {}, asked.slice('dex'.length).trim(), await $.store.get('graveyard')) }
+  } else if (asked === 'release' || asked.startsWith('release ')) {
+    const wanted = asked.slice('release'.length).trim()
+    if (MONS.includes(wanted)) await freshen($, [wanted])
+    // The shown mon starts over, so a foe it faced leaves
+    if (wanted === S.mon && S.stats[wanted] && S.wild) fleeWild($)
+    const result = releaseCommand(wanted)
+    if (MONS.includes(wanted)) await saveRecords($, [wanted])
+    $.ui.invalidate('ui.render')
+    return result
+  } else if (asked === 'nickname' || asked.startsWith('nickname ')) {
+    await freshen($, [S.mon])
+    const result = nicknameCommand(e.args.trim().slice('nickname'.length))
+    await saveRecords($, [S.mon])
+    $.ui.invalidate('ui.render')
+    return result
+  } else if (asked === 'list') {
+    return { text: MONS.length + ' mons: ' + MONS.join(', ') }
+  } else if (asked === 'help') {
+    return { text: helpText((await $.store.get('debug')) === true) }
+  } else if (asked) {
+    return { text: 'Unknown option "' + asked + '". Try one of: ' + OPTIONS.join(', ') + '. See /pokemon list for every mon.' }
+  } else {
+    if (isGone(S.mon)) return { text: goneLine(S.mon) + ' /pokemon <mon> picks another. Options: ' + OPTIONS.join(', ') + '.' }
+    const condition = conditionOf(S.mon)
+    const mode = (condition ? ', ' + condition : '') + (isTuckedIn() ? ', asleep' : '') + (S.wander ? ', wandering' : '') + (isHere(S.wild) ? ', a ' + wildName() + ' is here' : '')
+    const levels = 'food ' + Math.round(statNow(S.mon, 'food')) + '%, happiness ' + Math.round(statNow(S.mon, 'happiness')) + '%'
+    const shown = nameOf(S.mon) + ' Lv. ' + levelOf(S.mon)
+    return { text: 'Showing ' + S.variant + ' ' + shown + mode + ' (' + (S.needsOn ? levels : 'needs off') + '). Options: ' + OPTIONS.join(', ') + '. /pokemon help says what each does.' }
+  }
+  $.ui.invalidate('ui.render')
+  return { text: 'Now showing ' + S.variant + ' ' + nameOf(S.mon) + '.' }
+}
+
 export function register(on) {
   on('session.start', async ($, e, next) => {
     S.sessionToken = Math.random().toString(36).slice(2)
@@ -1323,215 +1534,6 @@ export function register(on) {
       $.ui.invalidate('ui.render')
     }
     return result
-  })
-
-  on('command.run', { command: 'pokemon' }, async ($, e) => {
-    const asked = e.args.trim().toLowerCase()
-    let reply
-    // Another session may have fetched a mon since this one started
-    await loadCustom($).catch(() => {})
-    // A pet doesn't wake a sleeping mon, so it doesn't count as activity
-    if (asked !== 'pet' || !isAsleep()) markActive()
-    clearAlert()
-    S.nowMs = await $.clock.now()
-    if (waitsForEvolution(asked)) return evolvingReply()
-    if (waitsForCare(asked)) return careReply()
-    const verb = asked.split(' ')[0]
-    const blocked = DOWN_WAITS.includes(verb) || (isGone(S.mon) && GONE_WAITS.includes(verb))
-    if (asked !== 'attack list' && isDown() && blocked) {
-      // Healed or caught back in another session since the last sync, it carries on
-      await freshen($, [S.mon])
-      if (isDown()) return downReply()
-    }
-    if (MONS.includes(asked)) {
-      await freshen($, [asked])
-      if (isDead(asked)) return { text: displayName(asked) + ' is gone. Catch a new one in the wild to raise it again.' }
-      if (hasRunAway(asked)) return { text: goneLine(asked) }
-      if (asked !== S.mon && (await stillHealing($))) return healingReply()
-      if ((reply = await trainerWait($, asked))) return reply
-      await switchTo($, asked)
-    } else if (asked === 'new' || asked.startsWith('new ')) {
-      if (await stillHealing($)) return healingReply()
-      return newCommand($, asked.slice('new'.length).trim())
-    } else if (VARIANTS.includes(asked)) {
-      S.variant = asked
-      await $.store.set('variant', S.variant)
-    } else if (asked === 'wander') {
-      S.wander = !S.wander
-      S.wanderTarget = null
-      await $.store.set('wander', S.wander)
-      return { text: nameOf(S.mon) + (S.wander ? ' is free to wander.' : ' is heading home.') }
-    } else if (asked === 'pet') {
-      // A mon as happy as can be, every heart filled, still enjoys it, but it fills no
-      // meter and doesn't count as a pet
-      const happiest = isHappiest()
-      const sleeping = isAsleep()
-      pet()
-      const line = nameOf(S.mon) + ' ' + (sleeping ? 'smiles in its sleep' : PET_LINES[Math.floor(Math.random() * PET_LINES.length)]) + ' ♥'
-      if (happiest) return { text: line + ' ' + nameOf(S.mon) + ' is already as happy as can be.' }
-      S.pettingFills = S.mon
-      const pets = Number((await $.store.get('pets')) ?? 0) + 1
-      await $.store.set('pets', pets)
-      return { text: line }
-    } else if (asked === 'feed') {
-      if (isHere(S.wild)) return { text: 'Not now, a ' + wildName() + ' is right there!' }
-      // A full mon, every food icon filled, still eats the berry, but it fills no meter
-      // and doesn't count as a feed
-      const full = isFull()
-      const berry = feed()
-      const article = /^[aeiou]/.test(berry.name) ? 'an ' : 'a '
-      const tossed = 'You toss ' + nameOf(S.mon) + ' ' + article + berry.name + ' ' + berry.emoji
-      if (full) return { text: tossed + '. ' + nameOf(S.mon) + ' is already full, so it just nibbles it.' }
-      // The meters fill once it has eaten the berry
-      S.food.fills = S.mon
-      const feeds = Number((await $.store.get('feeds')) ?? 0) + 1
-      await $.store.set('feeds', feeds)
-      return { text: tossed }
-    } else if (asked === 'sleep') {
-      const name = nameOf(S.mon)
-      if (isTuckedIn()) {
-        await setAsleep($, false)
-        return { text: name + ' wakes up.' }
-      }
-      if (S.turnRunning) return { text: name + " can't sleep while Claude is working." }
-      await setAsleep($, true)
-      return { text: name + ' curls up and falls asleep. Its meters drain slower until Claude starts working.' }
-    } else if (asked === 'attack' || asked.startsWith('attack ')) {
-      return attackCommand(asked.slice('attack'.length).trim())
-    } else if (asked === 'catch') {
-      return catchCommand()
-    } else if (asked === 'run') {
-      if (!S.wild || S.wild.phase === 'fleeing') return { text: 'There\'s no wild Pokémon here.' }
-      fleeWild($, true)
-      return { text: 'Got away safely!' }
-    } else if ((asked === 'wild' || asked.startsWith('wild ')) && (reply = await wildCommand($, asked.slice('wild'.length)))) {
-      return reply
-    } else if (asked === 'kill' && (reply = await killCommand($))) {
-      return reply
-    } else if (asked === 'moves' || asked.startsWith('moves ')) {
-      const whose = asked.slice('moves'.length).trim() || S.mon
-      if (!MONS.includes(whose)) return { text: 'Unknown mon "' + whose + '". See /pokemon list for every mon.' }
-      return movesText(whose)
-    } else if (asked === 'needs') {
-      S.needsOn = !S.needsOn
-      await $.store.set('needs', S.needsOn)
-      $.ui.invalidate('ui.render')
-      const name = nameOf(S.mon)
-      const still = isFainted(S.mon) ? ' It\'s still fainted, so /pokemon revive takes it to a Pokémon Center.' : ''
-      return { text: (S.needsOn ? 'Needs are on. Keep ' + name + ' fed and happy.' : 'Needs are off. ' + name + ' won\'t get hungry or lonely.') + still }
-    } else if (asked === 'emoji') {
-      S.emojiOn = !S.emojiOn
-      await $.store.set('emoji', S.emojiOn)
-      $.ui.invalidate('ui.render')
-      const icons = iconsFor('food').trimEnd() + ' ' + iconsFor('happiness').trimEnd()
-      return { text: (S.emojiOn ? 'The meters show emoji: ' : 'The meters show text icons: ') + icons }
-    } else if (asked === 'size' || asked.startsWith('size ')) {
-      const wanted = asked.slice('size'.length).trim()
-      const sizes = Object.keys(SIZES).join(', ')
-      if (!wanted) return { text: 'The band is ' + S.size + '. Sizes: ' + sizes + '.' }
-      if (!Object.hasOwn(SIZES, wanted)) return { text: 'Unknown size "' + wanted + '". Try one of: ' + sizes + '.' }
-      S.size = wanted
-      await $.store.set('size', S.size)
-      $.ui.invalidate('ui.render')
-      return { text: 'The band is ' + S.size + '.' }
-    } else if (asked === 'images' || asked.startsWith('images ')) {
-      const wanted = asked.slice('images'.length).trim()
-      const modes = Object.keys(IMAGE_MODES).join(', ')
-      const drawn = () => (S.noImages ? 'half blocks' : 'images')
-      if (!wanted) return { text: 'Images are ' + S.imageMode + ', so the band draws ' + drawn() + '. Modes: ' + modes + '.' }
-      if (!Object.hasOwn(IMAGE_MODES, wanted)) return { text: 'Unknown mode "' + wanted + '". Try one of: ' + modes + '.' }
-      S.imageMode = wanted
-      await $.store.set('images', S.imageMode)
-      applyImageMode()
-      $.ui.invalidate('ui.render')
-      return { text: 'Images are ' + S.imageMode + ', so the band draws ' + drawn() + '.' }
-    } else if (asked === 'pane') {
-      return paneCommand($, e.presentation)
-    } else if (asked === 'sync') {
-      S.syncOn = !S.syncOn
-      await $.store.set('sync', S.syncOn)
-      const name = nameOf(S.mon)
-      if (!S.syncOn) return { text: 'Sync is off. Each session keeps the mon picked in it.' }
-      // This session's mon becomes the pick the others follow
-      await saveMon($)
-      return { text: 'Sync is on. Every open session shows ' + name + ', and follows the next mon you pick.' }
-    } else if (asked === 'autoevolve') {
-      S.autoEvolve = !S.autoEvolve
-      await $.store.set('autoEvolve', S.autoEvolve)
-      const name = nameOf(S.mon)
-      if (!S.autoEvolve) {
-        S.evolveDue = null
-        return { text: name + ' waits for /pokemon evolve when it reaches its evolution level.' }
-      }
-      // Already at its level, it evolves once idle
-      S.evolveDue = readyToEvolve()
-      return { text: name + ' evolves on its own once idle at its evolution level.' }
-    } else if (asked === 'revive' || asked.startsWith('revive ')) {
-      return reviveCommand($, asked.slice('revive'.length).trim())
-    } else if (asked === 'nuzlocke') {
-      return nuzlockeCommand($)
-    } else if (asked === 'trainer') {
-      return trainerCommand($)
-    } else if (asked === 'evolve' || asked.startsWith('evolve ')) {
-      return evolveCommand($, asked.slice('evolve'.length).trim())
-    } else if (asked === 'stop') {
-      return stopEvolution($)
-    } else if (asked === 'stats') {
-      const pets = Number((await $.store.get('pets')) ?? 0)
-      const feeds = Number((await $.store.get('feeds')) ?? 0)
-      return { text: statsText(pets, feeds) }
-    } else if (asked === 'box') {
-      // List every record as last saved by any session
-      const saved = await $.store.get('stats')
-      if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
-      const healed = Object.keys(S.stats).filter((name) => name !== S.mon && settleHeal(name))
-      if (healed.length > 0) await saveRecords($, healed)
-      const dex = await $.store.get('dex')
-      return { text: boxText(dex && typeof dex === 'object' ? dex : {}) }
-    } else if (asked === 'party') {
-      return { text: await partyText($) }
-    } else if (asked.startsWith('party assign') || asked.startsWith('party unassign')) {
-      const [, verb, ...rest] = asked.split(/\s+/)
-      return assignCommand($, verb, rest)
-    } else if (asked.startsWith('party add') || asked.startsWith('party remove')) {
-      const [, verb, ...rest] = asked.split(/\s+/)
-      return partyCommand($, verb, rest.join(' '))
-    } else if (asked === 'dex' || asked.startsWith('dex ')) {
-      const saved = await $.store.get('stats')
-      if (saved && typeof saved === 'object') await freshen($, Object.keys(saved))
-      const dex = await $.store.get('dex')
-      return { text: dexText(dex && typeof dex === 'object' ? dex : {}, asked.slice('dex'.length).trim(), await $.store.get('graveyard')) }
-    } else if (asked === 'release' || asked.startsWith('release ')) {
-      const wanted = asked.slice('release'.length).trim()
-      if (MONS.includes(wanted)) await freshen($, [wanted])
-      // The shown mon starts over, so a foe it faced leaves
-      if (wanted === S.mon && S.stats[wanted] && S.wild) fleeWild($)
-      const result = releaseCommand(wanted)
-      if (MONS.includes(wanted)) await saveRecords($, [wanted])
-      $.ui.invalidate('ui.render')
-      return result
-    } else if (asked === 'nickname' || asked.startsWith('nickname ')) {
-      await freshen($, [S.mon])
-      const result = nicknameCommand(e.args.trim().slice('nickname'.length))
-      await saveRecords($, [S.mon])
-      $.ui.invalidate('ui.render')
-      return result
-    } else if (asked === 'list') {
-      return { text: MONS.length + ' mons: ' + MONS.join(', ') }
-    } else if (asked === 'help') {
-      return { text: helpText((await $.store.get('debug')) === true) }
-    } else if (asked) {
-      return { text: 'Unknown option "' + asked + '". Try one of: ' + OPTIONS.join(', ') + '. See /pokemon list for every mon.' }
-    } else {
-      if (isGone(S.mon)) return { text: goneLine(S.mon) + ' /pokemon <mon> picks another. Options: ' + OPTIONS.join(', ') + '.' }
-      const condition = conditionOf(S.mon)
-      const mode = (condition ? ', ' + condition : '') + (isTuckedIn() ? ', asleep' : '') + (S.wander ? ', wandering' : '') + (isHere(S.wild) ? ', a ' + wildName() + ' is here' : '')
-      const levels = 'food ' + Math.round(statNow(S.mon, 'food')) + '%, happiness ' + Math.round(statNow(S.mon, 'happiness')) + '%'
-      const shown = nameOf(S.mon) + ' Lv. ' + levelOf(S.mon)
-      return { text: 'Showing ' + S.variant + ' ' + shown + mode + ' (' + (S.needsOn ? levels : 'needs off') + '). Options: ' + OPTIONS.join(', ') + '. /pokemon help says what each does.' }
-    }
-    $.ui.invalidate('ui.render')
-    return { text: 'Now showing ' + S.variant + ' ' + nameOf(S.mon) + '.' }
   })
 
   // Typing or sending a prompt wakes the mon up and answers its "!"
@@ -1684,7 +1686,8 @@ export function register(on) {
   // your own files, a plugin, or an MCP server counts as a skill; Claude Code's built-in
   // commands, and /pokemon itself, don't. The disc shows for a moment.
   on('command.run', async ($, e, next) => {
-    if (e.command !== 'pokemon') await markSkillCommand($, e.command).catch((err) => logOnce($, err))
+    if (e.command === 'pokemon') return runPokemon($, e)
+    await markSkillCommand($, e.command).catch((err) => logOnce($, err))
     return next(e)
   })
 
