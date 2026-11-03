@@ -40,7 +40,7 @@ Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squir
 - 📈 **It levels up as you ship.** Every answered turn earns XP, and mons evolve at their levels from the games.
 - 🫐 **It needs you too.** Feed it and pet it, or it gets hungry and lonely. Leave it long enough and it faints, and then it runs away.
 - 🎒 **You start with one starter.** Bulbasaur, Charmander, Squirtle, or Pikachu. Every other mon has to be caught.
-- 🌿 **Wild Pokémon show up, and they fight back.** Your work wears them down while they strike your mon with their own moves. Once one is weak, `/pokemon catch` fills your Pokédex, but knock it out and it's gone.
+- 🌿 **Wild Pokémon show up, and they fight back.** Your work wears them down while they strike your mon with their own moves. Once one is weak, `/pokemon catch` fills your Pokédex. Knock it out instead, and it drops an item for your bag.
 - ⚡ **It fights.** 135 moves from gen 1, each with its own pixel animation.
 - 🎨 **All 151 gen 1 Pokémon**, each in default and shiny, and gen 2 to 5 with `/pokemon new`.
 
@@ -83,7 +83,9 @@ Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squir
 | `/pokemon feed` | Toss it a berry |
 | `/pokemon revive` | Take a fainted mon to a Pokémon Center |
 | `/pokemon attack [move]` | Use a random move, or a named one like `thunderbolt` |
-| `/pokemon evolve` | Evolve with a stone or a trade |
+| `/pokemon evolve` | Evolve with a stone or a trade, using the item from your bag |
+| `/pokemon bag` | The items wild mons dropped |
+| `/pokemon use <item> [mon]` | Use an item, like `/pokemon use rare candy` |
 | `/pokemon stats` | Level, XP, evolution, and meters |
 | `/pokemon box` | Every mon you've raised |
 | `/pokemon party` | The mons that come out for subagents, and who each works for |
@@ -111,9 +113,11 @@ Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squir
 | `/pokemon attack <move>` | Use a named move, ignoring case, spaces, and dashes |
 | `/pokemon moves`, `/pokemon attack list` | List the active mon's moves |
 | `/pokemon moves <mon>` | List another mon's moves |
-| `/pokemon evolve` | Evolve with a stone or a trade. Also evolves a mon at its level with autoevolve off, and restarts an evolution you cancelled |
+| `/pokemon evolve` | Evolve with a stone or a trade, which takes that stone or a Link Cable from your bag. Also evolves a mon at its level with autoevolve off, and restarts an evolution you cancelled |
 | `/pokemon evolve <mon>` | Pick what Eevee becomes, like `/pokemon evolve jolteon` |
-| `/pokemon stop` | Cancel an evolution |
+| `/pokemon stop` | Cancel an evolution. A stone or cable it needed stays in your bag |
+| `/pokemon bag` | List the items in your bag and how many of each, saved across sessions |
+| `/pokemon use <item> [mon]` | Use an item, named loosely, like `thunder stone`, `thunderstone`, or `candy`. A stone or Link Cable on the mon on show is the same as `/pokemon evolve`. Rare Candy raises the mon on show, or a box mon named, one level |
 | `/pokemon revive`, `/pokemon revive <mon>` | Take a fainted mon to a Pokémon Center. Nurse Joy heals it in 5 minutes, and it stands up at 50% food and 30% happiness |
 | `/pokemon nuzlocke` | Toggle nuzlocke (off by default, saved across sessions). On, a mon that faints is gone for good |
 | `/pokemon trainer` | Toggle trainer mode (on by default, saved across sessions). On, `/pokemon <mon>` shows only mons in your box, so the rest have to be caught in the wild. The mons already in your box stay. An empty box, or one whose mons are all gone, picks one starter: Bulbasaur, Charmander, Squirtle, or Pikachu. Mons fetched with `/pokemon new` stay free to show. Off, `/pokemon <mon>` shows any mon |
@@ -163,7 +167,8 @@ Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squir
 | Claude needs you | Stops, faces you, and shows a red "!" until you answer. If you don't reply within a minute of a turn ending, it shows the "!" for 2 minutes | AskUserQuestion, ExitPlanMode, `turn.complete`, `classic.PermissionRequest`, `classic.Notification` |
 | A subagent runs | Drops a Poké Ball that wobbles while the subagent works and pops when it ends, or when the agent list stops reporting it at work, as for a teammate in its own pane. Past six, the last slot shows `+n`. With other mons in your box, the ball opens and one steps out to work beside yours, showing that subagent's thinking and tools in its own bubble, flinching when its calls fail, and hopping when it finishes before it goes back in | `agent.spawn`, `turn.step`, `tool.call` (that agent), `turn.complete`, `$.agent.list()` |
 | A turn ends | Hops twice, unless you interrupted it | `turn.complete` (main agent only) |
-| A turn ends with an answer | Earns XP, and may level up or evolve | `turn.complete` (main agent only) |
+| A turn ends with an answer | Earns XP, and may level up or evolve. A long one now and then turns up a Rare Candy | `turn.complete` (main agent only) |
+| A subagent's turn ends with an answer | Its party mon earns half the XP a turn would earn it | `turn.complete` (that agent) |
 | A wild mon is due | Walks home, and the strip widens as the foe walks in from the left | `tool.call` (main agent only), the shared `wildAt` store key |
 | Claude works during a battle | Banks a move per tool call and answered turn, and fires one at the foe every 6 to 8 s | `tool.call` (any agent), `turn.complete` |
 | You're idle | Strolls to random spots, resting 3 to 8 s between walks. With wandering off, it walks home and bobs | |
@@ -221,6 +226,13 @@ a sweat drop shows when one of that subagent's calls fails, it hops along whenev
 mon hops, jumps when a wild mon walks in behind it, and hops when the subagent finishes.
 Then it turns red, goes back into its ball in a flash, and the ball pops. `/pokemon party`
 lists the party and the subagent each one works for.
+
+A party mon earns XP from its own subagent's work. When that subagent's turn ends with an
+answer, the mon gets half of what the same turn would earn it on show, `10 + 2 × level`,
+doubled for turns of two minutes or more and scaled by its own meters, and levels up in
+its box record. A mon off show doesn't evolve, so one that reaches its evolution level
+is marked ready to evolve in `/pokemon party`, and evolves once you show it, or waits for
+`/pokemon evolve` with autoevolve off.
 
 Party mons stand as tall as your mon and never shrink to fit. While one is out, the strip
 grows to the whole band, the same way it grows for a wild mon, and the party gets the
@@ -287,8 +299,22 @@ and the next level-up tries again. Level, XP, and meters carry over. With
 `/pokemon autoevolve` off, reaching the level only makes the mon ready, and it evolves when
 you run `/pokemon evolve`.
 
-The 19 mons that evolve with a stone or a trade, like Pikachu, Eevee, and Kadabra, use
-`/pokemon evolve`. Eevee needs a pick, like `/pokemon evolve jolteon`.
+The 19 mons that evolve with a stone or a trade, like Pikachu, Eevee, and Kadabra, need an
+item from your bag. A stone mon needs its stone, like a Thunder Stone for Pikachu, and
+Kadabra, Machoke, Graveler, and Haunter need a Link Cable. `/pokemon evolve`, or
+`/pokemon use thunder stone`, starts the evolution, and the item leaves the bag once it's
+done. Eevee needs a pick, like `/pokemon evolve jolteon`, which takes a Thunder Stone.
+Without the item, it says which one is missing.
+
+Items come from wild mons you knock out, and `/pokemon bag` lists them. The first time
+the bag is made, every stone or trade mon already in your box gets one of the item it
+needs, so none is left stranded, and Eevee gets one of each of its three stones.
+
+Rare Candy raises a mon one level, to the start of the next, with `/pokemon use rare
+candy` for the mon on show or `/pokemon use rare candy <mon>` for one in your box. A
+level it reaches evolves the mon on show by the usual rules, and a box mon once it's
+shown. It can't be used on a fainted mon, one that ran away, or one lost in a nuzlocke,
+and it never revives anything.
 
 </details>
 
@@ -345,7 +371,10 @@ most, and the mon spends one every 6 to 8 s on a random move aimed at the foe. E
 shrinks the HP bar over the foe's head. A common foe takes about 3 hits, a legendary about 10.
 Once another hit could knock the foe out, it's weak, and the mon holds off. Only
 `/pokemon attack` lands the last hit. A foe at 0 HP faints and blinks away, and can't be
-caught. Every 10 to 15 s the foe plays one of its own moves at the mon, which flinches and puts
+caught, but an item pops out of it and goes into your bag. It's usually a stone, most
+often the one for the foe's type, like a Fire Stone from a Vulpix or a Thunder Stone from
+a Voltorb. About 1 knockout in 13 drops a Link Cable instead, and 1 in 15 a Rare Candy.
+Main turns of two minutes or more turn up a Rare Candy 1 time in 10 too. Every 10 to 15 s the foe plays one of its own moves at the mon, which flinches and puts
 its next move off. A strike never touches the mon's meters.
 
 `/pokemon catch` throws a Poké Ball. The odds rise as HP falls, so a weak foe is the best
@@ -496,6 +525,7 @@ claude --plugin-dir .                            # live-reloading session
 | `hooks/names.js` | Display names, like `Nidoran♀` and `Mr. Mime` |
 | `hooks/levels.js` | The XP curve, and the XP a turn earns |
 | `hooks/evolutions.js` | Gen 1 evolutions, and each mon's start level |
+| `hooks/items.js` | The item bag, what a knocked out foe drops, and the drop popping out of it |
 | `hooks/party.js` | The Poké Balls of running subagents |
 | `hooks/crew.js` | The party mons out of those balls: lanes, strolling, coming out, and going back in |
 | `hooks/dex.js` | The Pokédex, and how rare each mon is in the wild |

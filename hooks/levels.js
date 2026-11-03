@@ -5,7 +5,7 @@ export const MAX_LEVEL = 100
 
 const TURN_XP = 10
 const TURN_XP_PER_LEVEL = 2
-const LONG_TURN_MS = 2 * 60 * 1000
+export const LONG_TURN_MS = 2 * 60 * 1000
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
 
