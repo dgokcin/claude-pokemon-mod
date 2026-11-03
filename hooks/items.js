@@ -20,10 +20,10 @@ export const RARE_CANDY = 'rarecandy'
 export const LINK_CABLE = 'linkcable'
 
 // A knockout drops Rare Candy one time in 15, a Link Cable one in 12 of the rest, and
-// otherwise a stone: the foe's own type's stone TYPED_ODDS of the time, else any stone
+// otherwise a stone. A foe with a stone type drops only its own stone, and any other foe
+// drops any stone.
 const CANDY_ODDS = 1 / 15
 const CABLE_ODDS = 1 / 12
-const TYPED_ODDS = 0.6
 // A main turn of two minutes or more turns up Rare Candy one time in 10
 export const LONG_TURN_CANDY_ODDS = 1 / 10
 const DROP_SALT = 0x17e5
@@ -49,7 +49,7 @@ export function dropOf(key, seed) {
   if (rnd(seed, 0, DROP_SALT) < CANDY_ODDS) return RARE_CANDY
   if (rnd(seed, 1, DROP_SALT) < CABLE_ODDS) return LINK_CABLE
   const typed = stoneOfType(key)
-  if (typed && rnd(seed, 2, DROP_SALT) < TYPED_ODDS) return typed
+  if (typed) return typed
   return STONES[Math.floor(rnd(seed, 3, DROP_SALT) * STONES.length)]
 }
 
