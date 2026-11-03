@@ -4297,7 +4297,7 @@ test('a session that left the scene in the pane opens it again on start', async 
   expect(opened.map((e) => [e.id, e.columns])).toEqual([['pokemon', 90]])
 })
 
-test('a knockout drops a stone, often its own type\'s, now and then a Link Cable or Rare Candy, the same for the same foe', () => {
+test('a knockout drops a stone, only its own type\'s when it has one, now and then a Link Cable or Rare Candy, the same for the same foe', () => {
   const count = (key: string) => {
     const drops: Record<string, number> = {}
     for (let seed = 0; seed < 6000; seed++) drops[dropOf(key, seed)] = (drops[dropOf(key, seed)] ?? 0) + 1
@@ -4306,7 +4306,8 @@ test('a knockout drops a stone, often its own type\'s, now and then a Link Cable
   const vulpix = count('vulpix')
   const pidgey = count('pidgey')
   expect(dropOf('vulpix', 42)).toBe(dropOf('vulpix', 42))
-  expect(vulpix.firestone / 6000).toBeGreaterThan(0.5)
+  expect(Object.keys(vulpix).sort()).toEqual(['firestone', 'linkcable', 'rarecandy'])
+  expect(Object.keys(count('ponyta')).sort()).toEqual(['firestone', 'linkcable', 'rarecandy'])
   expect(pidgey.firestone / 6000).toBeLessThan(0.25)
   expect(stoneOfType('pikachu')).toBe('thunderstone')
   expect(stoneOfType('pidgey')).toBeNull()
