@@ -3612,15 +3612,97 @@ test('/pokemon attack knocks out a weak foe, which can\'t be caught and blinks a
   expect(toasts.some((text) => text.startsWith('Gotcha!'))).toBe(false)
 })
 
-test('the foe strikes back now and then with its own moves, leaving the mon\'s meters alone', async ($, on) => {
+test('the foe strikes back now and then with its own moves, and a landed strike takes happiness', async ($, on) => {
   const saved: Record<string, any> = {}
   const { clock, toasts } = await inBattle($, on, saved)
-  const before = structuredClone(saved.stats)
-  await clock.advance(16000)
+  await clock.advance(20000)
   const strikes = toasts.filter((text) => /^Wild Pidgey used (Gust|Sand Attack|Quick Attack)!$/.test(text))
   expect(strikes.length).toBeGreaterThanOrEqual(1)
   expect(movesIn(toasts)).toEqual([])
-  expect(saved.stats).toEqual(before)
+  expect(saved.stats.abra.happiness.value).toBeLessThan(80)
+})
+
+// Abra's happiness as saved, 80 before anything saves it
+const happinessIn = (saved: Record<string, any>): number => saved.stats?.abra?.happiness?.value ?? 80
+
+// Run the clock until count more strikes take happiness, and return what each took, to
+// the nearest whole point since the meter drains a little between them
+async function bitesTaken(clock, saved: Record<string, any>, count: number): Promise<number[]> {
+  const bites: number[] = []
+  let last = happinessIn(saved)
+  for (let t = 0; t < 120000 && bites.length < count; t += 250) {
+    await clock.advance(250)
+    const now = happinessIn(saved)
+    if (now !== last) bites.push(Math.round(last - now))
+    last = now
+  }
+  return bites
+}
+
+const HEARTBREAK = 0xff4f8b
+
+test('each strike left alone takes more, from a quarter heart to a half to a whole one, with a broken heart by the mon', async ($, on) => {
+  const saved: Record<string, any> = {}
+  const { clock, blits } = await inBattle($, on, saved)
+  expect(await bitesTaken(clock, saved, 4)).toEqual([5, 10, 20, 20])
+  expect(blits.some((cells) => paints(cells, HEARTBREAK))).toBe(true)
+})
+
+test('catching at, attacking, or running from the foe makes its next strike small again', async ($, on) => {
+  const saved: Record<string, any> = {}
+  const { clock } = await inBattle($, on, saved)
+  expect(await bitesTaken(clock, saved, 2)).toEqual([5, 10])
+  expect((await $.command.run({ command: 'pokemon', args: 'catch' })).text).toBe('You threw a Poké Ball!')
+  expect(await bitesTaken(clock, saved, 1)).toEqual([5])
+})
+
+test('a strike never takes happiness below one heart, so it never starts the faint clock', async ($, on) => {
+  const saved: Record<string, any> = { stats: { abra: { food: { value: 0, at: 0 }, happiness: { value: 30, at: 0 } } } }
+  const { clock, toasts } = await inBattle($, on, saved)
+  await clock.advance(60000)
+  expect(toasts.filter((text) => text.startsWith('Wild Pidgey used ')).length).toBeGreaterThanOrEqual(2)
+  expect(Math.abs(happinessIn(saved) - 20)).toBeLessThan(1e-5)
+  expect(saved.stats.abra.starving).toBeUndefined()
+})
+
+test('a strike takes nothing from a mon at one heart or less', async ($, on) => {
+  const saved: Record<string, any> = { stats: { abra: { happiness: { value: 15, at: 0 } } } }
+  const { clock, toasts, blits } = await inBattle($, on, saved)
+  await clock.advance(40000)
+  expect(toasts.filter((text) => text.startsWith('Wild Pidgey used ')).length).toBeGreaterThanOrEqual(2)
+  expect(happinessIn(saved)).toBe(15)
+  expect(blits.some((cells) => paints(cells, HEARTBREAK))).toBe(false)
+})
+
+test('with needs off, a strike takes nothing', async ($, on) => {
+  const saved: Record<string, any> = { needs: false }
+  const { clock, toasts } = await inBattle($, on, saved)
+  await clock.advance(40000)
+  expect(toasts.filter((text) => text.startsWith('Wild Pidgey used ')).length).toBeGreaterThanOrEqual(2)
+  expect(saved.stats?.abra?.happiness).toBeUndefined()
+})
+
+test('a foe ignored until its turns run out takes a whole heart as it goes', async ($, on) => {
+  on('turn.complete', () => ({ text: '' }))
+  const aborted = { ...ANSWERED, reason: 'aborted', isAborted: true }
+  const saved: Record<string, any> = {}
+  const { clock, toasts } = await inBattle($, on, saved)
+  for (let k = 0; k < 4; k++) await $.turn.complete(aborted)
+  await clock.advance(500)
+  expect(toasts).toContain('Wild Pidgey fled!')
+  expect(Math.abs(happinessIn(saved) - 60)).toBeLessThan(0.5)
+})
+
+test('a foe you faced takes nothing as its turns run out', async ($, on) => {
+  on('turn.complete', () => ({ text: '' }))
+  const aborted = { ...ANSWERED, reason: 'aborted', isAborted: true }
+  const saved: Record<string, any> = {}
+  const { clock, toasts } = await inBattle($, on, saved)
+  await $.command.run({ command: 'pokemon', args: 'attack' })
+  for (let k = 0; k < 4; k++) await $.turn.complete(aborted)
+  await clock.advance(500)
+  expect(toasts).toContain('Wild Pidgey fled!')
+  expect(happinessIn(saved)).toBe(80)
 })
 
 test('a foe left uncaught for four main turns moves on', async ($, on) => {

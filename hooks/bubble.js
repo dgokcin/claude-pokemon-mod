@@ -1,6 +1,6 @@
 import {
   ALERT_ICON, BIG_Z, BUBBLE_ICONS, BUBBLE_TAIL_ROW, bubbleSpan, FULL_BUBBLE, SMALL_STAR, SMALL_TOOL_ICONS, SMALL_Z, stamp, STAR,
-  SWEAT, TOOL_ICONS, TOOL_KINDS,
+  HEARTBREAK, HEARTBREAK_COLOR, SWEAT, TOOL_ICONS, TOOL_KINDS,
 } from './art.js'
 import { DRIP_TICKS, TICK_MS } from './constants.js'
 import { stripColumns } from './layout.js'
@@ -9,7 +9,8 @@ import { S } from './state.js'
 import { isAsleep, isDown, isPetted, markActive } from './status.js'
 
 // What shows by the mon's head: the thought bubble and its icon, the "!" that calls you
-// over, the Zs while it sleeps, and a sweat drop when a tool call fails
+// over, the Zs while it sleeps, a sweat drop when a tool call fails, and a broken heart
+// when a wild mon's strike takes happiness
 
 const ZZZ_EVERY_MS = 1100
 const ZZZ_LIFE_MS = 2200
@@ -140,6 +141,23 @@ export function sweatStamps(head, y, side, { since = S.tick - S.flinchStart, roo
   const sx = bubbleOnLeft(head, side, room) ? Math.min(S.columns - width, head[1] - 1) : Math.max(0, head[0] - 2)
   const drip = Math.floor(since / DRIP_TICKS)
   return [stamp(sx, y + drip, SWEAT, { d: S.ink.sweat, h: S.ink.sweatShine })]
+}
+
+const HEARTBREAK_TICKS = 24
+const HEARTBREAK_RISE_TICKS = 4
+const HEARTBREAK_SPLIT_TICKS = 6
+
+export const isHeartbroken = () => S.heartbreakAt !== null && S.tick - S.heartbreakAt < HEARTBREAK_TICKS
+
+// The broken heart rising by the head on the bubble's side, its halves parting a pixel each
+export function heartbreakStamps(head, y, side) {
+  const since = S.tick - S.heartbreakAt
+  const width = HEARTBREAK[0][0].length
+  const sx = bubbleOnLeft(head, side) ? Math.max(0, head[0] - width - 1) : Math.min(S.columns - width, head[1] + 2)
+  const sy = y - Math.floor(since / HEARTBREAK_RISE_TICKS)
+  const part = since >= HEARTBREAK_SPLIT_TICKS ? 1 : 0
+  const colors = { p: HEARTBREAK_COLOR }
+  return [stamp(sx - part, sy, HEARTBREAK[0], colors), stamp(sx + part, sy + part, HEARTBREAK[1], colors)]
 }
 
 // What the idle mon is asking for, if anything. With both low it takes turns.

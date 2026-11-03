@@ -50,6 +50,8 @@ export const S = {
   restUntil: 0,
   petUntil: 0,
   hearts: [],
+  // The tick a wild mon's strike last took happiness, for the broken heart over the head
+  heartbreakAt: null,
   food: null,
   // Meter gains a berry or a pet has earned, paid once its animation ends
   owed: [],

@@ -40,7 +40,7 @@ Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squir
 - 📈 **It levels up as you ship.** Every answered turn earns XP, and mons evolve at their levels from the games.
 - 🫐 **It needs you too.** Feed it and pet it, or it gets hungry and lonely. Leave it long enough and it faints, and then it runs away.
 - 🎒 **You start with one starter.** Bulbasaur, Charmander, Squirtle, or Pikachu. Every other mon has to be caught.
-- 🌿 **Wild Pokémon show up, and they fight back.** Your work wears them down while they strike your mon with their own moves. Once one is weak, `/pokemon catch` fills your Pokédex. Knock it out instead, and it drops an item for your bag.
+- 🌿 **Wild Pokémon show up, and they fight back.** Your work wears them down while they strike your mon with their own moves, and each strike costs it some happiness, more while you leave the foe alone. Once one is weak, `/pokemon catch` fills your Pokédex. Knock it out instead, and it drops an item for your bag.
 - ⚡ **It fights.** 135 moves from gen 1, each with its own pixel animation.
 - 🎨 **All 151 gen 1 Pokémon**, each in default and shiny, and gen 2 to 5 with `/pokemon new`.
 
@@ -171,6 +171,7 @@ Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squir
 | A subagent's turn ends with an answer | Its party mon earns half the XP a turn would earn it | `turn.complete` (that agent) |
 | A wild mon is due | Walks home, and the strip widens as the foe walks in from the left | `tool.call` (main agent only), the shared `wildAt` store key |
 | Claude works during a battle | Banks a move per tool call and answered turn, and fires one at the foe every 6 to 8 s | `tool.call` (any agent), `turn.complete` |
+| A wild mon's strike lands | Flinches and loses happiness, with a broken heart rising by its head | |
 | You're idle | Strolls to random spots, resting 3 to 8 s between walks. With wandering off, it walks home and bobs | |
 | 5 minutes with no activity | Falls asleep with pixel Zs | `prompt.edit`, `prompt.submit`, turns |
 | Food or happiness under 30% | Thinks of a berry (hungry) or a heart (lonely). Walks slower when hungry | |
@@ -205,6 +206,9 @@ sessions showing the same one share them. Asleep with `/pokemon sleep`, food dra
 half speed and happiness at a quarter. A new mon starts at 80%. The meters scale the XP a
 turn earns, from half when both are empty to one and a half when both are full.
 `/pokemon needs` turns them off, and XP then ignores them.
+
+A wild mon's strikes take happiness too, from a quarter heart to a whole one, but never
+below one heart, as told under Wild encounters.
 
 </details>
 
@@ -374,8 +378,18 @@ Once another hit could knock the foe out, it's weak, and the mon holds off. Only
 caught, but an item pops out of it and goes into your bag. It's usually a stone, most
 often the one for the foe's type, like a Fire Stone from a Vulpix or a Thunder Stone from
 a Voltorb. About 1 knockout in 13 drops a Link Cable instead, and 1 in 15 a Rare Candy.
-Main turns of two minutes or more turn up a Rare Candy 1 time in 10 too. Every 10 to 15 s the foe plays one of its own moves at the mon, which flinches and puts
-its next move off. A strike never touches the mon's meters.
+Main turns of two minutes or more turn up a Rare Candy 1 time in 10 too.
+Every 10 to 15 s the foe plays one of its own moves at the mon, which flinches and puts
+its next move off.
+
+Each strike that lands takes happiness, and a broken heart rises by the mon's head. The
+first takes a quarter heart. Each strike after it that lands before you face the foe takes
+more, a half heart and then a whole one, and a whole one each time after that. Facing it
+means `/pokemon catch`, `/pokemon attack`, or `/pokemon run`, or the Catch and Attack
+buttons on the desktop band, and the next strike is back to a quarter heart. A foe you
+never faced takes one more whole heart as it leaves, after 4 minutes or 4 turns. A strike
+never takes happiness below one heart, and takes nothing from a mon at one heart or less,
+so a wild mon never makes yours faint. With `/pokemon needs` off, strikes take nothing.
 
 `/pokemon catch` throws a Poké Ball. The odds rise as HP falls, so a weak foe is the best
 catch. At full HP the ball always breaks free. The ball rocks once per shake before it
