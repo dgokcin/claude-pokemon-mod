@@ -1641,6 +1641,7 @@ export function register(on) {
       version: await $.env.get('TERM_PROGRAM_VERSION').catch(unread),
       term: await $.env.get('TERM').catch(unread),
       kittyWindow: await $.env.get('KITTY_WINDOW_ID').catch(unread),
+      bundle: await $.env.get('__CFBundleIdentifier').catch(unread),
     })
     applyImageMode()
     await beat($).catch((err) => logOnce($, err))

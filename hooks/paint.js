@@ -19,12 +19,18 @@ export const drawsImage = () => S.bandSurface === 'terminal' && isSmall() && !S.
 // blits whether the terminal draws them, even while the band is large
 export const drawsHearts = () => S.bandSurface === 'terminal' && !S.emojiOn && S.needsOn && !S.noImages && S.imageRetryAt === null
 
+const HERDR_HOSTS = ['com.googlecode.iterm2', 'com.mitchellh.ghostty', 'net.kovidgoyal.kitty']
+
 // Only kitty, Ghostty, and newer iTerm2 builds draw kitty's image placeholders. Other
 // terminals print them as boxes, as xterm.js does in VS Code and Obsidian, even when
 // CLAUDE_CODE_FORCE_TERMINAL_IMAGES has the host send them and report them drawn. iTerm2
 // before 3.7.5 and the 2026-09-18 nightly freezes a swapped Image's source.
-export function drawsImages({ program, version, term, kittyWindow }) {
+export function drawsImages({ program, version, term, kittyWindow, bundle }) {
   if (kittyWindow || term === 'xterm-kitty' || term === 'xterm-ghostty' || program === 'ghostty') return true
+
+  // herdr names itself in TERM_PROGRAM and draws its panes' images through the app around
+  // it, which macOS still names here
+  if (program === 'herdr') return HERDR_HOSTS.includes(bundle)
   if (program !== 'iTerm.app') return false
   const [major, minor, patch = ''] = String(version ?? '').split('.')
   if (Number(major) > 3 || (Number(major) === 3 && Number(minor) > 7)) return true
