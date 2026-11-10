@@ -428,7 +428,10 @@ kitty and Ghostty draw the small band as a real image, so every pixel stays. iTe
 and older can't, because of an iTerm2 bug that freezes the image on its first frame.
 iTerm2 3.7.5 and newer, and nightlies from 2026-09-18 on, draw the image once you set
 `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1`, for example in the `env` block of
-`~/.claude/settings.json`. Every other terminal gets half blocks, because many of them,
+`~/.claude/settings.json`. herdr draws its panes' images through the app around it, so
+on macOS the band is an image in herdr inside iTerm2, Ghostty, or kitty, with the same
+setting. Under herdr, iTerm2 needs 3.7.7 or newer, because older builds draw the image's
+rows in reverse order. Every other terminal gets half blocks, because many of them,
 like the xterm.js ones in VS Code, Cursor, and Obsidian, print the image as rows of boxes.
 That flag makes Claude Code send images to every terminal and report them drawn, so the
 mod can't tell, and it goes by the terminal's name instead. `/pokemon images on` or `off`

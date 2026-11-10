@@ -2079,6 +2079,11 @@ test('only kitty, Ghostty, and iTerm2 builds whose Image swaps work draw the sma
     [{ TERM_PROGRAM: 'Apple_Terminal', TERM_PROGRAM_VERSION: '466' }, false],
     [{ TERM_PROGRAM: 'WezTerm' }, false],
     [{ TERM_PROGRAM: 'tmux' }, false],
+    // herdr draws images only through an app that draws them itself
+    [{ TERM_PROGRAM: 'herdr', TERM_PROGRAM_VERSION: '0.9.3', __CFBundleIdentifier: 'com.googlecode.iterm2' }, true],
+    [{ TERM_PROGRAM: 'herdr', __CFBundleIdentifier: 'com.mitchellh.ghostty' }, true],
+    [{ TERM_PROGRAM: 'herdr', __CFBundleIdentifier: 'com.apple.Terminal' }, false],
+    [{ TERM_PROGRAM: 'herdr' }, false],
     // Obsidian's terminal, xterm.js like VS Code's, sets no TERM_PROGRAM of its own
     [{ TERM: 'xterm-256color' }, false],
   ]
