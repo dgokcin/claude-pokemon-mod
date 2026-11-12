@@ -2452,7 +2452,7 @@ test('/pokemon list names every mon, and the hint and status stay short', async 
   on('env.get', () => ({ value: undefined }))
   on('store.get', () => ({ value: undefined }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  expect(hint).toBe('[<mon>|default|shiny|new|list|pet|feed|sleep|revive|nickname|attack|moves|catch|run|evolve|stop|bag|use|stats|box|party|dex|release|wander|needs|emoji|size|images|pane|sync|autoevolve|nuzlocke|trainer|help]')
+  expect(hint).toBe('[<mon>|default|shiny|new|list|pet|feed|sleep|revive|nickname|attack|moves|catch|roar|evolve|stop|bag|use|stats|box|party|dex|release|wander|needs|emoji|size|images|pane|sync|autoevolve|nuzlocke|trainer|help]')
 
   const list = await $.command.run({ command: 'pokemon', args: 'list' })
   expect(list.text).toMatch(/^\d+ mons: abra, /)
@@ -3384,19 +3384,56 @@ test('a wild mon flees after four minutes without a fight, and the strip shrinks
   expect(status.text).not.toContain('wild')
 })
 
-test('/pokemon run sends the wild mon off, and the strip shrinks back', async ($, on) => {
+test('/pokemon roar scares the wild mon off once the roar lands, and the strip shrinks back', async ($, on) => {
   const toasts = toastsOf(on)
   const { clock, widths } = await startedWith($, on, { wander: false, debug: true }, 0)
   await $.ui.mount({ ...BAND, surface: 'terminal' })
   const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
-  expect(await run('run')).toBe('There\'s no wild Pokémon here.')
+  // The foe's own strikes aside
+  const heard = () => toasts.filter((text) => !/^Wild Pidgeot used .+!$/.test(text))
+  expect(await run('roar')).toBe('There\'s no wild Pokémon here.')
   await run('wild pidgeot')
   await clock.advance(10000)
-  expect(await run('run')).toBe('Got away safely!')
-  expect(await run('run')).toBe('There\'s no wild Pokémon here.')
+  expect(await run('roar')).toBe('Abra used Roar!')
+  expect(await run('roar')).toBe('Wait for the move to end.')
+  // Abra is still rearing back, so the foe stands its ground
+  await clock.advance(1000)
+  expect(heard()).toEqual(['A wild Pidgeot (Lv. 36) appeared!'])
+  await clock.advance(500)
+  expect(heard()).toEqual(['A wild Pidgeot (Lv. 36) appeared!', 'Wild Pidgeot fled!'])
+  expect(await run('roar')).toBe('There\'s no wild Pokémon here.')
   await clock.advance(10000)
-  expect(toasts).toEqual(['A wild Pidgeot (Lv. 36) appeared!'])
   expect(widths[widths.length - 1]).toBe(RASTER)
+})
+
+test('/pokemon run roars the wild mon off too', async ($, on) => {
+  const { clock, toasts } = await inBattle($, on, {})
+  expect((await $.command.run({ command: 'pokemon', args: 'run' })).text).toBe('Abra used Roar!')
+  await clock.advance(1500)
+  expect(toasts).toContain('Wild Pidgey fled!')
+})
+
+test('a roar waits for a thrown ball to settle', async ($, on) => {
+  const { clock, toasts } = await inBattle($, on, {})
+  const run = async (args: string) => (await $.command.run({ command: 'pokemon', args })).text
+  expect(await run('catch')).toBe('You threw a Poké Ball!')
+  expect(await run('roar')).toBe('Wait for the ball to settle.')
+  await clock.advance(1500)
+  expect(toasts).not.toContain('Wild Pidgey fled!')
+})
+
+test('a Growlithe asked for its own Roar scares the foe off without a hit, and never picks Roar itself', async ($, on) => {
+  const { clock, toasts } = await inBattle($, on, { mon: 'growlithe' })
+  // Banked work spends on moves that hurt
+  for (let k = 0; k < 3; k++) {
+    await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' })
+    await clock.advance(9000)
+  }
+  expect(movesIn(toasts).length).toBeGreaterThan(0)
+  expect(movesIn(toasts)).not.toContain('Growlithe used Roar!')
+  expect((await $.command.run({ command: 'pokemon', args: 'attack roar' })).text).toBe('Growlithe used Roar!')
+  await clock.advance(1500)
+  expect(toasts[toasts.length - 1]).toBe('Wild Pidgey fled!')
 })
 
 test('a wild mon leaves when the shown mon goes to sleep', async ($, on) => {

@@ -2,10 +2,11 @@ import { aimsAhead } from './attacks.js'
 import { FALLBACK_MOVES } from './commands.js'
 import { dexKey, tierOf, TIERS } from './dex.js'
 import { bandRows, foeMiddle } from './layout.js'
-import { movesOf } from './moves.js'
+import { startAttack } from './motion.js'
+import { MOVE_FX, movesOf } from './moves.js'
 import { displayName } from './names.js'
 import { BALL } from './party.js'
-import { levelOf } from './records.js'
+import { levelOf, nameOf } from './records.js'
 import { VARIANTS } from './sprites.js'
 import { S } from './state.js'
 import { thrownWild } from './wild.js'
@@ -25,9 +26,19 @@ export function catchCommand() {
   return { text: 'You threw a Poké Ball!' }
 }
 
-// The moves that can reach a foe in front of the mon
+// Roar at the foe, which turns tail when the roar lands. Every mon can, whatever its moves.
+export function roarCommand() {
+  if (!S.wild || S.wild.phase === 'fleeing' || S.wild.phase === 'fainted') return { text: 'There\'s no wild Pokémon here.' }
+  if (S.wild.phase === 'throw') return { text: 'Wait for the ball to settle.' }
+  if (S.attack) return { text: 'Wait for the move to end.' }
+  startAttack({ name: 'Roar', ...MOVE_FX.Roar }, { foe: true })
+  return { text: nameOf(S.mon) + ' used Roar!' }
+}
+
+// The moves that can reach a foe in front of the mon. One that scares it off waits to
+// be asked for by name.
 export function foeMoves() {
-  const moves = movesOf(S.mon).filter(aimsAhead)
+  const moves = movesOf(S.mon).filter((move) => aimsAhead(move) && !move.scares)
   return moves.length > 0 ? moves : FALLBACK_MOVES
 }
 

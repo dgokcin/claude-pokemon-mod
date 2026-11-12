@@ -11,8 +11,8 @@ import { isDead, isDown, isPetted } from './status.js'
 // The /pokemon options that need nothing from the engine, and which options wait while
 // the mon evolves, eats, or enjoys a pet
 
-// Petting, feeding, sleeping, attacking, releasing, using an item, and switching mons wait while it evolves
-const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack', 'release', 'catch', 'new', 'use']
+// Petting, feeding, sleeping, attacking, roaring, releasing, using an item, and switching mons wait while it evolves
+const WAITS_FOR_EVOLUTION = ['pet', 'feed', 'sleep', 'attack', 'release', 'catch', 'roar', 'run', 'new', 'use']
 // While it eats a berry or enjoys a pet, only the commands that just show something run,
 // so nothing changes the record the berry or pet is about to fill
 const SHOWS_ONLY = ['', 'list', 'help', 'stats', 'box', 'party', 'moves', 'dex', 'bag']

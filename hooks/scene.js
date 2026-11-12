@@ -362,7 +362,8 @@ export function frameNow(full = false) {
   const pixel = pixelOf(flip)
   let effect = NO_EFFECT
   if (playing) {
-    const target = S.attack.atFoe && isHere(S.wild) ? foeBox(rows) : null
+    // A foe scared off mid-move stays the target as it walks away
+    const target = S.attack.atFoe && (isHere(S.wild) || S.wild?.phase === 'fleeing') ? foeBox(rows) : null
     effect = attackFrame(S.attack, age, attackGeometry(sprite, frame, colors, flip, baseX, baseTop, rows, pixel, S.attack.side, target))
   }
   else if (away) effect = { ...NO_EFFECT, hidden: true }
