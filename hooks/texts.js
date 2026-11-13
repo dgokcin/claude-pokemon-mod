@@ -122,7 +122,7 @@ export const HELP = [
     ['attack [move]', 'Use a random move, or the one named'],
     ['moves [mon]', 'List its moves, or another mon\'s'],
     ['catch', 'Throw a Poké Ball at the wild mon'],
-    ['run', 'Send the wild mon away'],
+    ['roar', 'Roar to send the wild mon away'],
   ]],
   ['Evolve', [
     ['evolve [mon]', 'Evolve with a stone or a Link Cable from your bag, or pick what Eevee becomes'],

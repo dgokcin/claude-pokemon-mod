@@ -139,7 +139,7 @@ Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squir
 | `/pokemon nickname <name>` | Nickname the mon, up to 12 characters. It keeps the name when it evolves, and its species name takes the nickname away |
 | `/pokemon release <mon>` | Release a mon from your box. It starts over at its first level with fresh meters |
 | `/pokemon catch` | Throw a Poké Ball at the wild mon. The odds rise as its HP falls |
-| `/pokemon run` | Send the wild mon away |
+| `/pokemon roar` | Roar at the wild mon, and it runs off when the roar lands. Every mon can, whatever its moves |
 | `/pokemon dex` | Count the wild mons you've seen and caught, and list them in Pokédex order. ✦ marks a shiny catch, † a species lost in a nuzlocke, and the mons you lost are listed last |
 | `/pokemon dex <mon>` | Show one mon's Pokédex number, how rare it is, and whether you've seen or caught it |
 | Ctrl+X Ctrl+A | Collapse or expand the band (Claude Code's own binding) |
@@ -385,7 +385,7 @@ its next move off.
 Each strike that lands takes happiness, and a broken heart rises by the mon's head. The
 first takes a quarter heart. Each strike after it that lands before you face the foe takes
 more, a half heart and then a whole one, and a whole one each time after that. Facing it
-means `/pokemon catch`, `/pokemon attack`, or `/pokemon run`, or the Catch and Attack
+means `/pokemon catch`, `/pokemon attack`, or `/pokemon roar`, or the Catch and Attack
 buttons on the desktop band, and the next strike is back to a quarter heart. A foe you
 never faced takes one more whole heart as it leaves, after 4 minutes or 4 turns. A strike
 never takes happiness below one heart, and takes nothing from a mon at one heart or less,
@@ -395,8 +395,13 @@ so a wild mon never makes yours faint. With `/pokemon needs` off, strikes take n
 catch. At full HP the ball always breaks free. The ball rocks once per shake before it
 clicks shut or the foe breaks out.
 
+`/pokemon roar` sends the foe away. The mon plays Roar, and the foe turns and walks off
+when it lands. Every mon can roar this way, whatever its moves. Growlithe knows Roar
+itself, so `/pokemon attack roar` scares its foe off too, and it never picks Roar on its
+own in a fight.
+
 The foe leaves after 4 minutes without a hit, 90 s after it turns weak, after 4 turns end
-without a catch, when the mon falls asleep, or on `/pokemon run`. `/pokemon feed` waits
+without a catch, when the mon falls asleep, or on `/pokemon roar`. `/pokemon feed` waits
 until it's gone, and so does an evolution that comes due.
 
 The Pokédex counts wild mons only, seen when one shows up and caught when you catch it. A
