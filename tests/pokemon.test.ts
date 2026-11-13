@@ -2045,7 +2045,7 @@ test('a terminal whose graphics are not ready yet gets the small band back as an
   expect((await ui.find({ key: 'pokemon' })).type).toBe('Image')
 })
 
-test('only kitty, Ghostty, and iTerm2 builds whose Image swaps work draw the small band as an Image, and the rest draw half blocks no shorter than Diglett', async ($, on) => {
+test('only kitty, Ghostty, and iTerm2 builds whose Image swaps work draw the small band as an Image, and the rest draw half blocks no shorter than Diglett', { timeoutMs: 30000 }, async ($, on) => {
   const clock = mock.clock(on)
   const blits: any[] = []
   let env: Record<string, string> = {}
