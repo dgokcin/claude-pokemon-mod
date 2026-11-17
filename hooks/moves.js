@@ -1,8 +1,8 @@
 // Movesets for /pokemon attack, and the animation each move plays.
 
 // Every move's animation: the effect it plays from hooks/effects/, and optionally a
-// color, a power (1 or 2, for moves that share an effect at two sizes), and a line
-// to print after "<Mon> used <Move>!"
+// color, a power (1 or 2, for moves that share an effect at two sizes), a line
+// to print after "<Mon> used <Move>!", and scares for a move that sends a foe off
 export const MOVE_FX = {
   'Absorb': { effect: 'drain' },
   'Acid': { effect: 'acid' },
@@ -91,7 +91,7 @@ export const MOVE_FX = {
   'Recover': { effect: 'recover' },
   'Reflect': { effect: 'reflect' },
   'Rest': { effect: 'rest', text: 'It started sleeping!' },
-  'Roar': { effect: 'roar' },
+  'Roar': { effect: 'roar', scares: true },
   'Rock Slide': { effect: 'rockslide' },
   'Rock Throw': { effect: 'rockthrow' },
   'Sand Attack': { effect: 'sandattack' },

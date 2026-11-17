@@ -10,7 +10,7 @@ import { IMAGE_WAIT_TICKS, TICK_MS } from './constants.js'
 import { CREW_SIZE, crewThinking, crewToolEnds, crewToolStarts, isOut, joinCrew } from './crew.js'
 import { CUSTOM_PREFIX, fetchMon, monsOfGen } from './custom.js'
 import { dexKey, isCaught, mergedDexEntry, pickWild, tierOf } from './dex.js'
-import { catchCommand, foeMoves, runawayFoe, wildMoves, wildName } from './encounter.js'
+import { catchCommand, foeMoves, roarCommand, runawayFoe, wildMoves, wildName } from './encounter.js'
 import { evolutionsOf, levelEvolutionOf, startLevel } from './evolutions.js'
 import { SPRITES } from './frames.js'
 import {
@@ -223,6 +223,11 @@ async function markOwned($, seed) {
 function stepWildPhase($) {
   if (!S.wild) return
   if (!['fleeing', 'fainted'].includes(S.wild.phase) && (isTuckedIn() || isAsleep() || isDown())) return fleeWild($)
+  // A move that scares sends the foe off wherever it is, even one still on its way
+  if (S.attack?.move.scares && landsNow()) {
+    S.attack.landed = true
+    return fleeWild($)
+  }
   const result = stepWild(S.wild, { tick: S.tick, atHome: isHome() && !S.attack, at: wildAt(), stayTicks: WILD_STAY_MS / TICK_MS })
   if (result.event === 'timeout') {
     biteMon($, partingBite(S.wild)).catch((err) => logOnce($, err))
@@ -302,11 +307,14 @@ function battleButtons($, { Box, Button }) {
 const strikeGap = () => Math.round((STRIKE_GAP_MS + Math.random() * STRIKE_JITTER_MS) / TICK_MS)
 const STRIKE_DELAY_TICKS = 2000 / TICK_MS
 
-// Land a move on the foe 60% of the way through it, and spend banked work on the next
-// move once the mon is free, awake, at home, and its last move is long enough ago. The
-// mon holds off a weak foe, so only /pokemon attack knocks it out.
+// A move at the foe lands 60% of the way through it
+const landsNow = () => S.attack?.atFoe && !S.attack.landed && !S.attack.backing && S.tick >= S.attack.start + Math.round(S.attack.ticks * 0.6)
+
+// Land a move on the foe, and spend banked work on the next move once the mon is free,
+// awake, at home, and its last move is long enough ago. The mon holds off a weak foe,
+// so only /pokemon attack knocks it out.
 function stepBattle($) {
-  if (S.attack?.atFoe && !S.attack.landed && !S.attack.backing && S.tick >= S.attack.start + Math.round(S.attack.ticks * 0.6)) {
+  if (landsNow()) {
     S.attack.landed = true
     hitFoe($)
     if (S.wild.phase !== 'battle') return
@@ -1380,7 +1388,7 @@ async function paneCommand($, presentation) {
 }
 
 // The commands that count as facing a wild foe, so its strikes stay small
-const FIGHT_VERBS = ['catch', 'attack', 'run']
+const FIGHT_VERBS = ['catch', 'attack', 'roar', 'run']
 
 // Served from the one command.run hook below. Claude Code keeps a command out of the
 // up-arrow history when more than one command.run hook could answer it.
@@ -1460,10 +1468,8 @@ async function runPokemon($, e) {
     return attackCommand(asked.slice('attack'.length).trim())
   } else if (asked === 'catch') {
     return catchCommand()
-  } else if (asked === 'run') {
-    if (!S.wild || S.wild.phase === 'fleeing') return { text: 'There\'s no wild Pokémon here.' }
-    fleeWild($, true)
-    return { text: 'Got away safely!' }
+  } else if (asked === 'roar' || asked === 'run') {
+    return roarCommand()
   } else if ((asked === 'wild' || asked.startsWith('wild ')) && (reply = await wildCommand($, asked.slice('wild'.length)))) {
     return reply
   } else if (asked === 'kill' && (reply = await killCommand($))) {
