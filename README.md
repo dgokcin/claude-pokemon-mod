@@ -40,7 +40,7 @@ Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squir
 - 📈 **It levels up as you ship.** Every answered turn earns XP, and mons evolve at their levels from the games.
 - 🫐 **It needs you too.** Feed it and pet it, or it gets hungry and lonely. Leave it long enough and it faints, and then it runs away.
 - 🎒 **You start with one starter.** Bulbasaur, Charmander, Squirtle, or Pikachu. Every other mon has to be caught.
-- 🌿 **Wild Pokémon show up, and they fight back.** Your work wears them down while they strike your mon with their own moves, and each strike costs it some happiness, more while you leave the foe alone. Once one is weak, `/pokemon catch` fills your Pokédex. Knock it out instead, and it drops an item for your bag.
+- 🌿 **Wild Pokémon show up, and they fight back.** Your work wears them down while they strike your mon with their own moves, and each strike costs it some happiness, more while you leave the foe alone. Once one is weak, `/pokemon catch` fills your Pokédex. Knock it out instead, and now and then it drops an item for your bag.
 - ⚡ **It fights.** 135 moves from gen 1, each with its own pixel animation.
 - 🎨 **All 151 gen 1 Pokémon**, each in default and shiny, and gen 2 to 5 with `/pokemon new`.
 
@@ -375,9 +375,10 @@ most, and the mon spends one every 6 to 8 s on a random move aimed at the foe. E
 shrinks the HP bar over the foe's head. A common foe takes about 3 hits, a legendary about 10.
 Once another hit could knock the foe out, it's weak, and the mon holds off. Only
 `/pokemon attack` lands the last hit. A foe at 0 HP faints and blinks away, and can't be
-caught, but an item pops out of it and goes into your bag. It's usually a stone, most
-often the one for the foe's type, like a Fire Stone from a Vulpix or a Thunder Stone from
-a Voltorb. About 1 knockout in 13 drops a Link Cable instead, and 1 in 15 a Rare Candy.
+caught, but 1 time in 5 an item pops out of it and goes into your bag. It's usually the
+stone for the foe's type, like a Fire Stone from a Vulpix or a Thunder Stone from a
+Voltorb. About 1 drop in 13 is a Link Cable instead, and 1 in 15 a Rare Candy. A foe with
+no stone type, like a Pidgey, only ever drops a Link Cable or Rare Candy.
 Main turns of two minutes or more turn up a Rare Candy 1 time in 10 too.
 Every 10 to 15 s the foe plays one of its own moves at the mon, which flinches and puts
 its next move off.

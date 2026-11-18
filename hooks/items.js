@@ -19,9 +19,10 @@ export const STONES = ['firestone', 'waterstone', 'thunderstone', 'leafstone', '
 export const RARE_CANDY = 'rarecandy'
 export const LINK_CABLE = 'linkcable'
 
-// A knockout drops Rare Candy one time in 15, a Link Cable one in 12 of the rest, and
-// otherwise a stone. A foe with a stone type drops only its own stone, and any other foe
-// drops any stone.
+// A knockout drops an item one time in 5. A drop is Rare Candy one time in 15, a Link
+// Cable one in 12 of the rest, and otherwise the stone for the foe's type. A foe with no
+// stone type drops nothing in its place.
+const DROP_ODDS = 1 / 5
 const CANDY_ODDS = 1 / 15
 const CABLE_ODDS = 1 / 12
 // A main turn of two minutes or more turns up Rare Candy one time in 10
@@ -44,13 +45,13 @@ const STONE_FAMILIES = {
 
 export const stoneOfType = (key) => STONES.find((stone) => STONE_FAMILIES[stone].includes(key)) ?? null
 
-// What a knocked out foe drops, rolled from its seed so the same foe always drops the same
+// What a knocked out foe drops, or null for nothing, rolled from its seed so the same foe
+// always drops the same
 export function dropOf(key, seed) {
+  if (rnd(seed, 4, DROP_SALT) >= DROP_ODDS) return null
   if (rnd(seed, 0, DROP_SALT) < CANDY_ODDS) return RARE_CANDY
   if (rnd(seed, 1, DROP_SALT) < CABLE_ODDS) return LINK_CABLE
-  const typed = stoneOfType(key)
-  if (typed) return typed
-  return STONES[Math.floor(rnd(seed, 3, DROP_SALT) * STONES.length)]
+  return stoneOfType(key)
 }
 
 const keyOf = (text) => String(text).toLowerCase().replace(/[\s\-_'.]/g, '')
@@ -104,7 +105,7 @@ export function migratedBag(names) {
 // Like "Your bag:\nThunder Stone, 2\nRare Candy, 1", in the items' order
 export function bagText(bag) {
   const held = ITEMS.filter((item) => bag[item.key] > 0)
-  if (held.length === 0) return 'Your bag is empty. Knock out a wild mon with /pokemon attack, and it drops an item.'
+  if (held.length === 0) return 'Your bag is empty. Knock out a wild mon with /pokemon attack, and it may drop an item.'
   return 'Your bag:\n' + held.map((item) => item.name + ', ' + bag[item.key]).join('\n')
 }
 
