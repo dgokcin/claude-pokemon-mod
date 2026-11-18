@@ -4339,7 +4339,7 @@ test('a session that left the scene in the pane opens it again on start', async 
   expect(opened.map((e) => [e.id, e.columns])).toEqual([['pokemon', 90]])
 })
 
-test('a knockout drops an item one time in 5: a stone, only its own type\'s when it has one, now and then a Link Cable or Rare Candy, the same for the same foe', () => {
+test('a knockout drops an item one time in 5: its own type\'s stone, or a Link Cable or Rare Candy, the same for the same foe', () => {
   const count = (key: string) => {
     const drops: Record<string, number> = {}
     let none = 0
@@ -4355,18 +4355,19 @@ test('a knockout drops an item one time in 5: a stone, only its own type\'s when
   expect(dropOf('vulpix', 42)).toBe(dropOf('vulpix', 42))
   expect(Object.keys(vulpix.drops).sort()).toEqual(['firestone', 'linkcable', 'rarecandy'])
   expect(Object.keys(count('ponyta').drops).sort()).toEqual(['firestone', 'linkcable', 'rarecandy'])
+  expect(Object.keys(count('pikachu').drops).sort()).toEqual(['linkcable', 'rarecandy', 'thunderstone'])
+  // A foe with no stone type drops only a Link Cable or Rare Candy
+  expect(Object.keys(pidgey.drops).sort()).toEqual(['linkcable', 'rarecandy'])
   expect(stoneOfType('pikachu')).toBe('thunderstone')
   expect(stoneOfType('pidgey')).toBeNull()
-  for (const { drops, none } of [vulpix, pidgey]) {
-    expect(none / 18000).toBeGreaterThan(0.76)
-    expect(none / 18000).toBeLessThan(0.84)
-    const dropped = 18000 - none
-    expect(drops.rarecandy / dropped).toBeGreaterThan(0.04)
-    expect(drops.rarecandy / dropped).toBeLessThan(0.09)
-    expect(drops.linkcable / dropped).toBeGreaterThan(0.04)
-    expect(drops.linkcable / dropped).toBeLessThan(0.11)
+  expect(vulpix.none / 18000).toBeGreaterThan(0.76)
+  expect(vulpix.none / 18000).toBeLessThan(0.84)
+  for (const { drops } of [vulpix, pidgey]) {
+    expect(drops.rarecandy / 18000).toBeGreaterThan(0.008)
+    expect(drops.rarecandy / 18000).toBeLessThan(0.019)
+    expect(drops.linkcable / 18000).toBeGreaterThan(0.008)
+    expect(drops.linkcable / 18000).toBeLessThan(0.022)
   }
-  expect(pidgey.drops.firestone / (18000 - pidgey.none)).toBeLessThan(0.25)
 })
 
 test('item names match loosely', () => {
@@ -4458,7 +4459,7 @@ test('a knocked out foe drops an item into the bag, or nothing', async ($, on) =
   const saved: Record<string, any> = {}
   const { clock, toasts } = await inBattle($, on, saved)
   await weaken($, clock, toasts)
-  const fainted = /^Wild Pidgey fainted! It can't be caught now\.( It dropped a (Fire Stone|Water Stone|Thunder Stone|Leaf Stone|Moon Stone|Link Cable|Rare Candy), and it's in your bag\.)?$/
+  const fainted = /^Wild Pidgey fainted! It can't be caught now\.( It dropped a (Link Cable|Rare Candy), and it's in your bag\.)?$/
   for (let k = 0; k < 60 && !toasts.some((text) => fainted.test(text)); k++) {
     if (k % 12 === 0) await run($, 'attack')
     await clock.advance(500)

@@ -375,9 +375,10 @@ most, and the mon spends one every 6 to 8 s on a random move aimed at the foe. E
 shrinks the HP bar over the foe's head. A common foe takes about 3 hits, a legendary about 10.
 Once another hit could knock the foe out, it's weak, and the mon holds off. Only
 `/pokemon attack` lands the last hit. A foe at 0 HP faints and blinks away, and can't be
-caught, but 1 time in 5 an item pops out of it and goes into your bag. It's usually a
-stone, most often the one for the foe's type, like a Fire Stone from a Vulpix or a Thunder
-Stone from a Voltorb. About 1 drop in 13 is a Link Cable instead, and 1 in 15 a Rare Candy.
+caught, but 1 time in 5 an item pops out of it and goes into your bag. It's usually the
+stone for the foe's type, like a Fire Stone from a Vulpix or a Thunder Stone from a
+Voltorb. About 1 drop in 13 is a Link Cable instead, and 1 in 15 a Rare Candy. A foe with
+no stone type, like a Pidgey, only ever drops a Link Cable or Rare Candy.
 Main turns of two minutes or more turn up a Rare Candy 1 time in 10 too.
 Every 10 to 15 s the foe plays one of its own moves at the mon, which flinches and puts
 its next move off.
