@@ -58,7 +58,7 @@ import { SIZES } from './zoom.js'
 // A main-loop tool call that fails makes it flinch, with a sweat drop by its head.
 // Answered turns earn XP, and the mon evolves at the levels from the games.
 // Now and then a wild mon walks in from the left, and the strip widens to fit both.
-// One knocked out drops an item into a bag, which stone and trade evolutions and Rare Candy draw on.
+// One knocked out may drop an item into a bag, which stone and trade evolutions and Rare Candy draw on.
 // Each open session shows its own mon, starting with the one last picked anywhere. XP,
 // meters, nickname, and sleep belong to the mon, so sessions showing the same mon share them.
 // Left with empty meters for hours it faints until /pokemon revive heals it, and left fainted it runs away.
@@ -171,7 +171,7 @@ async function evolveCommand($, wanted) {
   }
   const item = itemFor(entry)
   if (item && !(await loadBag($))[item]) {
-    return { text: name + ' needs a ' + itemName(item) + ' to evolve into ' + displayName(entry.into) + '. Wild mons you knock out drop items, and /pokemon bag lists yours.' }
+    return { text: name + ' needs a ' + itemName(item) + ' to evolve into ' + displayName(entry.into) + '. Wild mons you knock out drop items now and then, and /pokemon bag lists yours.' }
   }
   if (S.attack || S.food) return { text: name + ' is busy right now.' }
   startEvolution($, entry.into, item)
@@ -352,13 +352,17 @@ function strikeBack($) {
 }
 
 // A hit resets the foe's wait for a fight. Weak, it waits WEAK_MS for a ball, and at 0 HP
-// it faints and drops an item into the bag.
+// it faints and may drop an item into the bag.
 function hitFoe($) {
   const name = displayName(S.wild.mon)
   const hp = Math.max(0, Math.round(S.wild.hp - damageOf(S.wild, S.attack.power, Math.random())))
   if (hp === 0) {
     const item = dropOf(S.wild.key, S.wild.seed)
-    S.wild = { ...faintedWild(S.wild, S.tick), drop: { item, at: S.tick } }
+    S.wild = { ...faintedWild(S.wild, S.tick), drop: item ? { item, at: S.tick } : null }
+    if (!item) {
+      $.ui.toast('Wild ' + name + ' fainted! It can\'t be caught now.')
+      return
+    }
     $.ui.toast('Wild ' + name + ' fainted! It can\'t be caught now. It dropped a ' + itemName(item) + ', and it\'s in your bag.')
     changeBag($, (bag) => addedTo(bag, item)).catch((err) => logOnce($, err))
     return

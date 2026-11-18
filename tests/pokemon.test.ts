@@ -4339,26 +4339,34 @@ test('a session that left the scene in the pane opens it again on start', async 
   expect(opened.map((e) => [e.id, e.columns])).toEqual([['pokemon', 90]])
 })
 
-test('a knockout drops a stone, only its own type\'s when it has one, now and then a Link Cable or Rare Candy, the same for the same foe', () => {
+test('a knockout drops an item one time in 5: a stone, only its own type\'s when it has one, now and then a Link Cable or Rare Candy, the same for the same foe', () => {
   const count = (key: string) => {
     const drops: Record<string, number> = {}
-    for (let seed = 0; seed < 6000; seed++) drops[dropOf(key, seed)] = (drops[dropOf(key, seed)] ?? 0) + 1
-    return drops
+    let none = 0
+    for (let seed = 0; seed < 18000; seed++) {
+      const item = dropOf(key, seed)
+      if (item) drops[item] = (drops[item] ?? 0) + 1
+      else none++
+    }
+    return { drops, none }
   }
   const vulpix = count('vulpix')
   const pidgey = count('pidgey')
   expect(dropOf('vulpix', 42)).toBe(dropOf('vulpix', 42))
-  expect(Object.keys(vulpix).sort()).toEqual(['firestone', 'linkcable', 'rarecandy'])
-  expect(Object.keys(count('ponyta')).sort()).toEqual(['firestone', 'linkcable', 'rarecandy'])
-  expect(pidgey.firestone / 6000).toBeLessThan(0.25)
+  expect(Object.keys(vulpix.drops).sort()).toEqual(['firestone', 'linkcable', 'rarecandy'])
+  expect(Object.keys(count('ponyta').drops).sort()).toEqual(['firestone', 'linkcable', 'rarecandy'])
   expect(stoneOfType('pikachu')).toBe('thunderstone')
   expect(stoneOfType('pidgey')).toBeNull()
-  for (const drops of [vulpix, pidgey]) {
-    expect(drops.rarecandy / 6000).toBeGreaterThan(0.04)
-    expect(drops.rarecandy / 6000).toBeLessThan(0.09)
-    expect(drops.linkcable / 6000).toBeGreaterThan(0.04)
-    expect(drops.linkcable / 6000).toBeLessThan(0.11)
+  for (const { drops, none } of [vulpix, pidgey]) {
+    expect(none / 18000).toBeGreaterThan(0.76)
+    expect(none / 18000).toBeLessThan(0.84)
+    const dropped = 18000 - none
+    expect(drops.rarecandy / dropped).toBeGreaterThan(0.04)
+    expect(drops.rarecandy / dropped).toBeLessThan(0.09)
+    expect(drops.linkcable / dropped).toBeGreaterThan(0.04)
+    expect(drops.linkcable / dropped).toBeLessThan(0.11)
   }
+  expect(pidgey.drops.firestone / (18000 - pidgey.none)).toBeLessThan(0.25)
 })
 
 test('item names match loosely', () => {
@@ -4380,15 +4388,15 @@ test('the first bag grants the item every stone or trade mon in the box needs, a
   expect(saved.bag).toEqual({ thunderstone: 2, waterstone: 1, firestone: 1, linkcable: 1 })
   // Made once, the bag is never granted again
   saved.bag = {}
-  expect(await run($, 'bag')).toBe('Your bag is empty. Knock out a wild mon with /pokemon attack, and it drops an item.')
+  expect(await run($, 'bag')).toBe('Your bag is empty. Knock out a wild mon with /pokemon attack, and it may drop an item.')
 })
 
 test('a stone or trade evolution needs its item, says which is missing, and spends it once the evolution is done', { timeoutMs: 30000 }, async ($, on) => {
   const saved: Record<string, any> = { trainer: false, mon: 'pikachu', bag: { moonstone: 1 } }
   const { clock } = await startedWith($, on, saved, 0)
-  expect(await run($, 'evolve')).toBe('Pikachu needs a Thunder Stone to evolve into Raichu. Wild mons you knock out drop items, and /pokemon bag lists yours.')
+  expect(await run($, 'evolve')).toBe('Pikachu needs a Thunder Stone to evolve into Raichu. Wild mons you knock out drop items now and then, and /pokemon bag lists yours.')
   await run($, 'kadabra')
-  expect(await run($, 'evolve')).toBe('Kadabra needs a Link Cable to evolve into Alakazam. Wild mons you knock out drop items, and /pokemon bag lists yours.')
+  expect(await run($, 'evolve')).toBe('Kadabra needs a Link Cable to evolve into Alakazam. Wild mons you knock out drop items now and then, and /pokemon bag lists yours.')
 
   saved.bag = { thunderstone: 1 }
   await run($, 'pikachu')
@@ -4446,17 +4454,18 @@ test('Rare Candy raises a level, evolves the shown mon at its level, and a box m
   expect(toasts).toContain('Congratulations! Your Bulbasaur evolved into Ivysaur!')
 })
 
-test('a knocked out foe drops an item into the bag', async ($, on) => {
+test('a knocked out foe drops an item into the bag, or nothing', async ($, on) => {
   const saved: Record<string, any> = {}
   const { clock, toasts } = await inBattle($, on, saved)
   await weaken($, clock, toasts)
-  const fainted = /^Wild Pidgey fainted! It can't be caught now\. It dropped a (Fire Stone|Water Stone|Thunder Stone|Leaf Stone|Moon Stone|Link Cable|Rare Candy), and it's in your bag\.$/
+  const fainted = /^Wild Pidgey fainted! It can't be caught now\.( It dropped a (Fire Stone|Water Stone|Thunder Stone|Leaf Stone|Moon Stone|Link Cable|Rare Candy), and it's in your bag\.)?$/
   for (let k = 0; k < 60 && !toasts.some((text) => fainted.test(text)); k++) {
     if (k % 12 === 0) await run($, 'attack')
     await clock.advance(500)
   }
-  expect(toasts.some((text) => fainted.test(text))).toBe(true)
-  expect(Object.values(saved.bag)).toEqual([1])
+  const toast = toasts.find((text) => fainted.test(text))
+  expect(toast).toBeDefined()
+  expect(Object.values(saved.bag ?? {})).toEqual(toast!.includes('dropped') ? [1] : [])
 })
 
 test('a long answered turn now and then turns up a Rare Candy, and a short one never does', { timeoutMs: 60000 }, async ($, on) => {
