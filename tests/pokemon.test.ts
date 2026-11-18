@@ -4466,7 +4466,7 @@ test('a knocked out foe drops an item into the bag, or nothing', async ($, on) =
   }
   const toast = toasts.find((text) => fainted.test(text))
   expect(toast).toBeDefined()
-  expect(Object.values(saved.bag ?? {})).toEqual(toast!.includes('dropped') ? [1] : [])
+  expect(Object.values(saved.bag ?? {})).toEqual(toast?.includes('dropped') ? [1] : [])
 })
 
 test('a long answered turn now and then turns up a Rare Candy, and a short one never does', { timeoutMs: 60000 }, async ($, on) => {
