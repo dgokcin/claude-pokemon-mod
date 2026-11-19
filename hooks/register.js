@@ -8,25 +8,26 @@ import {
 } from './commands.js'
 import { IMAGE_WAIT_TICKS, TICK_MS } from './constants.js'
 import { CREW_SIZE, crewThinking, crewToolEnds, crewToolStarts, isOut, joinCrew } from './crew.js'
-import { CUSTOM_PREFIX, fetchMon, monsOfGen } from './custom.js'
-import { dexKey, isCaught, mergedDexEntry, pickWild, tierOf } from './dex.js'
+import { CUSTOM_PREFIX, fetchMon } from './custom.js'
+import { DEX, dexKey, genOf, isCaught, mergedDexEntry, pickWild, tierOf } from './dex.js'
 import { catchCommand, foeMoves, roarCommand, runawayFoe, wildMoves, wildName } from './encounter.js'
-import { evolutionsOf, levelEvolutionOf, startLevel } from './evolutions.js'
+import { evolutionsOf, isPlainLevel, levelUpEvolutionOf, startLevel, timeOfDay, unmetOf } from './evolutions.js'
 import { SPRITES } from './frames.js'
 import {
-  addedTo, bagOf, bagText, dropOf, findItem, itemFor, itemName, ITEMS, LONG_TURN_CANDY_ODDS, migratedBag, RARE_CANDY, takenFrom,
+  addedTo, bagOf, bagText, dropOf, findItem, itemName, ITEMS, itemsFor, LONG_TURN_CANDY_ODDS, migratedBag, RARE_CANDY, takenFrom,
 } from './items.js'
 import { bandRows, bandZoom, battleFits, clampX, homeX, isHome, stripTarget, wildAt } from './layout.js'
 import { careOf, LONG_TURN_MS, MAX_LEVEL, turnXp, xpAt } from './levels.js'
 import { bittenHappiness, bumpStat, filledIcons, iconsFor, isFull, isHappiest, park, STAT_ICONS, statNow, STATS, unpark } from './meters.js'
 import { feed, flinch, pet, startAttack, step } from './motion.js'
-import { displayName } from './names.js'
+import { movesOf } from './moves.js'
+import { displayName, withArticle } from './names.js'
 import {
   applyImageMode, cellsNow, drawsHearts, drawsImage, drawsImages, heartsImage, IMAGE_MODES, imageNow, svgNow,
 } from './paint.js'
 import { joinParty } from './party.js'
 import {
-  conditionOf, downReply, fullNameOf, goneLine, HEAL_MS, healingReply, levelOf, nameOf, readyToEvolve, revivedMeters,
+  conditionOf, downReply, fullNameOf, goneLine, HEAL_MS, healingReply, levelOf, nameOf, revivedMeters,
   settleHeal, xpOf,
 } from './records.js'
 import { addCustom, MONS, VARIANTS } from './sprites.js'
@@ -35,7 +36,7 @@ import {
   hasRunAway, isAsleep, isDead, isDown, isFainted, isFlinching, isFree, isGone, isHealing, isPetted, isTuckedIn, markActive,
 } from './status.js'
 import { assignedTo, canWork, crewVariant, endAgent, partyMons, stepCrewMons, typesOf } from './team.js'
-import { andList, boxText, dexText, evolutionText, HELP, helpText, orList, statsText } from './texts.js'
+import { andList, boxText, dexText, evolutionText, HELP, helpText, orList, readyEvolution, statsText, unmetText } from './texts.js'
 import {
   chargedWild, damageOf, engagedWild, faintedWild, fleeingWild, foeX, isHere, isOnStage, isWeak, newWild, partingBite,
   STRIKE_GAP_MS, STRIKE_JITTER_MS, stepWild, strikeBite, strikingWild, struckWild, WEAK_MS, WILD_STAY_MS, WILD_TURNS,
@@ -98,13 +99,14 @@ const DOWN_WAITS = ['pet', 'feed', 'attack', 'catch', 'evolve', 'sleep']
 const GONE_WAITS = [...DOWN_WAITS, ...VARIANTS, 'nickname']
 
 // Play the evolve effect with the evolved mon swapped in, in a band grown to fit both.
-// The item it needs, if any, leaves the bag once the evolution is done.
-function startEvolution($, into, item = null) {
+// The items it spends, if any, leave the bag once the evolution is done.
+function startEvolution($, into, items = []) {
   $.ui.toast('What? ' + nameOf(S.mon) + ' is evolving!')
   startAttack({ effect: 'evolve', color: S.ink.silhouette })
   S.attack.swap = into
-  S.evolving = { from: S.mon, into, item }
+  S.evolving = { from: S.mon, into, items }
   S.evolveDue = null
+  S.readyInto = null
   $.ui.invalidate('ui.render')
 }
 
@@ -127,7 +129,7 @@ async function moveRecord($, from, into) {
 
 // The mon becomes the evolved one. Its record moves along, so level, XP, and meters carry over.
 function finishEvolution($) {
-  const { from, into, item } = S.evolving
+  const { from, into, items } = S.evolving
   const wasHome = isHome()
   S.evolving = null
   S.mon = into
@@ -136,7 +138,7 @@ function finishEvolution($) {
   const name = nameOf(from)
   saveMon($).catch((err) => logOnce($, err))
   moveRecord($, from, into).catch((err) => logOnce($, err))
-  if (item) changeBag($, (bag) => takenFrom(bag, item)).catch((err) => logOnce($, err))
+  if (items.length > 0) changeBag($, (bag) => items.reduce(takenFrom, bag)).catch((err) => logOnce($, err))
   $.ui.toast('Congratulations! Your ' + name + ' evolved into ' + displayName(into) + '!')
   $.ui.invalidate('ui.render')
 }
@@ -152,8 +154,35 @@ function stopEvolution($) {
   return { text: 'Huh? ' + name + ' stopped evolving!' }
 }
 
-// A stone, a trade, or a level the mon has reached starts its evolution now. A stone or
-// a trade needs its item in the bag. Several ways and none named get a list.
+// What a mon has toward the needs of an evolution beyond its level: full hearts, or any
+// with needs off, the local time of day, its moves, and the mons out beside it
+async function evolveNeeds($, name) {
+  S.nowMs = await $.clock.now()
+  await loadPartyPicks($)
+  const party = [S.mon, ...partyMons(), ...Object.values(S.partyAgents).filter(canWork)].filter((mon) => mon !== name)
+  return {
+    level: levelOf(name),
+    happy: !S.needsOn || filledIcons('happiness', name) === STAT_ICONS,
+    time: timeOfDay(S.nowMs),
+    moves: movesOf(name).map((move) => move.name),
+    party,
+  }
+}
+
+// The evolution a level-up of the shown mon has just reached, or null. One with needs
+// beyond its level stays ready for /pokemon evolve, since only a level-up brings it about.
+async function levelUpEvolution($) {
+  const mon = S.mon
+  if (S.evolving || isDown()) return null
+  const entry = levelUpEvolutionOf(mon, await evolveNeeds($, mon))
+  if (!entry || mon !== S.mon) return null
+  if (!isPlainLevel(entry)) S.readyInto = { mon, into: entry.into }
+  return entry.into
+}
+
+// An item, a trade, or a level-up the mon has had starts its evolution now. An item or a
+// trade needs what it spends in the bag, and a level-up evolution with more needs than a
+// level waits for a level-up that meets them. Several ways and none named get a list.
 async function evolveCommand($, wanted) {
   const name = nameOf(S.mon)
   const entries = evolutionsOf(S.mon)
@@ -165,17 +194,27 @@ async function evolveCommand($, wanted) {
     return { text: name + ' can become ' + orList(entries.map(evolutionText)) + '. Try /pokemon evolve ' + example + '.' }
   }
   const [entry] = picked
-  const level = levelOf(S.mon)
-  if (entry.level && level < entry.level) {
-    return { text: name + ' evolves into ' + displayName(entry.into) + ' at Lv. ' + entry.level + '. It\'s Lv. ' + level + '.' }
+  const has = await evolveNeeds($, S.mon)
+  if (entry.level && has.level < entry.level) {
+    return { text: name + ' evolves into ' + evolutionText(entry) + '. It\'s Lv. ' + has.level + '.' }
   }
-  const item = itemFor(entry)
-  if (item && !(await loadBag($))[item]) {
-    return { text: name + ' needs a ' + itemName(item) + ' to evolve into ' + displayName(entry.into) + '. Wild mons you knock out drop items now and then, and /pokemon bag lists yours.' }
+  const leveledUp = S.readyInto?.mon === S.mon && S.readyInto.into === entry.into
+  const unmet = entry.level && leveledUp ? [] : unmetOf(entry, has)
+  if (unmet.length > 0) return { text: name + ' evolves into ' + evolutionText(entry) + '. ' + unmetText(entry, unmet, has.time) }
+  if (entry.level && !isPlainLevel(entry) && !leveledUp) {
+    return { text: name + ' evolves into ' + evolutionText(entry) + '. Its next level-up can evolve it.' }
+  }
+  const items = itemsFor(entry)
+  const bag = await loadBag($)
+  const missing = items.filter((item) => !bag[item])
+  if (missing.length > 0) {
+    const needs = andList(missing.map((item) => withArticle(itemName(item))))
+    return { text: name + ' needs ' + needs + ' to evolve into ' + displayName(entry.into) + '. Wild mons you knock out drop items now and then, and /pokemon bag lists yours.' }
   }
   if (S.attack || S.food) return { text: name + ' is busy right now.' }
-  startEvolution($, entry.into, item)
-  if (entry.item) return { text: 'You use a ' + entry.item + ' on ' + name + '.' }
+  startEvolution($, entry.into, items)
+  if (entry.item) return { text: 'You use ' + withArticle(entry.item) + ' on ' + name + '.' }
+  if (entry.holds) return { text: 'You trade ' + name + ' holding ' + withArticle(entry.holds) + ' to a friend, and they trade it right back.' }
   if (entry.trade) return { text: 'You trade ' + name + ' to a friend, and they trade it right back.' }
   return { text: 'You let ' + name + ' evolve.' }
 }
@@ -714,7 +753,7 @@ async function gainXp($, durationMs) {
   if (level === was) return
   $.ui.toast(nameOf(S.mon) + ' grew to Lv. ' + level + '!')
   $.ui.invalidate('ui.render')
-  const into = readyToEvolve()
+  const into = await levelUpEvolution($)
   if (!into) return
   if (S.autoEvolve) S.evolveDue = into
   else $.ui.toast(nameOf(S.mon) + ' is ready to evolve into ' + displayName(into) + '! /pokemon evolve lets it.')
@@ -723,12 +762,10 @@ async function gainXp($, durationMs) {
 // A party mon earns this share of what its own subagent's answered turn would earn the lead
 const PARTY_XP_SHARE = 0.5
 
-// A level-up off show can't evolve the mon, so a box mon at its evolution level is marked
-// ready, and it evolves once it's shown
-function markedReady(name, was) {
-  const evolution = levelEvolutionOf(name)
-  const level = levelOf(name)
-  return level > was && evolution && level >= evolution.level ? { ...S.stats[name], evolveReady: true } : S.stats[name]
+// A level-up off show can't evolve the mon, so a box mon whose level-up reached an
+// evolution, with has from evolveNeeds, is marked ready, and it evolves once it's shown
+function markedReady(name, was, has) {
+  return levelOf(name) > was && levelUpEvolutionOf(name, has) ? { ...S.stats[name], evolveReady: true } : S.stats[name]
 }
 
 // The party mon out for a subagent earns XP for that subagent's answered turn, scaled by
@@ -742,7 +779,7 @@ async function partyXp($, name, durationMs) {
   const care = S.needsOn ? careOf(statNow(name, 'food'), statNow(name, 'happiness')) : 1
   const xp = Math.max(1, Math.round(turnXp({ level: was, durationMs, care }) * PARTY_XP_SHARE))
   S.stats[name] = { ...S.stats[name], xp: xpOf(name) + xp }
-  S.stats[name] = markedReady(name, was)
+  S.stats[name] = markedReady(name, was, await evolveNeeds($, name))
   await saveRecords($, [name])
   if (levelOf(name) > was) $.ui.toast(nameOf(name) + ' grew to Lv. ' + levelOf(name) + ' working beside ' + nameOf(S.mon) + '!')
 }
@@ -754,7 +791,7 @@ async function evolveIfReady($) {
   const { evolveReady, ...record } = S.stats[S.mon]
   S.stats[S.mon] = record
   await saveRecords($, [S.mon])
-  const into = readyToEvolve()
+  const into = await levelUpEvolution($)
   if (!into) return
   if (S.autoEvolve) S.evolveDue = into
   else $.ui.toast(nameOf(S.mon) + ' is ready to evolve into ' + displayName(into) + '! /pokemon evolve lets it.')
@@ -802,11 +839,11 @@ async function candyCommand($, wanted) {
   await changeBag($, (bag) => takenFrom(bag, RARE_CANDY))
   await freshen($, [name])
   S.stats[name] = { ...S.stats[name], xp: xpAt(was + 1) }
-  if (name !== S.mon) S.stats[name] = markedReady(name, was)
+  if (name !== S.mon) S.stats[name] = markedReady(name, was, await evolveNeeds($, name))
   await saveRecords($, [name])
   $.ui.invalidate('ui.render')
   const grew = 'You give ' + shown + ' a Rare Candy. It grew to Lv. ' + (was + 1) + '!'
-  const into = name === S.mon ? readyToEvolve() : null
+  const into = name === S.mon ? await levelUpEvolution($) : null
   if (!into) return { text: grew }
   if (S.autoEvolve) {
     S.evolveDue = into
@@ -830,8 +867,11 @@ async function useCommand($, rest) {
   if (wanted && !MONS.includes(wanted)) return { text: 'Unknown mon "' + wanted + '". /pokemon box lists yours.' }
   if (wanted && wanted !== S.mon) return { text: 'Show ' + nameOf(wanted) + ' first with /pokemon ' + wanted + ', then use the ' + itemName(item) + '.' }
   if (isDown()) return downReply()
-  const entry = evolutionsOf(S.mon).find((e) => itemFor(e) === item)
-  if (!entry) return { text: nameOf(S.mon) + ' can\'t use a ' + itemName(item) + '.' }
+  // Of the evolutions the item takes part in, the first the bag has everything for
+  const uses = evolutionsOf(S.mon).filter((e) => itemsFor(e).includes(item))
+  if (uses.length === 0) return { text: nameOf(S.mon) + ' can\'t use ' + withArticle(itemName(item)) + '.' }
+  const bag = await loadBag($)
+  const entry = uses.find((e) => itemsFor(e).every((key) => bag[key])) ?? uses[0]
   return evolveCommand($, entry.into)
 }
 
@@ -1327,32 +1367,44 @@ async function loadCustom($) {
   }
 }
 
-// /pokemon new <mon> fetches a mon from any generation and shows it. "random" picks one
-// from gen 2 to 5 you don't have yet, and "random gen3" or "gen3" one from that generation.
+// /pokemon new <mon> shows a gen 2 to 5 mon you don't have yet, free to show in trainer
+// mode like a fetched one, and fetches a mon the mod doesn't bundle from vscode-pokemon.
+// "random" picks one from gen 2 to 5, and "random gen3" or "gen3" one from that generation.
 async function newCommand($, wanted) {
   const genAsked = wanted.match(/^(?:random\s*)?gen\s*([1-5])$/)
   const random = wanted === 'random' || genAsked !== null
   let name = random ? '' : wanted.replace(/\s+/g, '_')
-  let gen
   const get = (url, init) => $.http.fetch(url, init)
   if (!wanted) return { text: 'Name a mon to fetch, like /pokemon new mudkip, or try /pokemon new random or /pokemon new gen3.' }
+  const box = Object.keys((await $.store.get('stats')) ?? {})
+  const added = (await $.store.keys()).filter((key) => key.startsWith(CUSTOM_PREFIX)).map((key) => key.slice(CUSTOM_PREFIX.length))
+  const had = new Set([S.mon, ...box, ...added])
   try {
     if (random) {
-      gen = genAsked ? Number(genAsked[1]) : 2 + Math.floor(Math.random() * 4)
-      const fresh = (await monsOfGen(get, gen)).filter((n) => !SPRITES[n])
+      const gen = genAsked ? Number(genAsked[1]) : 2 + Math.floor(Math.random() * 4)
+      // Gen 1 mons come from the wild and /pokemon <mon>, so none is ever new
+      const fresh = gen === 1 ? [] : DEX.filter((n) => genOf(n) === gen && !had.has(n))
       if (fresh.length === 0) return { text: 'You already have every gen ' + gen + ' mon.' }
       name = fresh[Math.floor(Math.random() * fresh.length)]
-    } else if (SPRITES[name]) {
+    } else if (SPRITES[name] && (had.has(name) || genOf(name) === 1)) {
       return { text: nameOf(name) + ' is already here. /pokemon ' + name + ' shows it.' }
     } else if (!/^[a-z0-9_.-]+$/.test(name)) {
       return { text: 'Unknown mon "' + wanted + '". Names are like mudkip or mr._mime.' }
     }
-    const entry = await fetchMon(get, name, gen)
-    await $.store.set(CUSTOM_PREFIX + name, entry)
-    addCustom(name, entry)
+    let entry
+    if (SPRITES[name]) {
+      entry = { gen: genOf(name), bundled: true }
+      await $.store.set(CUSTOM_PREFIX + name, entry)
+    } else {
+      entry = await fetchMon(get, name)
+      await $.store.set(CUSTOM_PREFIX + name, entry)
+      addCustom(name, entry)
+    }
     await switchTo($, name)
     $.ui.invalidate('ui.render')
-    return { text: 'Fetched gen ' + entry.gen + ' ' + nameOf(name) + '. It knows ' + entry.moves.join(', ') + '. Now showing ' + S.variant + ' ' + nameOf(name) + '.' }
+    const moves = movesOf(name).map((move) => move.name).join(', ')
+    const how = entry.bundled ? 'Added gen ' : 'Fetched gen '
+    return { text: how + entry.gen + ' ' + nameOf(name) + '. It knows ' + moves + '. Now showing ' + S.variant + ' ' + nameOf(name) + '.' }
   } catch (err) {
     return { text: "Couldn't fetch " + (name || 'a mon') + ': ' + (err?.message ?? String(err)) }
   }
@@ -1534,7 +1586,7 @@ async function runPokemon($, e) {
       return { text: name + ' waits for /pokemon evolve when it reaches its evolution level.' }
     }
     // Already at its level, it evolves once idle
-    S.evolveDue = readyToEvolve()
+    S.evolveDue = readyEvolution()
     return { text: name + ' evolves on its own once idle at its evolution level.' }
   } else if (asked === 'revive' || asked.startsWith('revive ')) {
     return reviveCommand($, asked.slice('revive'.length).trim())

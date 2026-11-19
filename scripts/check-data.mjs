@@ -3,16 +3,18 @@
 // Checks that the mod's tables agree with each other: every move has an effect, every
 // mon has sprites and moves, evolutions name real mons without loops, levels round-trip,
 // the generated frames match their mon's size and palette, every frame's eyes are
-// marked inside it, and the Pokédex holds every mon once with a known tier.
+// marked inside it, every mon has its eyes marked, and the Pokédex holds every mon once
+// with a known tier.
 //
 // node scripts/check-data.mjs
 
 import { effectOf } from '../hooks/attacks.js'
 import { DEX, LEGENDARY, RARE, TIERS, dexKey, tierOf } from '../hooks/dex.js'
-import { EVOLUTIONS } from '../hooks/evolutions.js'
+import { BABIES, EVOLUTIONS, evolutionsOf } from '../hooks/evolutions.js'
 import { EYES, eyesOf } from '../hooks/eyes.js'
-import { SPRITES } from '../hooks/frames.js'
+import { SHINYLESS, SPRITES } from '../hooks/frames.js'
 import { MAX_LEVEL, levelAt, xpAt } from '../hooks/levels.js'
+import { ITEMS } from '../hooks/items.js'
 import { MOVE_FX, MOVES } from '../hooks/moves.js'
 import { displayName } from '../hooks/names.js'
 
@@ -44,6 +46,7 @@ for (const [mon, entries] of Object.entries(EVOLUTIONS)) {
     const ways = ['level', 'item', 'trade'].filter((key) => entry[key] !== undefined)
     if (ways.length !== 1) fail(`${mon} into ${entry.into} needs exactly one of level, item, or trade`)
     if (entry.level !== undefined && !(entry.level > 1 && entry.level <= MAX_LEVEL)) fail(`${mon} evolves at level ${entry.level}`)
+    if (entry.item !== undefined && !ITEMS.some((item) => item.name === entry.item)) fail(`${mon} evolves with ${entry.item}, which isn't an item`)
   }
 }
 
@@ -102,11 +105,12 @@ for (const mon of mons) {
   }
 }
 
-if (DEX.length !== 151) fail(`the Pokédex has ${DEX.length} entries, not 151`)
 if (new Set(DEX).size !== DEX.length) fail('the Pokédex lists a mon twice')
 for (const mon of DEX) if (!SPRITES[mon]) fail(`Pokédex entry ${mon} has no sprites`)
 for (const mon of mons) if (!DEX.includes(dexKey(mon))) fail(`${mon} has no Pokédex entry`)
-for (const mon of [...LEGENDARY, ...RARE]) if (!DEX.includes(mon)) fail(`tier list names ${mon}, which isn't in the Pokédex`)
+for (const mon of [...LEGENDARY, ...RARE, ...BABIES]) if (!DEX.includes(mon)) fail(`tier list names ${mon}, which isn't in the Pokédex`)
+for (const mon of BABIES) if (evolutionsOf(mon).length === 0) fail(`baby ${mon} grows into nothing`)
+for (const mon of SHINYLESS) if (!SPRITES[mon]) fail(`${mon} is shinyless but has no sprites`)
 for (const mon of DEX) if (!TIERS[tierOf(mon)]) fail(`${mon} has unknown tier ${tierOf(mon)}`)
 
 if (problems.length > 0) {
@@ -116,4 +120,4 @@ if (problems.length > 0) {
 }
 const moves = Object.values(MOVES).flat().length
 const tiers = Object.keys(TIERS).map((tier) => `${DEX.filter((mon) => tierOf(mon) === tier).length} ${tier}`).join(', ')
-console.log(`${mons.length} mons, ${Object.keys(MOVE_FX).length} moves (${moves} in movesets), ${Object.keys(EVOLUTIONS).length} evolving mons, ${DEX.length} in the Pokédex (${tiers}): all consistent`)
+console.log(`${mons.length} mons (${SHINYLESS.size} with no shiny sprite), ${Object.keys(MOVE_FX).length} moves (${moves} in movesets), ${Object.keys(EVOLUTIONS).length} evolving mons, ${DEX.length} in the Pokédex (${tiers}): all consistent`)

@@ -1,8 +1,8 @@
 // Grass and bug moves
 
 import {
-  WHITE, back, ball, burst, dark, disc, dot, easeIn, easeInOut, easeOut, emit, ghost, lerp, light,
-  line, mix, phase, plus, puff, ring, rnd, spark, stamp, tint, tremble,
+  WHITE, back, ball, burst, dark, disc, dot, easeIn, easeInOut, easeOut, emit, ghost, glow, lerp, light,
+  hsl, line, luma, mix, phase, plus, puff, ring, rnd, spark, sparkles, stamp, tint, tremble,
 } from './draw.js'
 
 const pt = (x, y) => ({ x, y })
@@ -844,6 +844,1631 @@ function stringshot(out, t, a, g, c) {
   }
 }
 
+const TAU = Math.PI * 2
+const SUN = 0xffe066
+const BARK = 0x7a5230
+
+// A pointed leaf centered on x, y, `len` pixels from its middle to each tip along
+// angle and `wid` at its widest. Bigger leaves get a dark rim and a pale midrib.
+function leaf(out, x, y, angle, len, wid, c, rim = dark(c, 0.55), paint = dot) {
+  const ca = Math.cos(angle)
+  const sa = Math.sin(angle)
+  const inside = (px, py) => {
+    const u = px * ca + py * sa
+    const v = -px * sa + py * ca
+    return Math.abs(u) <= len && Math.abs(v) <= wid * (1 - (u / len) ** 2) + 0.35
+  }
+  const r = Math.ceil(len) + 1
+  const ox = Math.round(x)
+  const oy = Math.round(y)
+  for (let py = -r; py <= r; py++) {
+    for (let px = -r; px <= r; px++) {
+      if (!inside(px, py)) continue
+      const edge = len >= 2.5 && (!inside(px - 1, py) || !inside(px + 1, py) || !inside(px, py - 1) || !inside(px, py + 1))
+      const v = -px * sa + py * ca
+      paint(out, ox + px, oy + py, edge ? rim : Math.abs(v) < 0.5 ? light(c, 0.45) : v < 0 ? light(c, 0.15) : c)
+    }
+  }
+}
+
+// The middle of the sprite's top row, where a sprout or a horn can sit
+function crownAt(g) {
+  let sum = 0
+  let n = 0
+  for (let x = g.left; x <= g.right; x++) {
+    if (g.solid(x, g.top)) {
+      sum += x
+      n++
+    }
+  }
+  return pt(n ? Math.round(sum / n) : g.cx, g.top)
+}
+
+const GIGA_DIG = 3
+const GIGA_LATCH = 14
+const GIGA_PULL = 15
+const GIGA_FULL = 40
+const GIGA_BLOOM = 42
+const GIGA_TICKS = 54
+
+// Root k's path: out of the ground in front of the feet, along the soil, and up out of
+// the ground into the target, the three roots fanning over it
+function gigaRoot(g, k) {
+  const side = g.side
+  const fan = k - 1
+  const foot = pt(g.frontAt(g.bottom) - side * 2, g.ground)
+  const end = pt(g.target.x + side * fan * 2, g.target.y + fan * 2)
+  const p1 = pt(lerp(foot.x, end.x, 0.4), g.ground - (k % 2))
+  const p2 = pt(end.x - side * (3 + fan), g.ground)
+  const len = Math.abs(end.x - foot.x) + (g.ground - end.y)
+  return sample((u) => cubic([foot, p1, p2, end], u), len)
+}
+
+// Three roots burrow under the ground and burst up into the target, then pump its life
+// home in bright pulses while rings of it are sucked inward, and the mon swells and blooms
+function gigadrain(out, t, a, g, c) {
+  const side = g.side
+  const rind = dark(c, 0.55)
+  const core = dark(c, 0.15)
+  const pull = phase(t, GIGA_PULL, GIGA_FULL)
+  const draining = t >= GIGA_PULL && t < GIGA_FULL
+  if (t >= 1 && t < GIGA_DIG + 2) {
+    out.sy = 0.94
+    out.sx = 1.04
+    if (t === GIGA_DIG) out.shake = [0, 1]
+  } else if (draining) {
+    const tug = (t - GIGA_PULL) % 5 < 2
+    out.dx = tug ? -side : 0
+    out.skew = lean(g, -side * (tug ? 2 : 1))
+    out.sx = 1 + 0.06 * pull
+    out.sy = 1 + 0.06 * pull
+  } else if (t >= GIGA_FULL && t < GIGA_TICKS - 1) {
+    const swell = 1 - easeInOut(phase(t, GIGA_BLOOM + 2, GIGA_TICKS - 2))
+    out.sx = 1 + 0.06 * swell
+    out.sy = 1 + 0.06 * swell
+  }
+
+  const grow = easeOut(phase(t, GIGA_DIG, GIGA_LATCH)) * (1 - easeIn(phase(t, GIGA_FULL, GIGA_FULL + 8)))
+  for (let k = 0; k < 3; k++) {
+    const path = gigaRoot(g, k)
+    const n = Math.floor((path.length - 1) * grow)
+    for (let j = 0; j <= n; j++) dot(out, path[j].x, path[j].y, rind)
+    for (let j = 0; j <= n; j++) dot(out, path[j].x, path[j].y - 1, j > n - 2 ? light(c, 0.5) : core)
+    // Dirt kicks up where the growing tip runs along the soil
+    if (t < GIGA_LATCH && n > 0 && path[n].y >= g.ground - 1 && (t + k) % 2) dot(out, path[n].x + side, g.ground - 2, BARK)
+    if (!draining) continue
+    // Pulses run back down each root from the target to the mon
+    for (let b = 0; b < 3; b++) {
+      const u = 1 - ((((t - GIGA_PULL) * 0.07 + b / 3 + k * 0.11) % 1) + 1) % 1
+      const p = path[Math.round(u * (path.length - 1))]
+      plus(out, p.x, p.y - 1, light(c, 0.3), WHITE)
+    }
+  }
+
+  // Rings of life collapse into the target as it is drained
+  if (draining) {
+    const age = (t - GIGA_PULL) % 4
+    const r = 6 - age * 1.4
+    ring(out, g.target.x, g.target.y, r, age < 2 ? light(c, 0.35) : c)
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * TAU + t * 0.2
+      const d = 7 - ((t * 0.9 + i * 1.3) % 7)
+      dot(out, g.target.x + Math.cos(ang) * d, g.target.y + Math.sin(ang) * d * 0.8, d < 2 ? WHITE : light(c, 0.2))
+    }
+    out.shade = tint(light(c, 0.55), 0.1 + 0.18 * pull + ((t - GIGA_PULL) % 5 === 0 ? 0.1 : 0))
+  }
+
+  // The swollen mon blooms: a flash, a ring of light, and leaves flung up off it
+  const bloom = t - GIGA_BLOOM
+  if (bloom >= -2 && bloom < 0) halo(out, g, light(c, 0.3), out.dx)
+  if (bloom >= 0 && bloom < 10) {
+    if (bloom < 2) out.shade = tint(light(c, 0.7), 0.35 - bloom * 0.12)
+    else if (bloom < 6) out.shade = tint(light(c, 0.55), 0.25 * (1 - bloom / 6))
+    if (bloom < 3) halo(out, g, bloom ? c : WHITE, out.dx)
+    if (bloom < 4) ring(out, g.cx, g.cy, (g.right - g.left) / 2 + bloom, bloom < 2 ? WHITE : light(c, 0.3))
+    for (let i = 0; i < 6; i++) {
+      const ang = -Math.PI / 2 + (i - 2.5) * 0.45
+      const d = 2 + bloom * 1.1
+      const x = g.cx + Math.cos(ang) * ((g.right - g.left) / 2 + d)
+      const y = g.top + 2 + Math.sin(ang) * d + bloom * bloom * 0.06
+      if (y > 0 && (bloom < 7 || (t + i) % 2)) leaf(out, x, y, ang + bloom * 0.4, 1.6, 0.8, light(c, 0.15))
+    }
+  }
+}
+
+const SYN_SUN = 2
+const SYN_BEAM = 9
+const SYN_FILL = [13, 36]
+const SYN_BLOOM = 40
+const SYN_TICKS = 54
+
+// Where the sun hangs: high on the mon's far side, inside the strip
+function sunAt(g) {
+  const off = (g.right - g.left) / 2 + 5
+  const far = Math.round(g.cx - g.side * off)
+  const x = far >= 4 && far <= g.columns - 5 ? far : Math.round(g.cx + g.side * off)
+  return pt(Math.max(4, Math.min(g.columns - 5, x)), 4)
+}
+
+// The outermost solid pixels of row y, or the box edges if the row is empty
+function rowEdges(g, y) {
+  let lo = g.right
+  let hi = g.left
+  for (let x = g.left; x <= g.right; x++) {
+    if (!g.solid(x, y)) continue
+    lo = Math.min(lo, x)
+    hi = Math.max(hi, x)
+  }
+  return lo > hi ? [g.left, g.right] : [lo, hi]
+}
+
+// A sun with turning rays, a hot white core and an orange rim
+function sun(out, x, y, r, t) {
+  if (r <= 0) return
+  for (let k = 0; k < 8; k++) {
+    const ang = (k / 8) * TAU + t * 0.12
+    const len = k % 2 ? 1.2 : 2.2
+    for (let d = r + 1; d <= r + len + 0.5; d++) dot(out, x + Math.cos(ang) * d, y + Math.sin(ang) * d, k % 2 ? 0xffb030 : SUN)
+  }
+  disc(out, x, y, r, 0xffb030)
+  disc(out, x, y, r - 0.8, SUN)
+  if (r > 1.5) plus(out, x - 0.5, y - 0.5, light(SUN, 0.6), WHITE)
+}
+
+// A sun rises behind the mon and pours shafts of light onto it. The mon basks, stretching
+// up as green light fills it from the head down, then it unfurls a pair of fresh leaves.
+function synthesis(out, t, a, g, c) {
+  const s = sunAt(g)
+  const r = 2.6 * easeOut(phase(t, SYN_SUN, SYN_SUN + 6)) * (1 - phase(t, SYN_BLOOM + 4, SYN_TICKS - 3))
+  sun(out, s.x, s.y, r, t)
+  const bask = phase(t, SYN_FILL[0] - 2, SYN_FILL[0] + 2) * (1 - easeInOut(phase(t, SYN_BLOOM + 2, SYN_TICKS - 3)))
+  out.dy = -Math.round(bask)
+  out.sy = 1 + 0.04 * bask
+
+  // Shafts of light, their dashes streaming toward the mon, carrying bright motes
+  const aims = [pt(g.left + 1, g.top + 2), pt(g.cx, g.top), pt(g.right - 1, g.top + 2)]
+  const beams = phase(t, SYN_BEAM - 2, SYN_BEAM) * (1 - phase(t, SYN_BLOOM - 2, SYN_BLOOM + 2))
+  if (beams > 0) {
+    for (const [k, p] of aims.entries()) {
+      const len = Math.hypot(p.x - s.x, p.y - s.y)
+      for (let d = r + 3; d < len; d++) {
+        if ((((d - t * 0.8 + k) % 4) + 4) % 4 >= 2 || (beams < 1 && d / len > beams)) continue
+        dot(out, lerp(s.x, p.x, d / len), lerp(s.y, p.y, d / len), d % 2 ? light(SUN, 0.4) : SUN)
+      }
+    }
+  }
+  emit(t, { count: 14, gap: 1.6, start: SYN_BEAM, life: 6 }, (i, age, f) => {
+    const p = aims[i % 3]
+    plus(out, lerp(s.x, p.x, easeIn(f)), lerp(s.y, p.y, easeIn(f)), SUN, WHITE)
+  })
+
+  // The light fills the body from the head down, a bright line leading it
+  const fill = lerp(g.top - 1, g.bottom + 2, easeInOut(phase(t, ...SYN_FILL)))
+  const settle = 1 - phase(t, SYN_BLOOM + 2, SYN_TICKS - 3)
+  if (t >= SYN_FILL[0] && settle > 0) {
+    const pulse = 0.08 * Math.sin(t * 0.7)
+    const flash = t >= SYN_BLOOM && t < SYN_BLOOM + 2
+    out.shade = (x, y, col) => {
+      if (luma(col) < 60) return col
+      if (flash) return mix(col, light(c, 0.6), 0.5)
+      const at = y - out.dy
+      if (Math.abs(at - fill) < 1.2) return mix(col, light(SUN, 0.3), 0.7)
+      return at < fill ? mix(col, light(c, 0.2), (0.22 + pulse) * settle) : col
+    }
+  }
+
+  // Fresh leaves unfurl on both shoulders and twinkle
+  const bloom = t - SYN_BLOOM
+  if (bloom >= 0 && t < SYN_TICKS - 2) {
+    const len = 1 + 2 * easeOut(phase(bloom, 0, 5))
+    const fade = phase(t, SYN_TICKS - 8, SYN_TICKS - 2)
+    const row = g.top + Math.round((g.bottom - g.top) * 0.3)
+    const [lo, hi] = rowEdges(g, row)
+    for (const d of [-1, 1]) {
+      const x = d < 0 ? lo : hi
+      const y = row + out.dy - len * 0.6
+      if (fade < 0.6 || t % 2) leaf(out, x + d * len * 0.7, y, d < 0 ? -Math.PI + 0.7 : -0.7, len, len * 0.45, c)
+    }
+    if (bloom < 8) sparkles(out, t, a.seed, g.cx, g.top + 4, g.right - g.left + 6, 8, light(c, 0.3), 4)
+  }
+}
+
+const ROOT_DIG = 6
+const ROOT_SPREAD = [7, 20]
+const ROOT_FEED = 20
+const ROOT_SPROUT = 34
+const ROOT_FADE = 42
+const INGRAIN_TICKS = 52
+const ROOT_COUNT = 6
+
+// Root k: from under the feet it wanders out along the soil to one side
+function rootPath(g, a, k) {
+  const dir = k % 2 ? 1 : -1
+  const half = (g.right - g.left) / 2
+  const x0 = g.cx + dir * half * (0.15 + 0.25 * (k >> 1))
+  const len = half * 0.6 + 4 + rnd(a.seed, k, 1) * 5
+  return Array.from({ length: Math.ceil(len) + 1 }, (_, s) => {
+    const wave = Math.sin(s * 0.8 + k * 1.7) > 0.2 ? 1 : 0
+    return pt(x0 + dir * s, g.ground - wave)
+  })
+}
+
+// The mon digs in its heels and roots spread out through the soil around its feet. Sap
+// runs back up them into the mon, and a little sprout pops up on its head.
+function ingrain(out, t, a, g, c) {
+  const wood = mix(c, BARK, 0.7)
+  if (t >= 1 && t < ROOT_DIG) {
+    out.sy = 1 - 0.07 * phase(t, 1, ROOT_DIG - 1)
+    out.sx = 1 + 0.05 * phase(t, 1, ROOT_DIG - 1)
+    out.skew = lean(g, tremble(t))
+  } else if (t >= ROOT_DIG && t < ROOT_DIG + 6) {
+    out.sy = 1 - 0.07 * (1 - easeOut(phase(t, ROOT_DIG, ROOT_DIG + 6)))
+    if (t === ROOT_DIG) out.shake = [0, 1]
+  }
+  const fade = phase(t, ROOT_FADE, INGRAIN_TICKS - 2)
+  const half = (g.right - g.left) / 2
+  let fed = 0
+  for (let k = 0; k < ROOT_COUNT; k++) {
+    const path = rootPath(g, a, k)
+    const grow = easeOut(phase(t, ROOT_SPREAD[0] + k, ROOT_SPREAD[1] + k))
+    const n = Math.floor((path.length - 1) * grow)
+    for (let j = 0; j <= n; j++) {
+      if (fade > 0 && rnd(a.seed, k * 40 + j, 2) < fade) continue
+      const p = path[j]
+      const paint = Math.abs(p.x - g.cx) < half ? back : dot
+      paint(out, p.x, p.y, j >= n - 1 ? light(c, 0.2) : wood)
+      // Rootlets fork off every few pixels
+      if (j % 3 === 2 && j < n - 1) paint(out, p.x, p.y === g.ground ? p.y - 1 : p.y + 1, dark(wood, 0.3))
+    }
+    if (t < ROOT_FEED || t >= ROOT_SPROUT + 2 || n < 2) continue
+    const u = 1 - phase(t, ROOT_FEED + k * 1.5, ROOT_FEED + k * 1.5 + 8)
+    if (u <= 0 || u >= 1) {
+      if (u <= 0 && t < ROOT_FEED + k * 1.5 + 10) fed = 1
+      continue
+    }
+    const p = path[Math.round(u * n)]
+    plus(out, p.x, p.y, light(c, 0.3), WHITE)
+  }
+  if (fed) {
+    out.shade = tint(light(c, 0.5), t % 3 ? 0.1 : 0.2)
+    if (t % 3 === 0) halo(out, g, light(c, 0.3))
+  }
+
+  // A sprout pushes up out of the crown and opens two leaves
+  const crown = crownAt(g)
+  const age = t - ROOT_SPROUT
+  if (age >= 0 && t < INGRAIN_TICKS - 2) {
+    if (age === 0) out.shake = [0, -1]
+    if (age >= 0 && age < 3) out.sy = 1.04
+    const h = Math.min(3, age + 1)
+    const gone = phase(t, INGRAIN_TICKS - 6, INGRAIN_TICKS - 2)
+    if (gone < 0.5 || t % 2) {
+      for (let k = 1; k <= h; k++) dot(out, crown.x, crown.y - k, dark(c, 0.2))
+      const open = easeOut(phase(age, 2, 6))
+      if (open > 0) {
+        leaf(out, crown.x - 1 - open, crown.y - h, -Math.PI + 0.5, 1 + open, 0.6 + open * 0.4, light(c, 0.2))
+        leaf(out, crown.x + 1 + open, crown.y - h - 1, -0.5, 1 + open, 0.6 + open * 0.4, c)
+      }
+      if (age < 4) spark(out, crown.x, crown.y - h - 1, 1, light(c, 0.4))
+    }
+  }
+}
+
+const SPORE_PUFF = 6
+const SPORE_BALLS = 9
+const SPORE_GAP = 1.6
+const SPORE_FLOAT = 15
+const SPORE_SHAKE = 36
+const SPORE_TICKS = 50
+const COTTON = 0xf2f2ea
+
+// A fluffy cotton ball with a grey shadow rim, so it reads on a light background
+function cotton(out, x, y, r, seed, c) {
+  disc(out, x + 0.4, y + 0.5, r, dark(c, 0.4))
+  puff(out, x, y, r, c, seed)
+  dot(out, x - r * 0.4, y - r * 0.4, WHITE)
+}
+
+// The mon shakes out big fluffy cotton balls that bob slowly through the air on a breeze
+// and stick all over the target, which wobbles under the clinging fluff
+function cottonspore(out, t, a, g, c) {
+  const side = g.side
+  if (t >= 1 && t < SPORE_PUFF) {
+    out.skew = lean(g, tremble(t) * 2)
+    out.dx = tremble(t, 2) > 0 ? 0 : -side
+  } else if (t >= SPORE_PUFF && t < SPORE_PUFF + 3) {
+    out.sx = 1.06
+    out.sy = 0.93
+  }
+  const from = pt(g.mouth.x, g.mouth.y)
+  const fluff = mix(c, COTTON, 0.6)
+  const fade = phase(t, SPORE_TICKS - 9, SPORE_TICKS - 2)
+  const jiggle = t >= SPORE_SHAKE && t < SPORE_SHAKE + 5 ? tremble(t) : 0
+  emit(t, { count: SPORE_BALLS, gap: SPORE_GAP, start: SPORE_PUFF, life: 100 }, (i, age) => {
+    if (fade > 0 && rnd(a.seed, i, 7) < fade) return
+    const ang = (i / SPORE_BALLS) * TAU + rnd(a.seed, i, 1)
+    const spot = pt(g.target.x + Math.cos(ang) * 3.5, g.target.y + Math.sin(ang) * 3.5)
+    const r = 1.8 + rnd(a.seed, i, 2) * 1.2
+    if (age < SPORE_FLOAT) {
+      const f = age / SPORE_FLOAT
+      const x = lerp(from.x, spot.x, easeInOut(f))
+      const y = lerp(from.y, spot.y, f) - Math.sin(f * Math.PI) * (3 + rnd(a.seed, i, 3) * 3) + Math.sin(age * 0.6 + i) * 0.8
+      cotton(out, x, Math.max(r, y), Math.min(r, 0.8 + age * 0.4), a.seed + i, fluff)
+      // A wisp trails behind it
+      dot(out, x - side * (r + 1), y + Math.sin(age + i), mix(fluff, 0x9a9aa8, 0.4))
+      return
+    }
+    const stuck = age - SPORE_FLOAT
+    const squish = stuck < 2 ? 0.5 : 0
+    if (stuck === 0 && i === SPORE_BALLS - 1) out.shake = [side, 0]
+    cotton(out, spot.x + jiggle, spot.y + Math.sin(stuck * 0.3 + i) * 0.4, r + squish, a.seed + i, fluff)
+  })
+
+  // Loose fibers float around the clump
+  if (t >= SPORE_PUFF + SPORE_FLOAT && fade < 1) {
+    for (let k = 0; k < 4; k++) {
+      const ang = rnd(a.seed, k, 9) * TAU + t * 0.08
+      const d = 6 + Math.sin(t * 0.3 + k) * 1.5
+      if ((t + k) % 4) dot(out, g.target.x + Math.cos(ang) * d, g.target.y + Math.sin(ang) * d * 0.7, mix(fluff, 0x9a9aa8, 0.5))
+    }
+  }
+}
+
+const MAGIC_RISE = 5
+const MAGIC_LEAVES = 5
+const MAGIC_HOVER = 13
+const MAGIC_GAP = 3
+const MAGIC_FLIGHT = 10
+
+// Where magic leaf i hovers in a fan over the mon before it flies
+function hoverAt(g, i, t) {
+  const ang = -Math.PI / 2 + (i - (MAGIC_LEAVES - 1) / 2) * 0.5 * g.side
+  const rx = (g.right - g.left) / 2 + 3
+  const ry = (g.bottom - g.top) / 2 + 3
+  return pt(g.cx + Math.cos(ang) * rx, Math.max(2, g.cy + Math.sin(ang) * ry) + Math.sin(t * 0.5 + i) * 0.7)
+}
+
+// Where leaf i is on its flight: a loop-the-loop out of the fan, then a curve into the target
+function magicPath(g, i, f) {
+  const from = hoverAt(g, i, MAGIC_HOVER + i * MAGIC_GAP)
+  const to = pt(g.target.x, g.target.y + ((i % 3) - 1) * 2)
+  const over = pt(lerp(from.x, to.x, 0.5), Math.max(1, Math.min(from.y, to.y) - 5))
+  const p = bend(from, over, to, easeIn(f))
+  const loop = Math.max(0, 1 - f * 1.6)
+  return pt(p.x + Math.sin(f * TAU * 1.5) * 3 * loop * g.side, Math.max(1, p.y - (1 - Math.cos(f * TAU * 1.5)) * 2 * loop))
+}
+
+const magicHue = (t, i) => hsl((t * 0.05 + i * 0.2) % 1, 0.9, 0.62)
+
+// The mon glows and conjures a fan of shimmering leaves over its head. One by one they
+// loop the loop and home in on the target in rainbow trails, each landing with a twinkle.
+function magicalleaf(out, t, a, g, c) {
+  const side = g.side
+  if (t >= 1 && t < MAGIC_RISE + 2) {
+    out.dy = -1
+    out.shade = tint(light(c, 0.6), 0.2 + 0.1 * (t % 2))
+  }
+  for (let i = 0; i < MAGIC_LEAVES; i++) {
+    const born = MAGIC_RISE + i
+    const launch = MAGIC_HOVER + i * MAGIC_GAP
+    const age = t - launch
+    if (t === launch) {
+      out.dx = side
+      out.skew = lean(g, side)
+    }
+    if (t >= born && t < launch) {
+      const grow = phase(t, born, born + 3)
+      const p = hoverAt(g, i, t)
+      const from = pt(g.cx, g.cy)
+      const x = lerp(from.x, p.x, easeOut(grow))
+      const y = lerp(from.y, p.y, easeOut(grow))
+      leaf(out, x, y, -Math.PI / 2 + Math.sin(t * 0.4 + i) * 0.6, 1.5 + grow * 1.5, 1.3, c, magicHue(t, i))
+      if ((t + i) % 3 === 0) dot(out, x + side * 2, y - 2, WHITE)
+    } else if (age >= 0 && age < MAGIC_FLIGHT) {
+      const f = age / MAGIC_FLIGHT
+      for (let j = 5; j >= 1; j--) {
+        const q = magicPath(g, i, Math.max(0, f - j * 0.05))
+        if ((j + t) % 2 || j < 3) dot(out, q.x, q.y, j < 2 ? WHITE : magicHue(t - j, i))
+      }
+      const p = magicPath(g, i, f)
+      const q = magicPath(g, i, Math.min(1, f + 0.05))
+      leaf(out, p.x, p.y, Math.atan2(q.y - p.y, q.x - p.x), 3, 1.3, c, magicHue(t, i))
+    } else if (age >= MAGIC_FLIGHT && age < MAGIC_FLIGHT + 5) {
+      const hit = magicPath(g, i, 1)
+      const k = age - MAGIC_FLIGHT
+      spark(out, hit.x, hit.y, [2, 3, 2, 1, 0][k], magicHue(t, i))
+      if (k < 2) ring(out, hit.x, hit.y, 2 + k * 1.5, k ? magicHue(t, i + 2) : WHITE)
+      if (k === 0) out.shake = [i === MAGIC_LEAVES - 1 ? side : 0, 0]
+    }
+  }
+  const after = t - (MAGIC_HOVER + (MAGIC_LEAVES - 1) * MAGIC_GAP + MAGIC_FLIGHT + 2)
+  if (after >= 0 && after < 8) sparkles(out, t, a.seed, g.target.x, g.target.y, 10, 8, magicHue(t, 0), 4)
+}
+
+// A screen angle from one measured toward the target, 0 straight at it and negative up
+const facing = (angle, side) => (side > 0 ? angle : Math.PI - angle)
+
+const BLADE_GROW = 7
+const BLADE_DASH = 11
+const BLADE_SWING = 14
+const BLADE_HOLD = 19
+const BLADE_HOME = 31
+const BLADE_UP = -Math.PI / 2 - 0.5
+const BLADE_DOWN = 1.0
+
+// How far the dash has carried the mon toward the target
+function bladeDash(t, far) {
+  if (t < BLADE_GROW) return t >= 2 ? -1 : 0
+  if (t < BLADE_DASH) return Math.round(lerp(-1, far, easeIn(phase(t, BLADE_GROW, BLADE_DASH))))
+  if (t < BLADE_HOLD) return far
+  return Math.round(far * (1 - easeInOut(phase(t, BLADE_HOLD, BLADE_HOME))))
+}
+
+// The blade's angle: raised back over the head, then swept down through the target
+function bladeAngle(t) {
+  if (t < BLADE_DASH) return BLADE_UP
+  return lerp(BLADE_UP, BLADE_DOWN, easeOut(phase(t, BLADE_DASH, BLADE_SWING)))
+}
+
+// A long glowing leaf grows from the mon's front like a sword. It dashes in, brings the
+// blade down in one wide crescent, and the target splits along a bright diagonal cut.
+function leafblade(out, t, a, g, c) {
+  const side = g.side
+  const height = g.bottom - g.top
+  const len = Math.max(3, Math.min(6, height * 0.3))
+  const far = Math.max(2, Math.min(g.reach - Math.round(len) - 3, 8))
+  out.dx = side * bladeDash(t, far)
+  if (t >= BLADE_GROW && t < BLADE_DASH) out.ghosts = [1, 2].map((k) => ghost(side * bladeDash(t - k, far), 0, light(c, 0.3), 0.4 + 0.2 * k))
+  if (t >= 2 && t < BLADE_DASH) out.skew = lean(g, -side)
+  else if (t >= BLADE_DASH && t < BLADE_SWING + 2) out.skew = lean(g, side * 2)
+  const handY = g.mouth.y + 2
+  const hand = pt(g.frontAt(handY) + out.dx + (out.skew ? Math.round(out.skew(handY)) : 0) - side, handY)
+  const shrink = 1 - phase(t, BLADE_HOLD + 2, BLADE_HOME - 2)
+  const size = len * easeOut(phase(t, 2, BLADE_GROW)) * shrink
+
+  // The crescent of the swing, fading behind the blade
+  if (t >= BLADE_DASH + 1 && t < BLADE_SWING + 4) {
+    const fade = phase(t, BLADE_SWING, BLADE_SWING + 4)
+    const to = bladeAngle(t)
+    for (let ang = BLADE_UP; ang <= to; ang += 0.12) {
+      const p = toward(ang, side)
+      const r = len * 2
+      if (fade > 0 && rnd(a.seed, Math.round(ang * 30), t) < fade) continue
+      dot(out, hand.x + p.x * r, hand.y + p.y * r, WHITE)
+      dot(out, hand.x + p.x * (r - 1), hand.y + p.y * (r - 1), light(c, 0.4))
+      dot(out, hand.x + p.x * (r - 2), hand.y + p.y * (r - 2), dark(c, 0.1))
+    }
+  }
+  if (size > 0.8) {
+    const ang = bladeAngle(t)
+    const p = toward(ang, side)
+    const glint = t >= BLADE_GROW - 1 && t < BLADE_GROW + 1
+    leaf(out, hand.x + p.x * size, hand.y + p.y * size, facing(ang, side), size, size * 0.3 + 0.4, glint ? light(c, 0.5) : c)
+    if (glint) spark(out, hand.x + p.x * size * 2, hand.y + p.y * size * 2, 2, light(c, 0.4))
+  }
+
+  // The cut: a white diagonal that splits into two halves sliding apart
+  const cut = t - BLADE_SWING
+  const tx = g.target.x
+  const ty = g.target.y
+  if (cut >= 0 && cut < 9) {
+    const spread = cut < 2 ? 0 : (cut - 1) * 0.6
+    const fade = cut > 5
+    for (const half of [-1, 1]) {
+      const ox = side * spread * half * 0.6
+      const oy = -spread * half * 0.4
+      const x0 = tx - side * (half < 0 ? 4 : 0) + ox
+      const y0 = ty - (half < 0 ? 5 : 0) + oy
+      const x1 = tx + side * (half < 0 ? 0 : 4) + ox
+      const y1 = ty + (half < 0 ? 0 : 5) + oy
+      if (fade && cut % 2) continue
+      line(out, x0 + side, y0, x1 + side, y1, light(c, 0.3))
+      line(out, x0, y0, x1, y1, cut < 3 ? WHITE : light(c, 0.55))
+    }
+    if (cut === 0) {
+      out.shake = [side * 2, 1]
+      burst(out, tx, ty, 4, light(c, 0.5))
+    } else if (cut === 1) out.shake = [-side, 0]
+    // Torn leaf bits fly off the cut
+    for (let i = 0; i < 4; i++) {
+      const ang = -Math.PI / 2 + (rnd(a.seed, i, 4) - 0.5) * 2.4
+      const d = 1 + cut * (0.8 + rnd(a.seed, i, 5) * 0.5)
+      if (cut > 0) dot(out, tx + Math.cos(ang) * d, ty + Math.sin(ang) * d + cut * cut * 0.06, i % 2 ? light(c, 0.2) : dark(c, 0.2))
+    }
+  }
+}
+
+const STORM_GATHER = 14
+const STORM_RECOIL = 17
+const STORM_BLAST = 18
+const STORM_END = 40
+const STORM_TICKS = 60
+const STORM_LEAVES = 64
+const STORM_FLY = 7
+
+// Leaf i of the storm, in one of four shades
+const stormTone = (c, i) => [light(c, 0.35), c, mix(c, 0xd8e860, 0.45), dark(c, 0.15)][i % 4]
+
+// Leaves spiral in and swirl around the mon as it rises, then it lets loose a roaring river
+// of leaves that widens as it pummels the target, bracing against the recoil, and the
+// spent leaves flutter down around the target
+function leafstorm(out, t, a, g, c) {
+  const side = g.side
+  const rx = (g.right - g.left) / 2 + 3
+  const ry = (g.bottom - g.top) / 2 + 2
+  if (t >= 2 && t < STORM_GATHER) {
+    const f = phase(t, 2, STORM_GATHER)
+    out.dy = -Math.round(f)
+    out.sy = 1 + 0.05 * f
+    out.shade = tint(light(c, 0.5), 0.12 * f)
+  } else if (t >= STORM_GATHER && t < STORM_RECOIL) {
+    out.dx = -side
+    out.sx = 1.05
+    out.sy = 0.94
+  } else if (t >= STORM_RECOIL && t < STORM_END) {
+    out.dx = -side * (t % 3 === 0 ? 2 : 1)
+    out.skew = lean(g, -side * 2)
+    out.shake = [t % 2 ? 1 : -1, t % 4 === 0 ? 1 : 0]
+  } else if (t >= STORM_END && t < STORM_END + 6) {
+    out.dx = -side
+    out.skew = lean(g, -side)
+  }
+
+  // The gathering swirl, closing in round the mon
+  emit(t, { count: 18, gap: 0.6, start: 1, life: (i) => STORM_GATHER + 3 - i * 0.6 }, (i, age, f) => {
+    const ang = rnd(a.seed, i, 1) * TAU + age * 0.45
+    const r = lerp(2.2, 1, easeIn(f))
+    const x = g.cx + Math.cos(ang) * rx * r
+    const y = g.cy + Math.sin(ang) * ry * r * 0.8
+    const front = Math.sin(ang) > 0
+    if (y >= 1 && y < g.ground) leaf(out, x, y, ang + Math.PI / 2, 1.6, 0.8, front ? stormTone(c, i) : dark(c, 0.35), undefined, front ? dot : back)
+  })
+
+  // The river of leaves: each flies a wavering path that fans out as it nears the target
+  const mouth = pt(g.mouth.x + out.dx + (out.skew ? Math.round(out.skew(g.mouth.y)) : 0), g.mouth.y)
+  const dist = Math.abs(g.target.x - mouth.x) + 4
+  emit(t, { count: STORM_LEAVES, gap: (STORM_END - STORM_BLAST) / STORM_LEAVES, start: STORM_BLAST, life: STORM_FLY }, (i, age, f) => {
+    const lane = (rnd(a.seed, i, 2) - 0.5) * 2
+    const x = mouth.x + side * dist * f
+    const y = lerp(mouth.y, g.target.y, f) + lane * (1 + f * 6) + Math.sin(f * 7 + i) * 1.2
+    if (y < 1 || y > g.ground) return
+    leaf(out, x, y, facing(f * 6 + i, side), 1.6, 0.8, stormTone(c, i))
+  })
+  // Streaks of wind ride the river
+  if (t >= STORM_BLAST && t < STORM_END) {
+    for (let k = 0; k < 4; k++) {
+      const f = ((t * 0.18 + k * 0.27) % 1)
+      const x = mouth.x + side * dist * f
+      const y = lerp(mouth.y, g.target.y, f) + (k - 1.5) * (2 + f * 4)
+      for (let d = 0; d < 4; d++) dot(out, x - side * d, y, d ? light(c, 0.55) : WHITE)
+    }
+    // The target takes a flurry of hits
+    const hx = g.target.x + (rnd(a.seed, t, 6) - 0.5) * 6
+    const hy = g.target.y + (rnd(a.seed, t, 7) - 0.5) * 6
+    if (t > STORM_BLAST + STORM_FLY - 2) spark(out, hx, hy, t % 2 ? 2 : 1, light(c, 0.4))
+  }
+
+  // Spent leaves flutter down and settle away
+  emit(t, { count: 14, gap: 0.8, start: STORM_END - 4, life: 18 }, (i, age, f) => {
+    const x = g.target.x + (rnd(a.seed, i, 8) - 0.5) * 14 + Math.sin(age * 0.5 + i) * 1.5
+    const y = g.target.y - 4 + (rnd(a.seed, i, 9) - 0.5) * 6 + age * 0.55
+    if (y < g.ground && (f < 0.7 || (t + i) % 2)) leaf(out, x, y, Math.sin(age * 0.4 + i) * 1.2, 1.5, 0.7, stormTone(c, i))
+  })
+}
+
+const WHISTLE_LIP = 4
+const WHISTLE_PLAY = 9
+const WHISTLE_STOP = 40
+const WHISTLE_DOZE = 24
+const WHISTLE_TICKS = 52
+const ZED = ['zzzz', '..z.', '.z..', 'zzzz']
+
+// The mon raises a blade of grass to its lips and sways as it plays. A soft, rolling
+// ribbon of melody carries little leaf notes over to the target, which nods off in Zs.
+function grasswhistle(out, t, a, g, c) {
+  const side = g.side
+  const live = phase(t, WHISTLE_LIP, WHISTLE_PLAY) * (1 - phase(t, WHISTLE_STOP, WHISTLE_STOP + 6))
+  if (live > 0) {
+    out.skew = lean(g, Math.sin(t * 0.35) * 1.5 * live)
+    out.dy = -Math.round(Math.max(0, Math.sin(t * 0.35)) * live)
+  }
+  const lips = pt(g.mouth.x + (out.skew ? Math.round(out.skew(g.mouth.y)) : 0), g.mouth.y + out.dy + 1)
+  if (t >= 2 && t < WHISTLE_STOP + 4) {
+    const buzz = t >= WHISTLE_PLAY ? tremble(t) * 0.3 : 0
+    leaf(out, lips.x + side * 1.5, lips.y + buzz, facing(0.2, side), 2, 0.7, c)
+  }
+
+  // The ribbon: a rolling wave drawn up to how far the tune has carried
+  const from = lips.x + side * 3
+  const to = g.target.x
+  const span = Math.abs(to - from)
+  const carried = span * easeOut(phase(t, WHISTLE_PLAY, WHISTLE_PLAY + 10))
+  const tail = span * easeIn(phase(t, WHISTLE_STOP - 4, WHISTLE_STOP + 4))
+  const amp = 1.5 + 1.2 * Math.sin(t * 0.2)
+  const waveY = (d) => lerp(lips.y, g.target.y - 2, d / Math.max(1, span)) + Math.sin(d * 0.55 - t * 0.6) * amp * Math.min(1, d / 4)
+  for (let d = Math.floor(tail); d <= carried; d++) {
+    const x = from + side * d
+    const y = waveY(d)
+    const band = ((Math.floor(d - t * 0.6) % 6) + 6) % 6
+    dot(out, x, y + 1, dark(c, 0.45))
+    dot(out, x, y, band < 2 ? WHITE : band < 4 ? light(c, 0.4) : c)
+  }
+  // Leaf notes ride the wave
+  emit(t, { count: 8, gap: 3.5, start: WHISTLE_PLAY + 2, life: 12 }, (i, age, f) => {
+    const d = f * span
+    if (d > carried || d < tail) return
+    const x = from + side * d
+    const y = waveY(d) - 3
+    leaf(out, x, y, facing(-0.6 + Math.sin(age * 0.6) * 0.4, side), 1.6, 0.8, i % 2 ? light(c, 0.2) : c)
+    dot(out, x + side, y + 1, dark(c, 0.4))
+    dot(out, x + side, y + 2, dark(c, 0.4))
+  })
+
+  // The target dozes: Zs float up from it, growing as they drift
+  emit(t, { count: 4, gap: 5, start: WHISTLE_DOZE, life: 14 }, (i, age, f) => {
+    if (f > 0.8 && t % 2) return
+    const x = g.target.x + side * (1 + age * 0.3) + Math.sin(age * 0.5 + i) * 1.2
+    const y = g.target.y - 4 - age * 0.6
+    if (y < 1) return
+    const col = mix(c, 0x9ad0ff, 0.6)
+    for (const [ox, oy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) stamp(out, x - 2 + ox, y - 2 + oy, ZED, { z: dark(col, 0.6) })
+    stamp(out, x - 2, y - 2, ZED, { z: f < 0.3 ? WHITE : col })
+  })
+}
+
+const AROMA_BLOOM = [3, 14]
+const AROMA_WAFT = 12
+const AROMA_BREATH = [22, 32]
+const AROMA_TICKS = 52
+const FLOWER = ['.p.', 'pyp', '.p.']
+
+// Little flowers sprout and open round the mon's feet. Curling ribbons of scent rise off
+// them and wind up around it, and it draws a long, calm breath and glows softly.
+function aromatherapy(out, t, a, g, c) {
+  const width = g.right - g.left
+  const count = width > 14 ? 5 : 4
+  const wither = phase(t, AROMA_TICKS - 9, AROMA_TICKS - 2)
+  const spots = Array.from({ length: count }, (_, k) => {
+    const u = count > 1 ? k / (count - 1) : 0.5
+    return pt(Math.round(g.left - 3 + u * (width + 6)), g.ground)
+  })
+  spots.forEach((p, k) => {
+    const grow = easeOut(phase(t, AROMA_BLOOM[0] + k * 2, AROMA_BLOOM[0] + k * 2 + 6))
+    if (grow <= 0 || (wither > 0 && rnd(a.seed, k, 3) < wither)) return
+    const h = Math.round(1 + grow * 2)
+    const stem = mix(c, 0x4caa48, 0.75)
+    const paint = p.x > g.left + 1 && p.x < g.right - 1 ? back : dot
+    for (let d = 1; d < h; d++) paint(out, p.x, p.y - d + 1, stem)
+    if (grow < 0.6) paint(out, p.x, p.y - h, light(c, 0.3))
+    else stamp(out, p.x - 1, p.y - h - 1, FLOWER, { p: k % 2 ? c : light(c, 0.3), y: SUN }, false, paint)
+  })
+
+  // Scent ribbons: a curl of dots rising and swaying off each flower
+  emit(t, { count: 16, gap: 1.6, start: AROMA_WAFT, life: 16 }, (i, age, f) => {
+    if (t > AROMA_TICKS - 6) return
+    const p = spots[i % count]
+    const rise = age * 1.1
+    for (let j = 0; j < 4; j++) {
+      const y = p.y - 4 - rise + j * 1.2
+      const x = p.x + Math.sin((rise - j) * 0.45 + i) * 2.2 + (g.cx - p.x) * f * 0.3
+      if (y < 1) continue
+      const col = j === 0 ? WHITE : j === 1 ? light(c, 0.45) : mix(c, 0xb08ae0, 0.4)
+      if (f < 0.75 || (t + j) % 2) dot(out, x, y, col)
+    }
+  })
+
+  // The breath: a slow swell up and a soft pink glow that ebbs away
+  const inhale = easeInOut(phase(t, AROMA_BREATH[0] - 6, AROMA_BREATH[0])) * (1 - easeInOut(phase(t, AROMA_BREATH[1], AROMA_BREATH[1] + 8)))
+  out.sy = 1 + 0.05 * inhale
+  out.sx = 1 + 0.02 * inhale
+  out.dy = -Math.round(inhale)
+  const calm = phase(t, AROMA_BREATH[0] - 4, AROMA_BREATH[0]) * (1 - phase(t, AROMA_BREATH[1], AROMA_TICKS - 4))
+  if (calm > 0) {
+    out.shade = glow(light(c, 0.4), 0.25 * calm + (t % 6 < 3 ? 0.05 : 0))
+    if (t >= AROMA_BREATH[0] && t < AROMA_BREATH[1] && t % 4 < 2) halo(out, g, light(c, 0.2), 0, out.dy)
+  }
+  if (t >= AROMA_BREATH[1] - 2 && t < AROMA_BREATH[1] + 10) sparkles(out, t, a.seed, g.cx, g.top + 2, width + 6, 8, c, 4)
+}
+
+const ORB_GATHER = 3
+const ORB_FIRE = 15
+const ORB_HIT = 25
+const ORB_TICKS = 44
+
+// A sphere of green energy with a dark rim, a lit face and two motes spinning round it
+function energy(out, x, y, r, t, c) {
+  ring(out, x, y, r + 0.6, dark(c, 0.5))
+  ball(out, x, y, r, c)
+  disc(out, x - r * 0.3, y - r * 0.3, r * 0.35, light(c, 0.6))
+  for (let k = 0; k < 2; k++) {
+    const ang = t * 0.8 + k * Math.PI
+    dot(out, x + Math.cos(ang) * (r + 1.5), y + Math.sin(ang) * (r + 1.5) * 0.6, k ? WHITE : light(c, 0.5))
+  }
+}
+
+// Motes of light swirl in and pack into a growing sphere before the mouth. The mon thrusts
+// it out, the ball rolls through the air and bursts on the target in rings and shards.
+function energyball(out, t, a, g, c) {
+  const side = g.side
+  const height = g.bottom - g.top
+  const big = Math.max(2, Math.min(3.5, height * 0.18))
+  if (t >= 1 && t < ORB_FIRE) {
+    out.dx = -side
+    out.skew = lean(g, -side)
+    if (t > ORB_FIRE - 4) out.shade = tint(light(c, 0.5), 0.15)
+  } else if (t >= ORB_FIRE && t < ORB_FIRE + 3) {
+    out.dx = side
+    out.skew = lean(g, side * 2)
+  }
+  const hold = pt(g.ahead(Math.ceil(big) + 1), g.mouth.y + 1)
+  const tx = g.target.x
+  const ty = g.target.y
+
+  // Motes spiral in to the forming ball
+  emit(t, { count: 16, gap: 0.7, start: ORB_GATHER, life: 6 }, (i, age, f) => {
+    const ang = rnd(a.seed, i, 1) * TAU + f * 2
+    const d = (big + 6) * (1 - easeIn(f))
+    plus(out, hold.x + Math.cos(ang) * d, hold.y + Math.sin(ang) * d * 0.8, f < 0.5 ? c : light(c, 0.4), WHITE)
+  })
+  if (t >= ORB_GATHER + 2 && t < ORB_FIRE) energy(out, hold.x, hold.y, big * easeOut(phase(t, ORB_GATHER + 2, ORB_FIRE - 2)), t, c)
+
+  if (t >= ORB_FIRE && t < ORB_HIT) {
+    const f = phase(t, ORB_FIRE, ORB_HIT)
+    const at = (u) => pt(lerp(hold.x, tx, easeIn(u)), lerp(hold.y, ty, u) - Math.sin(u * Math.PI) * 1.5)
+    for (let j = 3; j >= 1; j--) {
+      const q = at(Math.max(0, f - j * 0.08))
+      disc(out, q.x, q.y, big * (1 - j * 0.22), j === 1 ? light(c, 0.2) : dark(c, 0.15 * j))
+    }
+    const p = at(f)
+    energy(out, p.x, p.y, big, t, c)
+  }
+
+  // The burst: a white flash, two rings racing out, and shards of energy
+  const hit = t - ORB_HIT
+  if (hit >= 0 && hit < 12) {
+    if (hit < 2) disc(out, tx, ty, big + 1 + hit, hit ? light(c, 0.6) : WHITE)
+    if (hit < 7) {
+      ring(out, tx, ty, big + 1 + hit * 1.6, hit < 3 ? WHITE : light(c, 0.3))
+      if (hit > 1) ring(out, tx, ty, big + hit * 0.9, c)
+    }
+    for (let i = 0; i < 8; i++) {
+      const ang = (i / 8) * TAU + rnd(a.seed, i, 2) * 0.4
+      const d = big + 1 + hit * (1.1 + rnd(a.seed, i, 3) * 0.6)
+      const x = tx + Math.cos(ang) * d
+      const y = ty + Math.sin(ang) * d * 0.8
+      if (hit < 9 || (t + i) % 2) {
+        dot(out, x, y, hit < 4 ? light(c, 0.5) : c)
+        dot(out, x - Math.cos(ang), y - Math.sin(ang) * 0.8, dark(c, 0.2))
+      }
+    }
+    if (hit === 0) out.shake = [side * 2, 1]
+    else if (hit === 1) out.shake = [-side, 0]
+  }
+}
+
+const WHIP_SPIN = [2, 16]
+const WHIP_SLAM = 21
+const WHIP_REST = 26
+const WHIP_HOME = 34
+const WHIP_TICKS = 46
+
+// Where the heavy vine's tip is: whirled round overhead, brought down onto the target,
+// left lying there quivering, then hauled back in
+function whipTip(t, root, hit, r, side) {
+  const hub = pt(root.x - side, Math.max(r * 0.8 + 1, root.y - r - 2))
+  const spin = (f) => {
+    const ang = -Math.PI / 2 + 0.6 + f * TAU * 1.5
+    return pt(hub.x + Math.cos(ang) * r * side, hub.y + Math.sin(ang) * r * 0.8)
+  }
+  if (t < WHIP_SPIN[0]) return null
+  if (t < WHIP_SPIN[1]) return spin(easeIn(phase(t, WHIP_SPIN[0], WHIP_SPIN[1])))
+  const cock = spin(1)
+  if (t <= WHIP_SLAM) {
+    const s = phase(t, WHIP_SPIN[1], WHIP_SLAM) ** 2
+    return bend(cock, pt(lerp(cock.x, hit.x, 0.7), 1), hit, s)
+  }
+  if (t < WHIP_REST) return pt(hit.x, hit.y + (t % 2 ? 0 : -1))
+  if (t >= WHIP_HOME) return null
+  const f = easeInOut(phase(t, WHIP_REST, WHIP_HOME))
+  return pt(lerp(hit.x, root.x, f), lerp(hit.y, root.y, f) - Math.sin(f * Math.PI) * 3)
+}
+
+// A thick vine path from root to tip that bows upward
+function whipPath(root, tip) {
+  const len = Math.hypot(tip.x - root.x, tip.y - root.y)
+  const ctrl = pt((root.x + tip.x) / 2, Math.max(0, Math.min(root.y, tip.y) - len * 0.25))
+  return sample((u) => bend(root, ctrl, tip, u), len * 1.3)
+}
+
+// One huge vine uncoils and whirls round over the mon's head, gathering speed, then
+// smashes straight down onto the target, cracking the ground and spraying dirt
+function powerwhip(out, t, a, g, c) {
+  const side = g.side
+  const height = g.bottom - g.top
+  const r = Math.max(4, Math.min(7, height * 0.4))
+  const top = a.from === 'top' && g.crown
+  const spinning = t >= WHIP_SPIN[0] && t < WHIP_SPIN[1]
+  if (spinning) out.skew = lean(g, Math.round(Math.sin(easeIn(phase(t, ...WHIP_SPIN)) * TAU * 1.5) * 1.5) * side)
+  else if (t >= WHIP_SPIN[1] && t <= WHIP_SLAM) {
+    out.dx = side
+    out.skew = lean(g, side * 3)
+  } else if (t > WHIP_SLAM && t < WHIP_SLAM + 3) {
+    out.sy = 0.93
+    out.sx = 1.05
+  }
+  const base = top ? pt(g.crown.x, g.crown.y + 1) : pt(g.mouth.x - side * 2, g.mouth.y)
+  const root = pt(base.x + out.dx + (out.skew ? Math.round(out.skew(base.y)) : 0), base.y)
+  const hit = pt(g.target.x, Math.min(g.ground - 2, g.target.y + 1))
+  const tip = whipTip(t, root, hit, r, side)
+  // A swoosh traces where the tip has just been
+  if (t > WHIP_SPIN[0] + 2 && t <= WHIP_SLAM) {
+    for (let k = 1; k <= 8; k++) {
+      const q = whipTip(t - k * 0.3, root, hit, r, side)
+      if (q) dot(out, q.x, q.y, k < 3 ? WHITE : k < 6 ? light(c, 0.5) : light(c, 0.2))
+    }
+  }
+  if (tip) {
+    if (spinning || (t > WHIP_SPIN[1] && t <= WHIP_SLAM)) {
+      const prev = whipTip(t - 1, root, hit, r, side)
+      if (prev) for (const p of whipPath(root, prev)) dot(out, p.x, p.y, mix(c, 0x9fb8a0, 0.55))
+    }
+    const path = whipPath(root, tip)
+    vine(out, path.map((p) => pt(p.x, p.y + 1)), dark(c, 0.35))
+    vine(out, path, c)
+  }
+
+  // The slam: a heavy flash, cracks in the ground, and dirt thrown both ways
+  const slam = t - WHIP_SLAM
+  if (slam >= 0 && slam < 14) {
+    if (slam < 3) burst(out, hit.x, hit.y, [6, 7, 4][slam], slam ? light(c, 0.3) : WHITE)
+    if (slam === 0) out.shake = [side * 2, 2]
+    else if (slam === 1) out.shake = [-side, 1]
+    else if (slam === 2) out.shake = [side, 0]
+    if (slam < 10) {
+      for (const d of [-1, 1]) {
+        for (let k = 0; k < 4; k++) {
+          const x = hit.x + d * (2 + k * 1.5)
+          if (k <= slam) dot(out, x, g.ground - (k % 2), dark(BARK, 0.3))
+        }
+      }
+    }
+    for (let i = 0; i < 8; i++) {
+      const d = i % 2 ? 1 : -1
+      const vx = d * (0.5 + rnd(a.seed, i, 1) * 0.9)
+      const vy = -(0.9 + rnd(a.seed, i, 2) * 0.9)
+      const x = hit.x + d * 2 + vx * slam
+      const y = g.ground - 1 + vy * slam + 0.12 * slam * slam
+      if (y <= g.ground && slam > 0) dot(out, x, y, i % 3 ? BARK : light(BARK, 0.3))
+    }
+  }
+}
+
+const WORRY_SHOOT = 5
+const WORRY_LAND = 13
+const WORRY_FRET = [17, 38]
+const WORRY_TICKS = 42
+const BURR = [
+  ['.s.', 'sbs', '.s.'],
+  ['s.s', '.b.', 's.s'],
+]
+const SWEAT = 0x8ad0ff
+
+// The mon flicks a spiky little seed that whirls onto the target's head and sprouts.
+// A tangled scribble of worry churns over it while beads of sweat fly off.
+function worryseed(out, t, a, g, c) {
+  const side = g.side
+  if (t >= 1 && t < WORRY_SHOOT) {
+    out.dx = -side
+    out.skew = lean(g, -side)
+  } else if (t >= WORRY_SHOOT && t < WORRY_SHOOT + 2) {
+    out.dx = side
+    out.skew = lean(g, side * 2)
+  }
+  const head = pt(g.target.x, Math.max(4, g.target.y - 5))
+  const seedCol = { s: dark(c, 0.45), b: mix(c, BARK, 0.6) }
+  if (t >= WORRY_SHOOT && t < WORRY_LAND) {
+    const f = phase(t, WORRY_SHOOT, WORRY_LAND)
+    const from = pt(g.mouth.x + side, g.mouth.y)
+    const x = lerp(from.x, head.x, f)
+    const y = lerp(from.y, head.y, f) - Math.sin(f * Math.PI) * 4
+    dot(out, x - side * 2, y + 1, light(c, 0.3))
+    stamp(out, x - 1, y - 1, BURR[t % 2], seedCol)
+  }
+  const land = t - WORRY_LAND
+  if (land >= 0 && t < WORRY_TICKS - 2) {
+    if (land < 2) spark(out, head.x, head.y, 2 - land, light(c, 0.4))
+    if (land === 0) out.shake = [0, 1]
+    const h = Math.min(2, land)
+    const gone = t > WORRY_TICKS - 6 && t % 2
+    if (!gone) {
+      stamp(out, head.x - 1, head.y, BURR[0], seedCol)
+      for (let k = 1; k <= h; k++) dot(out, head.x, head.y - k, dark(c, 0.15))
+      if (land >= 2) {
+        leaf(out, head.x - 1, head.y - h - 1, -Math.PI + 0.6, 1.4, 0.7, c)
+        leaf(out, head.x + 1, head.y - h - 1, -0.6, 1.4, 0.7, light(c, 0.2))
+      }
+    }
+  }
+
+  // The worry: a looping scribble that churns above the head
+  const fret = phase(t, WORRY_FRET[0], WORRY_FRET[0] + 4) * (1 - phase(t, WORRY_FRET[1] - 3, WORRY_FRET[1]))
+  if (fret > 0) {
+    const cy = Math.max(4, head.y - 7)
+    const ink = mix(0xb09ad8, c, 0.15)
+    let prev = null
+    for (let k = 0; k <= 48 * fret; k++) {
+      const u = k / 48
+      const x = head.x + Math.sin(u * TAU * 3 + t * 0.5) * 4.5 * fret + Math.sin(u * 17) * 0.8
+      const y = Math.max(1, cy + Math.sin(u * TAU * 2 + t * 0.4) * 2.8 * fret)
+      if (prev) line(out, prev.x, prev.y, x, y, k % 6 ? ink : WHITE)
+      prev = pt(x, y)
+    }
+    // Shiver marks on both sides of the target
+    if (t % 4 < 2) {
+      for (const d of [-1, 1]) {
+        const x = g.target.x + d * 6 + (t % 2 ? d : 0)
+        line(out, x, g.target.y - 2, x + d, g.target.y, ink)
+      }
+    }
+  }
+  emit(t, { count: 6, gap: 3, start: WORRY_FRET[0] + 1, life: 7 }, (i, age) => {
+    const d = i % 2 ? 1 : -1
+    const x = head.x + d * (3 + age * 0.9)
+    const y = head.y - 1 - age * 0.6 + age * age * 0.08
+    dot(out, x, y, WHITE)
+    dot(out, x, y + 1, SWEAT)
+    dot(out, x + d, y + 1, dark(SWEAT, 0.3))
+  })
+}
+
+const TWISTER_SPIN = [2, 14]
+const TWISTER_GO = 14
+const TWISTER_ARRIVE = 21
+const TWISTER_BREAK = 40
+const TWISTER_TICKS = 52
+const TWISTER_LEAVES = 20
+
+// The mon twirls on the spot and flings out a whirling column of leaves. It skates over
+// the ground onto the target and spins there as a roaring funnel, then flings apart.
+function leaftornado(out, t, a, g, c) {
+  const side = g.side
+  if (t >= TWISTER_SPIN[0] && t < TWISTER_SPIN[1]) {
+    out.flipX = Math.floor(t / 3) % 2 === 1
+    out.skew = lean(g, (Math.floor(t / 3) % 2 ? 1 : -1) * side)
+    out.dy = t % 3 === 1 ? -1 : 0
+  } else if (t >= TWISTER_GO && t < TWISTER_GO + 3) {
+    out.dx = side
+    out.skew = lean(g, side * 2)
+  }
+  const start = pt(g.ahead(2), g.ground)
+  const sway = Math.sin(t * 0.3) * 1.2
+  const travel = easeInOut(phase(t, TWISTER_GO, TWISTER_ARRIVE))
+  const base = pt(lerp(start.x, g.target.x, travel) + (t >= TWISTER_ARRIVE ? sway : 0), g.ground)
+  const full = Math.max(10, Math.min(g.ground - 1, g.ground - g.target.y + 9))
+  const grow = t < TWISTER_GO ? easeOut(phase(t, 4, TWISTER_GO)) * 0.45 : lerp(0.45, 1, phase(t, TWISTER_GO, TWISTER_ARRIVE + 2))
+  const height = full * grow
+  const breaking = phase(t, TWISTER_BREAK, TWISTER_BREAK + 8)
+  const radius = (h) => 0.8 + h * 0.45
+  if (t >= 4 && t < TWISTER_BREAK) {
+    // Wind bands round the funnel, their dashes turning
+    for (let k = 1; k <= 4; k++) {
+      const h = (height * k) / 4.5
+      const r = radius(h)
+      for (let j = 0; j < 10; j++) {
+        const ang = (j / 10) * TAU + t * 0.7 + k
+        if ((j + k) % 3 === 0) continue
+        const front = Math.sin(ang) > 0
+        dot(out, base.x + Math.cos(ang) * r, base.y - h + Math.sin(ang) * 1.1, front ? (j % 3 === 1 ? WHITE : light(c, 0.55)) : dark(c, 0.35))
+      }
+    }
+    // Dust kicked up round the foot
+    for (let k = 0; k < 3; k++) dot(out, base.x + Math.sin(t * 0.9 + k * 2) * 3, g.ground - (k % 2), BARK)
+  }
+  for (let i = 0; i < TWISTER_LEAVES; i++) {
+    const h = rnd(a.seed, i, 1) * height
+    const ang = rnd(a.seed, i, 2) * TAU + t * (0.6 + rnd(a.seed, i, 3) * 0.3)
+    const r = radius(h)
+    let x = base.x + Math.cos(ang) * r
+    let y = base.y - h + Math.sin(ang) * 0.7
+    if (t < 4 || height < 1) continue
+    if (breaking > 0) {
+      // Thrown out of the funnel on the way it was turning
+      const fly = (t - TWISTER_BREAK) * (0.8 + rnd(a.seed, i, 4) * 0.6)
+      x += -Math.sin(ang) * fly * 1.5
+      y += fly * 0.3 + 0.04 * fly * fly
+      if (y > g.ground || rnd(a.seed, i, 5) < breaking - 0.3) continue
+    }
+    const front = Math.sin(ang) > 0
+    leaf(out, x, y, ang * 2, 1.3, 0.7, front ? stormTone(c, i) : dark(c, 0.3))
+  }
+  if (t >= TWISTER_ARRIVE && t < TWISTER_BREAK && (t - TWISTER_ARRIVE) % 4 === 0) out.shake = [t % 8 ? side : -side, 0]
+}
+
+const NEEDLE_WIND = 6
+const NEEDLE_JABS = [9, 16]
+const NEEDLE_TICKS = 34
+
+// How far the spiked arm reaches on its jabs, from 0 to 1
+function armReach(t) {
+  for (const hit of NEEDLE_JABS) {
+    if (t >= hit - 3 && t <= hit) return easeIn(phase(t, hit - 3, hit))
+    if (t > hit && t < hit + 3) return 1 - phase(t, hit, hit + 3)
+  }
+  return 0
+}
+
+// A thick green arm bristling with white-tipped needles, from the hand to its reach
+function spikedArm(out, hand, len, side, c) {
+  for (let d = 0; d <= len; d++) {
+    const x = hand.x + side * d
+    const tip = d >= len - 1
+    dot(out, x, hand.y - 1, tip ? light(c, 0.4) : light(c, 0.25))
+    dot(out, x, hand.y, tip ? light(c, 0.6) : c)
+    dot(out, x, hand.y + 1, dark(c, 0.4))
+    if (d % 2 === 1 && d < len - 1) {
+      const up = d % 4 === 1 ? -1 : 1
+      dot(out, x, hand.y + up * 2, light(c, 0.1))
+      dot(out, x - side, hand.y + up * 3, WHITE)
+    }
+  }
+}
+
+// The mon draws back a cactus-like arm, then jabs it out twice in quick punches. Each one
+// lands with a spray of needles, and a few stay stuck in the target.
+function needlearm(out, t, a, g, c) {
+  const side = g.side
+  const reach = armReach(t)
+  if (t >= 1 && t < NEEDLE_WIND) {
+    out.dx = -side
+    out.skew = lean(g, -side * 2)
+  } else if (reach > 0) {
+    out.dx = Math.round(side * reach * 2)
+    out.skew = lean(g, side * 2 * reach)
+  } else if (t >= NEEDLE_WIND && t < NEEDLE_JABS[1] + 3) out.dx = -side
+  const handY = g.mouth.y + 2
+  const hand = pt(g.frontAt(handY) + out.dx - side, handY)
+  const full = Math.max(3, Math.abs(g.target.x - hand.x) - 2)
+  const len = Math.round(lerp(2, full, reach))
+  if (t >= 2 && t < NEEDLE_JABS[1] + 5) spikedArm(out, hand, t < NEEDLE_WIND ? Math.min(2, t - 1) : len, side, c)
+
+  for (const [k, hit] of NEEDLE_JABS.entries()) {
+    const age = t - hit
+    if (age < 0 || age >= 8) continue
+    const at = pt(hand.x + side * (full + 1), hand.y)
+    if (age === 0) {
+      out.shake = [side * (k + 1), k]
+      plus(out, at.x, at.y, light(c, 0.5), WHITE)
+    }
+    if (age < 3) ring(out, at.x, at.y, 2 + age * (1 + k), age ? light(c, 0.4) : WHITE)
+    for (let i = 0; i < 6 + k * 2; i++) {
+      const ang = facing((i / (6 + k * 2) - 0.5) * 2.6, side)
+      const d = 2 + age * 1.2
+      const x = at.x + Math.cos(ang) * d
+      const y = at.y + Math.sin(ang) * d
+      if (age < 6) line(out, x, y, x + Math.cos(ang), y + Math.sin(ang), (i + age) % 2 ? WHITE : light(c, 0.5))
+    }
+  }
+  // Needles left stuck in the target
+  if (t >= NEEDLE_JABS[0] && t < NEEDLE_TICKS - 3) {
+    for (let i = 0; i < 4; i++) {
+      if (t > NEEDLE_TICKS - 8 && (t + i) % 2) continue
+      const x = g.target.x + (rnd(a.seed, i, 1) - 0.5) * 6
+      const y = g.target.y + (rnd(a.seed, i, 2) - 0.5) * 6
+      dot(out, x, y, WHITE)
+      dot(out, x - side, y, light(c, 0.3))
+    }
+  }
+}
+
+const HAMMER_ROOT = 10
+const HAMMER_LEAP = 10
+const HAMMER_SLAM = 17
+const HAMMER_RECOIL = 23
+const HAMMER_HOME = 40
+const HAMMER_TICKS = 50
+
+// How far forward and up the mon is as it leaps in, slams, and hops back home
+function hammerPath(t, far) {
+  if (t < HAMMER_LEAP) return pt(t >= 3 ? -1 : 0, -Math.round(easeOut(phase(t, 3, HAMMER_LEAP)) * 2))
+  if (t < HAMMER_SLAM) {
+    const f = phase(t, HAMMER_LEAP, HAMMER_SLAM)
+    return pt(Math.round(lerp(-1, far, easeInOut(f))), -Math.round(2 + Math.sin(f * Math.PI) * 4 - f * 2))
+  }
+  if (t < HAMMER_RECOIL) return pt(far - (t - HAMMER_SLAM > 1 ? 1 : 0), t === HAMMER_SLAM + 2 ? -1 : 0)
+  const f = phase(t, HAMMER_RECOIL, HAMMER_HOME)
+  return pt(Math.round((far - 1) * (1 - easeInOut(f))), -Math.round(Math.sin(f * Math.PI) * 2))
+}
+
+// The mon's body hardens into grained wood. It rears, leaps in a heavy arc and crashes
+// down on the target in a burst of splinters, then reels from the recoil, red-faced.
+function woodhammer(out, t, a, g, c) {
+  const side = g.side
+  const far = Math.max(2, Math.min(g.reach - 4, 9))
+  const p = hammerPath(t, far)
+  out.dx = side * p.x
+  out.dy = p.y
+  if (t >= 3 && t < HAMMER_LEAP) out.skew = lean(g, -side * 2, out.dy)
+  else if (t >= HAMMER_LEAP && t < HAMMER_SLAM) out.skew = lean(g, side * Math.round(lerp(-2, 4, phase(t, HAMMER_LEAP, HAMMER_SLAM))), out.dy)
+  if (t === HAMMER_SLAM || t === HAMMER_SLAM + 1) {
+    out.sy = 0.9
+    out.sx = 1.08
+  }
+  if (t >= HAMMER_LEAP && t < HAMMER_SLAM) out.ghosts = [ghost(side * hammerPath(t - 2, far).x, hammerPath(t - 2, far).y, dark(c, 0.2), 0.6)]
+
+  // Wood grain spreads over the body, then fades once the mon is home
+  const wood = easeOut(phase(t, 1, HAMMER_ROOT)) * (1 - phase(t, HAMMER_HOME - 4, HAMMER_TICKS - 2))
+  const recoil = t >= HAMMER_SLAM + 1 && t < HAMMER_RECOIL + 4
+  if (wood > 0) {
+    out.shade = (x, y, col) => {
+      if (luma(col) < 50) return col
+      const grain = ((y + Math.round(Math.sin(x * 0.7) * 1.2)) % 3 + 3) % 3
+      const tone = grain === 0 ? dark(c, 0.3) : grain === 1 ? c : light(c, 0.2)
+      const k = mix(col, tone, 0.55 * wood)
+      return recoil && t % 2 ? mix(k, 0xff4a3a, 0.4) : k
+    }
+  }
+
+  const hit = pt(g.target.x, Math.min(g.ground - 2, g.target.y))
+  const slam = t - HAMMER_SLAM
+  if (slam >= 0 && slam < 14) {
+    if (slam < 3) burst(out, hit.x, hit.y, [5, 7, 4][slam], slam ? light(c, 0.4) : WHITE)
+    if (slam === 0) out.shake = [side * 2, 2]
+    else if (slam === 1) out.shake = [-side * 2, 1]
+    else if (slam === 2) out.shake = [side, 0]
+    // Splinters spin off in all directions and fall
+    for (let i = 0; i < 9; i++) {
+      const ang = -Math.PI / 2 + (rnd(a.seed, i, 1) - 0.5) * 3
+      const speed = 0.9 + rnd(a.seed, i, 2) * 0.9
+      const x = hit.x + Math.cos(ang) * speed * slam
+      const y = hit.y + Math.sin(ang) * speed * slam + 0.1 * slam * slam
+      if (y > g.ground || slam === 0) continue
+      const flat = (slam + i) % 3
+      const tone = i % 2 ? light(c, 0.25) : dark(c, 0.2)
+      dot(out, x, y, tone)
+      dot(out, x + (flat === 0 ? 1 : flat === 1 ? 0 : side), y + (flat === 1 ? 1 : 0), dark(tone, 0.3))
+    }
+  }
+  // The recoil stings: little red jolt marks over the mon
+  if (recoil) {
+    const top = g.top + out.dy
+    for (const d of [-1, 1]) {
+      const x = g.cx + out.dx + d * ((g.right - g.left) / 2 + 1)
+      if (t % 2) line(out, x, top + 1, x + d * 2, top - 1, 0xff4a3a)
+      else plus(out, x + d, top, 0xff6a5a, WHITE)
+    }
+  }
+}
+
+const GUARD_WRAP = [3, 16]
+const GUARD_SINK = [16, 26]
+const GUARD_SHED = 38
+const GUARD_TICKS = 50
+const GUARD_PUFFS = 12
+
+// Where cotton puff i settles on the mon's outline
+function guardSpot(g, i) {
+  const ang = (i / GUARD_PUFFS) * TAU - Math.PI / 2
+  const rx = (g.right - g.left) / 2 + 1
+  const ry = (g.bottom - g.top) / 2 + 1
+  return pt(g.cx + Math.cos(ang) * rx, Math.min(g.ground - 1, g.cy + Math.sin(ang) * ry))
+}
+
+// Cotton puffs whirl in and pile up around the mon into a thick, soft cushion. It sinks
+// into the fluff and bounces softly, glowing white, then the cotton loosens and floats away.
+function cottonguard(out, t, a, g, c) {
+  const fluff = mix(c, COTTON, 0.6)
+  const sink = phase(t, GUARD_SINK[0], GUARD_SINK[1])
+  if (t >= GUARD_SINK[0] && t < GUARD_SINK[1] + 6) {
+    const bob = Math.sin(sink * Math.PI * 2) * (1 - phase(t, GUARD_SINK[1], GUARD_SINK[1] + 6))
+    out.sy = 1 - 0.07 * Math.abs(bob) - 0.03 * (1 - sink)
+    out.sx = 1 + 0.05 * Math.abs(bob)
+  }
+  const snug = phase(t, GUARD_SINK[0], GUARD_SINK[0] + 4) * (1 - phase(t, GUARD_SHED - 2, GUARD_SHED + 4))
+  if (snug > 0) out.shade = glow(WHITE, 0.25 * snug)
+  if (t >= GUARD_SINK[1] && t < GUARD_SINK[1] + 3) halo(out, g, WHITE)
+
+  for (let i = 0; i < GUARD_PUFFS; i++) {
+    const born = GUARD_WRAP[0] + i * ((GUARD_WRAP[1] - GUARD_WRAP[0] - 5) / GUARD_PUFFS)
+    const age = t - born
+    if (age < 0) continue
+    const spot = guardSpot(g, i)
+    const r = 1.6 + rnd(a.seed, i, 1) * 1
+    const fly = phase(age, 0, 6)
+    // Each puff spirals in from far out on its own side
+    const ang = (i / GUARD_PUFFS) * TAU + (1 - fly) * 2.5
+    const d = (1 - easeOut(fly)) * 10
+    let x = spot.x + Math.cos(ang) * d
+    let y = spot.y + Math.sin(ang) * d * 0.6
+    let size = r * (0.5 + 0.5 * fly)
+    if (t >= GUARD_SHED) {
+      const drift = t - GUARD_SHED - rnd(a.seed, i, 2) * 3
+      if (drift > 0) {
+        x += Math.sin(drift * 0.4 + i) * 1.2 + (spot.x - g.cx) * drift * 0.04
+        y -= drift * 0.7
+        size *= 1 - drift / 12
+      }
+    } else if (fly >= 1) size += sink > 0 && sink < 1 && (t + i) % 4 < 2 ? 0.4 : 0
+    if (size < 0.6 || y < 1) continue
+    const paint = Math.sin(((i / GUARD_PUFFS) * TAU) - Math.PI / 2) < -0.2 ? dot : y > g.cy ? dot : back
+    if (paint === back) {
+      disc(out, x, y, size + 0.5, dark(fluff, 0.4), back)
+      puff(out, x, y, size, fluff, a.seed + i, back)
+    } else cotton(out, x, y, size, a.seed + i, fluff)
+  }
+  if (t >= GUARD_SINK[1] && t < GUARD_SHED) sparkles(out, t, a.seed, g.cx, g.cy, g.right - g.left + 6, g.bottom - g.top + 4, light(fluff, 0.2), 3)
+}
+
+const BOMB_HOLD = 3
+const BOMB_THROW = 9
+const BOMB_BLAST = 19
+const BOMB_TICKS = 44
+const SHELL = 0x8a5a2e
+const SMOKE = 0x8a8478
+
+// A big hard seed with a lit face, a dark shell and a green cap
+function bigSeed(out, x, y, spin, c) {
+  disc(out, x, y, 2.2, dark(SHELL, 0.3))
+  disc(out, x - 0.3, y - 0.3, 1.6, SHELL)
+  dot(out, x - 1, y - 1, light(SHELL, 0.4))
+  const ang = spin
+  dot(out, x + Math.cos(ang) * 2, y + Math.sin(ang) * 2, c)
+  dot(out, x + Math.cos(ang) * 2.8, y + Math.sin(ang) * 2.8, light(c, 0.3))
+}
+
+// The mon hoists a big seed over its head and hurls it hard. It spins across in a low
+// arc and goes off on the target in a fiery blast of shrapnel and smoke.
+function seedbomb(out, t, a, g, c) {
+  const side = g.side
+  if (t >= 1 && t < BOMB_THROW) {
+    out.dx = -side
+    out.dy = t >= BOMB_HOLD ? -1 : 0
+    out.skew = lean(g, -side * 2, out.dy)
+  } else if (t >= BOMB_THROW && t < BOMB_THROW + 3) {
+    out.dx = side
+    out.skew = lean(g, side * 3)
+  }
+  const held = pt(g.cx - side * 1 + out.dx, Math.max(3, g.top - 2 + out.dy))
+  const hit = pt(g.target.x, g.target.y)
+  if (t >= BOMB_HOLD && t < BOMB_THROW) bigSeed(out, held.x, held.y, t * 0.4, c)
+  if (t >= BOMB_THROW && t < BOMB_BLAST) {
+    const f = phase(t, BOMB_THROW, BOMB_BLAST)
+    const mid = pt((held.x + hit.x) / 2, Math.max(2, Math.min(held.y, hit.y) - 4))
+    const p = bend(held, mid, hit, f)
+    const q = bend(held, mid, hit, Math.max(0, f - 0.1))
+    dot(out, q.x, q.y, light(c, 0.3))
+    bigSeed(out, p.x, p.y, t * 1.1 * side, c)
+  }
+  const age = t - BOMB_BLAST
+  if (age >= 0 && age < 22) {
+    if (age === 0) disc(out, hit.x, hit.y, 3, WHITE)
+    else if (age < 6) {
+      const fire = [0xffe066, 0xffa030, mix(c, 0xffa030, 0.4)]
+      puff(out, hit.x, hit.y, 2 + age, fire[Math.min(2, age >> 1)], a.seed + age)
+      if (age < 4) ring(out, hit.x, hit.y, 3 + age * 1.5, age < 2 ? WHITE : light(c, 0.3))
+    }
+    if (age === 0) out.shake = [side * 2, 2]
+    else if (age === 1) out.shake = [-side * 2, 1]
+    else if (age === 2) out.shake = [side, 0]
+    // Smoke drifts up off the blast
+    if (age >= 4) {
+      for (let k = 0; k < 3; k++) {
+        const rise = (age - 4) * (0.5 + k * 0.15)
+        const r = 1.5 + (age - 4) * 0.15
+        if (age < 18 || (t + k) % 2) puff(out, hit.x + (k - 1) * 3 + Math.sin(age * 0.3 + k), hit.y - 2 - rise, r, SMOKE, a.seed + k)
+      }
+    }
+    // Shrapnel: shell bits and seeds thrown out under gravity
+    for (let i = 0; i < 10; i++) {
+      const ang = (i / 10) * TAU + rnd(a.seed, i, 1) * 0.5
+      const speed = 1 + rnd(a.seed, i, 2) * 0.8
+      const x = hit.x + Math.cos(ang) * speed * age
+      const y = hit.y + Math.sin(ang) * speed * age * 0.8 + 0.08 * age * age
+      if (age > 0 && age < 12 && y <= g.ground) dot(out, x, y, i % 3 === 0 ? c : i % 2 ? SHELL : light(SHELL, 0.3))
+    }
+  }
+}
+
+const BULLET_FIRST = 4
+const BULLET_COUNT = 10
+const BULLET_GAP = 2
+const BULLET_FLY = 4
+const BULLET_TICKS = 40
+
+// The mon braces and spits a rapid stream of hard seeds, rocking back with each shot.
+// They fly dead straight and pop on the target one after another, casings bouncing off.
+function bulletseed(out, t, a, g, c) {
+  const side = g.side
+  const firing = t >= BULLET_FIRST && t < BULLET_FIRST + BULLET_COUNT * BULLET_GAP
+  const shot = firing && (t - BULLET_FIRST) % BULLET_GAP === 0
+  if (t >= 1 && t < BULLET_FIRST) {
+    out.sy = 0.95
+    out.sx = 1.03
+  } else if (firing) {
+    out.dx = shot ? -side : 0
+    out.skew = lean(g, shot ? -side : 0)
+  }
+  const from = pt(g.mouth.x + out.dx, g.mouth.y)
+  if (shot) {
+    plus(out, from.x + side, from.y, light(c, 0.5), WHITE)
+    dot(out, from.x + side * 2, from.y, light(c, 0.3))
+  }
+  emit(t, { count: BULLET_COUNT, gap: BULLET_GAP, start: BULLET_FIRST, life: BULLET_FLY + 8 }, (i, age) => {
+    const to = pt(g.target.x - side * 2, g.target.y + ((i * 3) % 5) - 2)
+    const start = pt(g.mouth.x + side, g.mouth.y)
+    if (age < BULLET_FLY) {
+      const f = (age + 1) / BULLET_FLY
+      const x = lerp(start.x, to.x, f)
+      const y = lerp(start.y, to.y, f)
+      for (let d = 1; d <= 3; d++) dot(out, x - side * d, lerp(start.y, to.y, Math.max(0, f - d * 0.06)), d === 1 ? light(c, 0.4) : dark(c, 0.2 * d))
+      dot(out, x, y, mix(c, SHELL, 0.4))
+      dot(out, x + side, y, light(c, 0.3))
+      dot(out, x, y + 1, dark(mix(c, SHELL, 0.4), 0.4))
+      return
+    }
+    const pop = age - BULLET_FLY
+    if (pop === 0) {
+      spark(out, to.x, to.y, 2, light(c, 0.4))
+      if (i % 2) out.shake = [side, 0]
+    } else if (pop === 1) ring(out, to.x, to.y, 1.5, light(c, 0.3))
+    // The split casing bounces back off the target
+    const x = to.x - side * pop * 0.7
+    const y = to.y - pop * 0.9 + pop * pop * 0.15
+    if (pop > 0 && y <= g.ground) {
+      dot(out, x, y, SHELL)
+      dot(out, x - side, y + (pop % 2), light(SHELL, 0.3))
+    }
+  })
+}
+
+const KNOT_STOMP = 6
+const KNOT_RUN = [7, 14]
+const KNOT_GROW = [14, 21]
+const KNOT_YANK = 24
+const KNOT_TICKS = 46
+
+// A curling blade of grass from the ground at x0 that arcs over to cross its twin
+function bladeCurve(out, x0, ground, peak, cross, f, c, rim) {
+  const top = pt((x0 + cross.x) / 2, ground - peak)
+  const path = sample((u) => bend(pt(x0, ground), top, cross, u * f), peak + Math.abs(cross.x - x0))
+  path.forEach((p) => dot(out, p.x + 1, p.y, rim))
+  path.forEach((p, k) => dot(out, p.x, p.y, k > path.length - 3 ? light(c, 0.5) : c))
+}
+
+// The mon stomps and a ripple of grass runs along the ground to the target. Two long
+// blades spring up round its feet, tie into a knot and yank tight, tripping it hard.
+function grassknot(out, t, a, g, c) {
+  const side = g.side
+  const rim = dark(c, 0.5)
+  if (t >= 1 && t < KNOT_STOMP) {
+    out.dy = -Math.round(easeOut(phase(t, 1, 4)) * 2)
+    out.skew = lean(g, -side, out.dy)
+  } else if (t >= KNOT_STOMP && t < KNOT_STOMP + 2) {
+    out.sy = 0.92
+    out.sx = 1.05
+    if (t === KNOT_STOMP) out.shake = [0, 1]
+  }
+  const startX = g.ahead(1)
+  const tx = g.target.x
+  // Tufts of grass pop up in a running line
+  if (t >= KNOT_RUN[0] && t < KNOT_YANK + 4) {
+    const run = easeIn(phase(t, ...KNOT_RUN))
+    const steps = Math.abs(tx - startX)
+    for (let d = 0; d <= steps * run; d += 2) {
+      const x = startX + side * d
+      const age = (run * steps - d) / 2
+      const h = age < 1 ? 1 : age < 3 ? 2 : 1
+      for (let k = 0; k < h; k++) dot(out, x, g.ground - k, k ? light(c, 0.3) : dark(c, 0.15))
+    }
+  }
+  const knotY = g.ground - 6
+  const grow = easeOut(phase(t, ...KNOT_GROW))
+  const yank = phase(t, KNOT_YANK, KNOT_YANK + 2)
+  if (t >= KNOT_GROW[0] && t < KNOT_TICKS - 4) {
+    const fade = phase(t, KNOT_TICKS - 12, KNOT_TICKS - 4)
+    if (fade < 0.5 || t % 2) {
+      const pull = yank * 3
+      const y = knotY + pull
+      bladeCurve(out, tx - 5, g.ground, 9 - pull * 2, pt(tx + 2, y), grow, c, rim)
+      bladeCurve(out, tx + 5, g.ground, 9 - pull * 2, pt(tx - 2, y), grow, light(c, 0.15), rim)
+      // The loop of the knot where the blades cross
+      if (grow >= 1) {
+        ring(out, tx, y - 1.5, 1.5, light(c, 0.3))
+        dot(out, tx, y, WHITE)
+      }
+    }
+  }
+  const trip = t - KNOT_YANK - 1
+  if (trip >= 0 && trip < 6) {
+    if (trip === 0) out.shake = [side, 2]
+    else if (trip === 1) out.shake = [0, -1]
+    for (const d of [-1, 1]) {
+      for (let k = 0; k < 3; k++) dot(out, tx + d * (3 + trip + k), g.ground - 1 - Math.max(0, 2 - trip) + (k % 2), k ? BARK : light(BARK, 0.3))
+    }
+    if (trip < 3) burst(out, tx, g.ground - 2, 3 + trip, light(c, 0.4))
+  }
+  // Stars of dizziness circle over the tripped target
+  if (t >= KNOT_YANK + 3 && t < KNOT_TICKS - 4) {
+    for (let k = 0; k < 3; k++) {
+      const ang = t * 0.4 + (k * TAU) / 3
+      const x = tx + Math.cos(ang) * 4
+      const y = Math.max(1, g.target.y - 6 + Math.sin(ang) * 1.2)
+      if ((t + k) % 3) spark(out, x, y, 1, SUN)
+      else dot(out, x, y, SUN)
+    }
+  }
+}
+
+const HORN_GLOW = 7
+const HORN_HIT = 12
+const HORN_SIP = [13, 24]
+const HORN_HOME = 34
+const HORN_TICKS = 46
+
+// How far forward the charge has carried the mon
+function hornDash(t, far) {
+  if (t < HORN_GLOW) return t >= 2 ? -1 : 0
+  if (t < HORN_HIT) return Math.round(lerp(-1, far, easeIn(phase(t, HORN_GLOW, HORN_HIT))))
+  if (t < HORN_SIP[1]) return far
+  return Math.round(far * (1 - easeInOut(phase(t, HORN_SIP[1], HORN_HOME))))
+}
+
+// A tapered horn of light from base along `ang`, thick at the root and sharp at the tip
+function horn(out, base, len, ang, side, c, lit) {
+  const d = toward(ang, side)
+  for (let k = 0; k <= len; k++) {
+    const x = base.x + d.x * k
+    const y = base.y + d.y * k
+    const tip = k >= len - 1
+    dot(out, x, y, tip ? WHITE : lit ? light(c, 0.5) : light(c, 0.2))
+    if (k < len * 0.7) dot(out, x, y + 1, dark(c, 0.3))
+    if (k < len * 0.35) dot(out, x - d.x, y + 1, dark(c, 0.3))
+  }
+}
+
+// The mon lowers its head and a horn of green light grows on its brow. It charges, gores
+// the target, and life streams back up the horn into it before it springs home.
+function hornleech(out, t, a, g, c) {
+  const side = g.side
+  const height = g.bottom - g.top
+  const len = Math.max(3, Math.min(6, height * 0.35))
+  const far = Math.max(2, Math.min(g.reach - Math.round(len) - 1, 8))
+  out.dx = side * hornDash(t, far)
+  if (t >= 2 && t < HORN_GLOW) out.skew = lean(g, -side)
+  else if (t >= HORN_GLOW && t < HORN_HIT + 2) out.skew = lean(g, side * 3)
+  if (t >= HORN_GLOW && t < HORN_HIT) out.ghosts = [1, 2].map((k) => ghost(side * hornDash(t - k, far), 0, light(c, 0.2), 0.45 + 0.2 * k))
+  if (t >= HORN_HIT && t < HORN_HIT + 2) {
+    out.sx = 0.93
+    out.sy = 1.05
+  }
+  const browY = g.top + Math.max(1, Math.round(height * 0.2))
+  const base = pt(g.frontAt(browY) - side + out.dx + (out.skew ? Math.round(out.skew(browY)) : 0), browY)
+  const size = len * easeOut(phase(t, 2, HORN_GLOW)) * (1 - phase(t, HORN_HOME - 2, HORN_HOME + 4))
+  const sipping = t >= HORN_SIP[0] && t < HORN_SIP[1]
+  if (size >= 1) horn(out, base, Math.round(size), -0.35, side, c, sipping && t % 2 === 0)
+
+  const tipAt = pt(base.x + toward(-0.35, side).x * len, base.y + toward(-0.35, side).y * len)
+  const age = t - HORN_HIT
+  if (age >= 0 && age < 5) {
+    burst(out, tipAt.x, tipAt.y, [4, 5, 3, 2, 1][age], age < 2 ? WHITE : light(c, 0.3))
+    if (age === 0) out.shake = [side * 2, 1]
+    else if (age === 1) out.shake = [-side, 0]
+  }
+  // Life runs from the wound up the horn and into the mon
+  const heart = pt(g.cx + out.dx, g.cy)
+  emit(t, { count: 10, gap: 1, start: HORN_SIP[0], life: 6 }, (i, k, f) => {
+    const from = pt(tipAt.x + side * (1 + (i % 3)), tipAt.y + (i % 2 ? 2 : -1))
+    const mid = base
+    const p = f < 0.5 ? pt(lerp(from.x, mid.x, f * 2), lerp(from.y, mid.y, f * 2)) : pt(lerp(mid.x, heart.x, f * 2 - 1), lerp(mid.y, heart.y, f * 2 - 1))
+    plus(out, p.x, p.y, i % 2 ? light(c, 0.3) : c, WHITE)
+  })
+  const fill = phase(t, HORN_SIP[0] + 4, HORN_SIP[1]) * (1 - phase(t, HORN_SIP[1] + 2, HORN_TICKS - 3))
+  if (fill > 0) {
+    out.shade = tint(light(c, 0.55), 0.25 * fill + (t % 4 === 0 ? 0.08 : 0))
+    if (t % 4 < 2 && t < HORN_HOME) halo(out, g, light(c, 0.3), out.dx)
+  }
+  if (t >= HORN_HOME - 4 && t < HORN_TICKS - 2) {
+    for (let k = 0; k < 4; k++) {
+      const x = g.left + rnd(a.seed, k, 6) * (g.right - g.left)
+      const y = g.top + 2 + rnd(a.seed, k, 7) * 4 - (t - HORN_HOME + 4) * 0.6
+      if ((t + k) % 3 && y > 0) plus(out, x, y, c, light(c, 0.6))
+    }
+  }
+}
+
+const FLARE_GATHER = [2, 16]
+const FLARE_BLAST = 17
+const FLARE_WAVE = [19, 31]
+const FLARE_PILLAR = 31
+const FLARE_FADE = 46
+const FLARE_TICKS = 64
+const FLARE_PETAL = 0xfff0b0
+
+// Light seeds stream into the mon as a ring of petals unfolds behind it. It erupts in a
+// blinding flash and a shockwave, a wave of light races along the ground, and a towering
+// column of light bursts up under the target, showering seeds of light.
+function seedflare(out, t, a, g, c) {
+  const side = g.side
+  const charge = phase(t, ...FLARE_GATHER)
+  const rx = (g.right - g.left) / 2 + 3
+  const ry = (g.bottom - g.top) / 2 + 2
+  if (t >= 1 && t < FLARE_BLAST) {
+    out.sy = 1 - 0.06 * charge
+    out.sx = 1 + 0.04 * charge
+    out.shade = tint(light(c, 0.6), 0.35 * charge + (t % 3 === 0 ? 0.1 : 0))
+    if (t > FLARE_BLAST - 5) out.skew = lean(g, tremble(t))
+  } else if (t >= FLARE_BLAST && t < FLARE_BLAST + 3) {
+    out.shade = tint(WHITE, 0.8 - (t - FLARE_BLAST) * 0.25)
+    out.sy = 1.06
+    out.dy = -1
+  } else if (t >= FLARE_BLAST + 3 && t < FLARE_BLAST + 9) out.shade = tint(light(c, 0.6), 0.25 * (1 - phase(t, FLARE_BLAST + 3, FLARE_BLAST + 9)))
+
+  // Petals unfold into a turning ring behind the mon
+  const open = easeOut(phase(t, FLARE_GATHER[0], FLARE_GATHER[0] + 8)) * (1 - phase(t, FLARE_BLAST, FLARE_BLAST + 4))
+  if (open > 0) {
+    for (let k = 0; k < 8; k++) {
+      const ang = (k / 8) * TAU + t * 0.08
+      const x = g.cx + Math.cos(ang) * rx * open
+      const y = g.cy + Math.sin(ang) * ry * open
+      if (y > 0 && y < g.ground) leaf(out, x, y, ang, 2.5 * open + 0.5, 1.2, k % 2 ? FLARE_PETAL : light(c, 0.3), dark(c, 0.4), back)
+    }
+  }
+  emit(t, { count: 20, gap: 0.6, start: FLARE_GATHER[0] + 2, life: 6 }, (i, age, f) => {
+    const ang = rnd(a.seed, i, 1) * TAU
+    const d = (rx + 6) * (1 - easeIn(f))
+    plus(out, g.cx + Math.cos(ang) * d, g.cy + Math.sin(ang) * d * 0.7, f < 0.5 ? c : light(c, 0.5), WHITE)
+  })
+
+  // The flash and shockwave out of the mon
+  const blast = t - FLARE_BLAST
+  if (blast >= 0 && blast < 8) {
+    if (blast < 2) halo(out, g, WHITE, 0, out.dy)
+    ring(out, g.cx, g.cy, rx + blast * 2.5, blast < 3 ? WHITE : light(c, 0.3))
+    if (blast > 1) ring(out, g.cx, g.cy, rx + blast * 2.5 - 2, c)
+    if (blast < 3) out.shake = [blast % 2 ? -side : side, blast ? 0 : 1]
+  }
+
+  // A wave of light runs along the ground, spikes of light leaping up behind its front
+  const tx = g.target.x
+  const startX = g.ahead(1)
+  const span = Math.abs(tx - startX)
+  if (t >= FLARE_WAVE[0] && t < FLARE_WAVE[1] + 2) {
+    const front = span * easeIn(phase(t, ...FLARE_WAVE))
+    for (let d = Math.max(0, front - 8); d <= front; d++) {
+      const x = startX + side * d
+      const h = Math.max(0, 5 - (front - d) * 0.6) * (0.6 + 0.4 * rnd(a.seed, Math.round(d), t))
+      for (let k = 0; k <= h; k++) dot(out, x, g.ground - k, k === Math.floor(h) ? WHITE : k ? light(c, 0.4) : c)
+      if (d === Math.floor(front)) plus(out, x, g.ground - 2, light(c, 0.5), WHITE)
+    }
+  }
+
+  // The pillar of light under the target
+  const pillar = t - FLARE_PILLAR
+  if (pillar >= 0 && t < FLARE_FADE + 8) {
+    const rise = easeOut(phase(pillar, 0, 4))
+    const fade = phase(t, FLARE_FADE, FLARE_FADE + 8)
+    const half = (pillar < 2 ? 1.5 : 2.5 + Math.sin(t * 0.9) * 0.5) * (1 - fade)
+    const topY = lerp(g.ground, 0, rise)
+    for (let y = Math.round(topY); y <= g.ground; y++) {
+      for (let dx = -Math.ceil(half); dx <= Math.ceil(half); dx++) {
+        const edge = Math.abs(dx) >= half - 0.5
+        if (fade > 0 && rnd(a.seed, y * 7 + dx, t) < fade) continue
+        dot(out, tx + dx, y, edge ? light(c, 0.2) : Math.abs(dx) < half * 0.4 ? WHITE : light(c, 0.6))
+      }
+    }
+    if (pillar === 0) out.shake = [side * 2, 2]
+    else if (pillar === 1) out.shake = [-side * 2, 1]
+    else if (pillar < 10 && pillar % 2) out.shake = [pillar % 4 === 1 ? 1 : -1, 0]
+    // Seeds of light shower out of the column
+    emit(t, { count: 16, gap: 0.8, start: FLARE_PILLAR + 1, life: 14 }, (i, age, f) => {
+      const d = i % 2 ? 1 : -1
+      const x = tx + d * (half + age * (0.4 + rnd(a.seed, i, 3) * 0.6))
+      const y = g.ground - 2 - rnd(a.seed, i, 4) * (g.ground - 2) * 0.8 + age * 0.4 + age * age * 0.03
+      if (y > g.ground || (f > 0.7 && t % 2)) return
+      plus(out, x, y, f < 0.4 ? light(c, 0.4) : c, f < 0.5 ? WHITE : light(c, 0.6))
+    })
+  }
+}
+
 export const NATURE = {
   vinewhip: { ticks: 40, color: 0x3fa34d, draw: vinewhip },
   razorleaf: { ticks: 40, color: 0x5cc05c, draw: razorleaf },
@@ -853,4 +2478,25 @@ export const NATURE = {
   leechlife: { ticks: 44, color: 0xff5a6e, draw: leechlife },
   powder: { ticks: 50, color: 0xe8d26a, draw: powder },
   stringshot: { ticks: 40, color: 0xf8f8f8, draw: stringshot },
+  gigadrain: { ticks: GIGA_TICKS, color: 0x5ed85e, draw: gigadrain },
+  synthesis: { ticks: SYN_TICKS, color: 0x9ad84a, pose: { view: 'front' }, draw: synthesis },
+  ingrain: { ticks: INGRAIN_TICKS, color: 0x7fb24a, pose: { view: 'front' }, draw: ingrain },
+  cottonspore: { ticks: SPORE_TICKS, color: COTTON, draw: cottonspore },
+  magicalleaf: { ticks: 46, color: 0x7ad85a, draw: magicalleaf },
+  leafblade: { ticks: 36, color: 0x4ccf5a, draw: leafblade },
+  leafstorm: { ticks: STORM_TICKS, color: 0x58c848, draw: leafstorm },
+  grasswhistle: { ticks: WHISTLE_TICKS, color: 0x8ee07a, draw: grasswhistle },
+  aromatherapy: { ticks: AROMA_TICKS, color: 0xe89ad8, pose: { view: 'front' }, draw: aromatherapy },
+  energyball: { ticks: ORB_TICKS, color: 0x9ee05a, draw: energyball },
+  powerwhip: { ticks: WHIP_TICKS, color: 0x2f9a3e, draw: powerwhip },
+  worryseed: { ticks: WORRY_TICKS, color: 0x9fc85a, draw: worryseed },
+  leaftornado: { ticks: TWISTER_TICKS, color: 0x6ccf4a, draw: leaftornado },
+  needlearm: { ticks: NEEDLE_TICKS, color: 0x5aa84a, draw: needlearm },
+  woodhammer: { ticks: HAMMER_TICKS, color: 0xa8743a, draw: woodhammer },
+  cottonguard: { ticks: GUARD_TICKS, color: COTTON, pose: { view: 'front' }, draw: cottonguard },
+  seedbomb: { ticks: BOMB_TICKS, color: 0x8fbf4a, draw: seedbomb },
+  bulletseed: { ticks: BULLET_TICKS, color: 0x9ccf4a, draw: bulletseed },
+  grassknot: { ticks: KNOT_TICKS, color: 0x5cc05c, draw: grassknot },
+  hornleech: { ticks: HORN_TICKS, color: 0x6cd06c, draw: hornleech },
+  seedflare: { ticks: FLARE_TICKS, color: 0xa8f070, draw: seedflare },
 }

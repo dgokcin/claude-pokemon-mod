@@ -6,8 +6,8 @@
 
 [![CI](https://github.com/dgokcin/claude-pokemon-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/dgokcin/claude-pokemon-mod/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/dgokcin/claude-pokemon-mod)](https://github.com/dgokcin/claude-pokemon-mod/releases)
-![151 Pokémon](https://img.shields.io/badge/Pok%C3%A9mon-151-ffcb05)
-![135 moves](https://img.shields.io/badge/moves-135-ee1515)
+![558 Pokémon](https://img.shields.io/badge/Pok%C3%A9mon-558-ffcb05)
+![527 moves](https://img.shields.io/badge/moves-527-ee1515)
 
 ![A wild Bulbasaur strikes Charmander with Vine Whip, goes weak as Claude works, and gets caught in a Poké Ball](gifs/wild-catch.gif)
 
@@ -42,7 +42,7 @@ Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squir
 - 🎒 **You start with one starter.** Bulbasaur, Charmander, Squirtle, or Pikachu. Every other mon has to be caught.
 - 🌿 **Wild Pokémon show up, and they fight back.** Your work wears them down while they strike your mon with their own moves, and each strike costs it some happiness, more while you leave the foe alone. Once one is weak, `/pokemon catch` fills your Pokédex. Knock it out instead, and now and then it drops an item for your bag.
 - ⚡ **It fights.** 135 moves from gen 1, each with its own pixel animation.
-- 🎨 **All 151 gen 1 Pokémon**, each in default and shiny, and gen 2 to 5 with `/pokemon new`.
+- 🎨 **558 Pokémon from gen 1 to 5**, every one vscode-pokemon has a sprite for, in default and shiny (gen 5 has default sprites only).
 
 ## See it
 
@@ -83,7 +83,7 @@ Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squir
 | `/pokemon feed` | Toss it a berry |
 | `/pokemon revive` | Take a fainted mon to a Pokémon Center |
 | `/pokemon attack [move]` | Use a random move, or a named one like `thunderbolt` |
-| `/pokemon evolve` | Evolve with a stone or a trade, using the item from your bag |
+| `/pokemon evolve` | Evolve with an item or a trade, using what it needs from your bag |
 | `/pokemon bag` | The items wild mons dropped |
 | `/pokemon use <item> [mon]` | Use an item, like `/pokemon use rare candy` |
 | `/pokemon stats` | Level, XP, evolution, and meters |
@@ -94,7 +94,7 @@ Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squir
 | `/pokemon catch` | Throw a Poké Ball at a wild mon |
 | `/pokemon trainer` | Turn trainer mode off to show any mon without catching it, or back on |
 | `/pokemon dex` | Every wild mon you've seen and caught |
-| `/pokemon new <mon>` | Fetch a mon from gen 2 to 5, like `/pokemon new mudkip`, or a random one with `/pokemon new gen3` |
+| `/pokemon new <mon>` | Show a gen 2 to 5 mon you don't have yet, like `/pokemon new mudkip`, or a random one with `/pokemon new gen3` |
 
 <details>
 <summary>All commands</summary>
@@ -113,11 +113,11 @@ Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squir
 | `/pokemon attack <move>` | Use a named move, ignoring case, spaces, and dashes |
 | `/pokemon moves`, `/pokemon attack list` | List the active mon's moves |
 | `/pokemon moves <mon>` | List another mon's moves |
-| `/pokemon evolve` | Evolve with a stone or a trade, which takes that stone or a Link Cable from your bag. Also evolves a mon at its level with autoevolve off, and restarts an evolution you cancelled |
+| `/pokemon evolve` | Evolve with an item or a trade, which takes that item, or a Link Cable and any item the mon trades holding, from your bag. Also evolves a mon at its level with autoevolve off, and restarts an evolution you cancelled |
 | `/pokemon evolve <mon>` | Pick what Eevee becomes, like `/pokemon evolve jolteon` |
-| `/pokemon stop` | Cancel an evolution. A stone or cable it needed stays in your bag |
+| `/pokemon stop` | Cancel an evolution. An item or cable it needed stays in your bag |
 | `/pokemon bag` | List the items in your bag and how many of each, saved across sessions |
-| `/pokemon use <item> [mon]` | Use an item, named loosely, like `thunder stone`, `thunderstone`, or `candy`. A stone or Link Cable on the mon on show is the same as `/pokemon evolve`. Rare Candy raises the mon on show, or a box mon named, one level |
+| `/pokemon use <item> [mon]` | Use an item, named loosely, like `thunder stone`, `thunderstone`, or `candy`. An evolution item or Link Cable on the mon on show is the same as `/pokemon evolve`. Rare Candy raises the mon on show, or a box mon named, one level |
 | `/pokemon revive`, `/pokemon revive <mon>` | Take a fainted mon to a Pokémon Center. Nurse Joy heals it in 5 minutes, and it stands up at 50% food and 30% happiness |
 | `/pokemon nuzlocke` | Toggle nuzlocke (off by default, saved across sessions). On, a mon that faints is gone for good |
 | `/pokemon trainer` | Toggle trainer mode (on by default, saved across sessions). On, `/pokemon <mon>` shows only mons in your box, so the rest have to be caught in the wild. The mons already in your box stay. An empty box, or one whose mons are all gone, picks one starter: Bulbasaur, Charmander, Squirtle, or Pikachu. Mons fetched with `/pokemon new` stay free to show. Off, `/pokemon <mon>` shows any mon |
@@ -134,8 +134,8 @@ Then pick your starter, like `/pokemon charmander`. Bulbasaur, Charmander, Squir
 | `/pokemon party` | List your party, the mons in your box beside the one on show, highest level first, up to 5, and the subagent each one works for. Fainted mons, ones that ran away, and ones lost in a nuzlocke stay out of it |
 | `/pokemon party add <mon>`, `/pokemon party remove <mon>` | Pick your party from your box, up to 5, saved across sessions. Mons come out in the order you added them. The first change starts from the party as it stands, and a mon you take out while it works finishes its subagent first |
 | `/pokemon party assign <agent> <mon>`, `/pokemon party unassign <agent>` | Tie a mon from your box to an agent type, like `explore`, `plan`, or one of your own agents' names, so you can tell which agent is working or done by who steps out (saved across sessions). The mon comes out for that type alone, outside the party of 5, and a mon works for one type at a time, so assigning it again moves it. When it's busy with another subagent of its type, or fainted, that subagent gets the next mon from the party |
-| `/pokemon new <mon>` | Fetch a mon from any generation in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) (gen 1 to 5) and show it. It's saved in the mod's store, so it stays through plugin updates and shows up in every session. Moves come from its types, using gen 1 animations |
-| `/pokemon new random`, `/pokemon new gen<N>` | Fetch a random mon you don't have yet, from gen 2 to 5 or from gen N |
+| `/pokemon new <mon>` | Show a bundled gen 2 to 5 mon you don't have yet, free to show in trainer mode. A mon the mod doesn't bundle is fetched from [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) and saved in the mod's store, so it stays through plugin updates and shows up in every session, with moves from its types |
+| `/pokemon new random`, `/pokemon new gen<N>` | Show a random bundled mon you don't have yet, from gen 2 to 5 or from gen N |
 | `/pokemon nickname <name>` | Nickname the mon, up to 12 characters. It keeps the name when it evolves, and its species name takes the nickname away |
 | `/pokemon release <mon>` | Release a mon from your box. It starts over at its first level with fresh meters |
 | `/pokemon catch` | Throw a Poké Ball at the wild mon. The odds rise as its HP falls |
@@ -303,16 +303,24 @@ and the next level-up tries again. Level, XP, and meters carry over. With
 `/pokemon autoevolve` off, reaching the level only makes the mon ready, and it evolves when
 you run `/pokemon evolve`.
 
-The 19 mons that evolve with a stone or a trade, like Pikachu, Eevee, and Kadabra, need an
-item from your bag. A stone mon needs its stone, like a Thunder Stone for Pikachu, and
-Kadabra, Machoke, Graveler, and Haunter need a Link Cable. `/pokemon evolve`, or
-`/pokemon use thunder stone`, starts the evolution, and the item leaves the bag once it's
-done. Eevee needs a pick, like `/pokemon evolve jolteon`, which takes a Thunder Stone.
-Without the item, it says which one is missing.
+Mons that evolve with an item or a trade, like Pikachu, Eevee, and Kadabra, need an item
+from your bag. A stone mon needs its stone, like a Thunder Stone for Pikachu, and a trade
+needs a Link Cable, plus the item the mon trades holding, like a King's Rock for Poliwhirl
+or a Metal Coat for Onix. Sneasel, Gligar, and Happiny use the Razor Claw, Razor Fang, and
+Oval Stone instead of holding them, the first two at night and Happiny by day, by your
+local clock. `/pokemon evolve`, or `/pokemon use thunder stone`, starts the evolution,
+and the items leave the bag once it's done. Eevee needs a pick, like
+`/pokemon evolve jolteon`, which takes a Thunder Stone. Without an item, it says which
+one is missing.
+
+Friendship evolutions, like Golbat into Crobat and the babies into their next forms, need
+full hearts on a level-up, and Eevee becomes Espeon that way by day and Umbreon at night.
+Mime Jr. and Bonsly need to know Mimic, and Mantyke needs a Remoraid in your party. A
+cancelled one waits for the next level-up that meets its needs.
 
 Items come from wild mons you knock out, and `/pokemon bag` lists them. The first time
 the bag is made, every stone or trade mon already in your box gets one of the item it
-needs, so none is left stranded, and Eevee gets one of each of its three stones.
+needs, so none is left stranded, and Eevee gets one of each of its stones.
 
 Rare Candy raises a mon one level, to the start of the next, with `/pokemon use rare
 candy` for the mon on show or `/pokemon use rare candy <mon>` for one in your box. A
@@ -340,11 +348,11 @@ Smog. An unknown effect plays `impact`.
 | File in `hooks/effects/` | Effects |
 | --- | --- |
 | `beams.js` | `hyperbeam`, `solarbeam`, `psybeam`, `aurorabeam`, `icebeam`, `bubblebeam` |
-| `electric.js` | `thundershock`, `thunderbolt`, `thunder`, `thunderwave` |
-| `fire.js` | `ember`, `flamethrower`, `firespin`, `dragonrage` |
-| `water.js` | `watergun`, `hydropump`, `surf`, `waterfall`, `bubble`, `clamp` |
-| `nature.js` | `vinewhip`, `razorleaf`, `petaldance`, `leechseed`, `drain`, `leechlife`, `powder`, `stringshot` |
-| `poison.js` | `poisonsting`, `twineedle`, `acid`, `sludge`, `gas`, `pinmissile`, `spikecannon` |
+| `electric.js` | `thundershock`, `thunderbolt`, `thunder`, `thunderwave`, `discharge`, `spark`, `charge`, `zapcannon`, `thunderfang`, `shockwave`, `chargebeam`, `magnetrise`, `electroball`, `wildcharge`, `electroweb`, `boltstrike`, `fusionbolt`, `voltswitch` |
+| `fire.js` | `ember`, `flamethrower`, `firespin`, `dragonrage`, `sunnyday`, `firefang`, `flareblitz`, `willowisp`, `flamecharge`, `fireblast`, `flameburst`, `flamewheel`, `incinerate`, `overheat`, `inferno`, `heatcrash`, `heatwave`, `eruption`, `lavaplume`, `blazekick`, `blueflare`, `fierydance`, `fusionflare`, `magmastorm`, `sacredfire`, `searingshot` |
+| `water.js` | `watergun`, `hydropump`, `surf`, `waterfall`, `bubble`, `clamp`, `raindance`, `watersport`, `waterpulse`, `whirlpool`, `aquajet`, `aquaring`, `brine`, `aquatail`, `muddywater`, `waterspout`, `razorshell`, `dive`, `scald`, `soak`, `octazooka` |
+| `nature.js` | `vinewhip`, `razorleaf`, `petaldance`, `leechseed`, `drain`, `leechlife`, `powder`, `stringshot`, `gigadrain`, `synthesis`, `ingrain`, `cottonspore`, `magicalleaf`, `leafblade`, `leafstorm`, `grasswhistle`, `aromatherapy`, `energyball`, `powerwhip`, `worryseed`, `leaftornado`, `needlearm`, `woodhammer`, `cottonguard`, `seedbomb`, `bulletseed`, `grassknot`, `hornleech`, `seedflare` |
+| `poison.js` | `poisonsting`, `twineedle`, `acid`, `sludge`, `gas`, `pinmissile`, `spikecannon`, `toxic`, `gastroacid`, `sludgebomb`, `acidspray`, `clearsmog`, `coil`, `poisonjab`, `poisontail`, `toxicspikes`, `poisonfang`, `venoshock`, `crosspoison`, `gunkshot` |
 | `mind.js` | `confusion`, `psychic`, `kinesis`, `hypnosis`, `nightshade`, `lick`, `confuseray`, `dreameater` |
 | `sound.js` | `screech`, `supersonic`, `growl`, `roar`, `sing`, `lovelykiss` |
 | `charge.js` | `tackle`, `quickattack`, `bodyslam`, `headbutt`, `skullbash`, `takedown`, `rage`, `thrash`, `outrage`, `hornattack`, `horndrill`, `stomp`, `slam` |
@@ -355,6 +363,24 @@ Smog. An unknown effect plays `impact`.
 | `guard.js` | `harden`, `withdraw`, `defensecurl`, `minimize`, `focusenergy`, `meditate`, `amnesia`, `barrier`, `reflect`, `lightscreen`, `acidarmor` |
 | `self.js` | `recover`, `softboiled`, `rest`, `splash`, `teleport`, `transform`, `explosion` |
 | `special.js` | `swift`, `payday`, `triattack`, `eggbomb` |
+| `stares.js` | `leer`, `scaryface`, `tailwhip`, `swagger`, `disable`, `encore`, `odorsleuth`, `foresight`, `sweetscent`, `yawn`, `attract`, `lockon`, `meanlook`, `perishsong`, `captivate`, `tickle`, `psychup`, `block`, `mindreader`, `afteryou`, `painsplit`, `glare`, `entrainment`, `simplebeam`, `teeterdance`, `mefirst` |
+| `boosts.js` | `protect`, `growth`, `swordsdance`, `safeguard`, `helpinghand`, `endure`, `batonpass`, `stockpile`, `swallow`, `workup`, `refresh`, `luckychant`, `recycle`, `howl`, `bellydrum`, `camouflage`, `healbell`, `shellsmash`, `slackoff`, `substitute`, `wish`, `acupressure`, `conversion`, `conversion2`, `morningsun`, `sharpen`, `milkdrink` |
+| `brawl.js` | `doubleedge`, `flail`, `endeavor`, `constrict`, `falseswipe`, `lastresort`, `fakeout`, `retaliate`, `gigaimpact`, `rapidspin`, `facade`, `chipaway`, `rockclimb`, `superfang`, `covet`, `dizzypunch`, `feint`, `crushclaw`, `extremespeed`, `doublehit`, `smellingsalts`, `tailslap`, `crushgrip`, `frustration`, `headcharge`, `return` |
+| `tricks.js` | `bide`, `uproar`, `whirlwind`, `hypervoice`, `hiddenpower`, `spitup`, `naturalgift`, `snore`, `sonicboom`, `naturepower`, `wringout`, `razorwind`, `metronome`, `assist`, `copycat`, `echoedvoice`, `mimic`, `round`, `weatherball`, `sleeptalk`, `judgment`, `sketch`, `technoblast`, `present`, `secretpower` |
+| `psychic.js` | `futuresight`, `psywave`, `calmmind`, `mirrorcoat`, `extrasensory`, `zenheadbutt`, `cosmicpower`, `psyshock`, `synchronoise`, `telekinesis`, `gravity`, `healingwish`, `heartstamp`, `psychocut`, `storedpower`, `lusterpurge`, `mistball`, `psychoboost` |
+| `fairy.js` | `charm`, `sweetkiss`, `moonlight` |
+| `swaps.js` | `imprison`, `healblock`, `wonderroom`, `guardsplit`, `magiccoat`, `powersplit`, `magicroom`, `miracleeye`, `skillswap`, `healpulse`, `roleplay`, `trick`, `guardswap`, `heartswap`, `lunardance`, `powerswap`, `psychoshift`, `trickroom` |
+| `fighting.js` | `detect`, `reversal`, `superpower`, `counter`, `revenge`, `closecombat`, `hammerarm`, `quickguard`, `bulkup`, `focuspunch`, `aurasphere`, `finalgambit`, `vitalthrow`, `circlethrow`, `stormthrow` |
+| `dragon.js` | `dragonbreath`, `dragonclaw`, `dragonpulse`, `dragondance`, `dragonrush`, `dualchop`, `twister`, `dragontail`, `roaroftime`, `spacialrend` |
+| `martial.js` | `jumpkick`, `wakeupslap`, `dynamicpunch`, `armthrust`, `forcepalm`, `sacredsword`, `brickbreak`, `drainpunch`, `machpunch`, `skyuppercut`, `rollingkick`, `lowsweep`, `rocksmash`, `triplekick` |
+| `ghost.js` | `astonish`, `curse`, `ominouswind`, `shadowball`, `hex`, `spite`, `destinybond`, `grudge`, `shadowpunch`, `nightmare`, `shadowsneak`, `shadowclaw`, `shadowforce` |
+| `dark.js` | `crunch`, `feintattack`, `pursuit`, `taunt`, `assurance`, `nastyplot`, `embargo`, `knockoff`, `nightslash`, `torment`, `suckerpunch`, `darkpulse`, `payback`, `snatch`, `flatter`, `honeclaws`, `faketears`, `memento`, `punishment`, `fling`, `foulplay`, `thief`, `nightdaze`, `beatup`, `darkvoid` |
+| `steel.js` | `irondefense`, `metalclaw`, `metalsound`, `ironhead`, `mirrorshot`, `gyroball`, `metalburst`, `autotomize`, `flashcannon`, `geargrind`, `irontail`, `magnetbomb`, `shiftgear`, `meteormash`, `doomdesire`, `heavyslam`, `steelwing` |
+| `ice.js` | `haze`, `icywind`, `powdersnow`, `hail`, `sheercold`, `icefang`, `iceshard`, `avalanche`, `iceball`, `iciclespear`, `glaciate`, `iciclecrash` |
+| `bug.js` | `furycutter`, `bugbite`, `bugbuzz`, `uturn`, `xscissor`, `silverwind`, `megahorn`, `signalbeam`, `spiderweb`, `strugglebug`, `ragepowder`, `steamroller`, `quiverdance`, `tailglow`, `attackorder`, `defendorder`, `healorder` |
+| `ground.js` | `mudslap`, `mudsport`, `sandtomb`, `fissure`, `mudshot`, `earthpower`, `magnitude`, `mudbomb`, `spikes`, `bonerush`, `drillrun`, `bulldoze` |
+| `flying.js` | `airslash`, `mirrormove`, `tailwind`, `bounce`, `aerialace`, `bravebird`, `acrobatics`, `aircutter`, `defog`, `featherdance`, `roost`, `hurricane`, `pluck`, `skydrop`, `aeroblast`, `chatter` |
+| `rock.js` | `ancientpower`, `rollout`, `sandstorm`, `stoneedge`, `rockblast`, `smackdown`, `headsmash`, `rocktomb`, `stealthrock`, `wideguard`, `powergem`, `rockwrecker`, `rockpolish` |
 | `evolve.js` | `evolve`, the evolution sequence |
 | `basic.js` | `impact`, the fallback |
 
@@ -377,7 +403,8 @@ Once another hit could knock the foe out, it's weak, and the mon holds off. Only
 `/pokemon attack` lands the last hit. A foe at 0 HP faints and blinks away, and can't be
 caught, but 1 time in 5 an item pops out of it and goes into your bag. It's usually the
 stone for the foe's type, like a Fire Stone from a Vulpix or a Thunder Stone from a
-Voltorb. About 1 drop in 13 is a Link Cable instead, and 1 in 15 a Rare Candy. A foe with
+Voltorb, or a held item its family evolves with or that fits it, like a Magmarizer from a
+Magmar or a Metal Coat from a Steel type. About 1 drop in 13 is a Link Cable instead, and 1 in 15 a Rare Candy. A foe with
 no stone type, like a Pidgey, only ever drops a Link Cable or Rare Candy.
 Main turns of two minutes or more turn up a Rare Candy 1 time in 10 too.
 Every 10 to 15 s the foe plays one of its own moves at the mon, which flinches and puts
@@ -419,13 +446,17 @@ a narrower one only the smaller foes, and under about 40 columns no encounter co
 <details>
 <summary>Sprites and sizing</summary>
 
-All 151 gen 1 Pokémon are included, plus `pikachu_female` and `venusaur_female`. Names
-match the source folders, so use `mrmime`, `farfetchd`, `nidoran_female`, and
-`nidoran_male`.
+Every gen 1 to 5 Pokémon with a sprite in vscode-pokemon is included, 558 species in 634
+sprites, with forms and genders like `pikachu_female`, `unown_q`, and `rotom_wash` as their
+species' Pokédex entry. Names match the source folders, so use `mrmime`, `farfetchd`,
+`nidoran_female`, `nidoran_male`, and `hooh`, except `mimejr`, `porygonz`, `gothorita`, and
+`mienfoo`, which fix the source's spelling. Most gen 5 mons have no shiny sprite, so they
+show their default colors as shiny and never turn up shiny in the wild. Eyes are marked for
+gen 1, so later mons sleep with their eyes open.
 
 Each terminal cell holds two pixels with `▀`/`▄` half blocks, and the mon paces inside a
 40 column strip. The Desktop app has no cell grid to paint, so it draws the same pixels as
-an SVG, 4 px per pixel, with the level and meters beside it as text. The build crops each 32x32 GIF to the smallest box that fits all its
+an SVG, 4 px per pixel, with the level and meters beside it as text. The build crops each 32x32 GIF (64x64 for the biggest legendaries, Steelix, and Wailord) to the smallest box that fits all its
 frames, so the band height depends on the mon. Diglett is the smallest at 7 rows. Fearow,
 Gyarados, and Pidgeot are the tallest at 17.
 
@@ -492,11 +523,11 @@ with nuzlocke on. Without debug, `wild` and `kill` reply as unknown options.
 
 To try a mon without changing the repo, `/pokemon new <mon>` fetches it at runtime instead. The steps below bundle it, with a hand-picked moveset, evolutions, and eyes that close when it sleeps.
 
-1. Copy the four GIFs from `media/gen<N>/<mon>/` in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) into `sprites/<mon>/`: `default_idle_8fps.gif`, `default_walk_8fps.gif`, `shiny_idle_8fps.gif`, and `shiny_walk_8fps.gif`.
-2. Run `node scripts/build-frames.mjs`.
+1. Copy the four GIFs from `media/gen<N>/<mon>/` in [vscode-pokemon](https://github.com/jakobhoeg/vscode-pokemon/tree/main/media) into `sprites/<mon>/`: `default_idle_8fps.gif`, `default_walk_8fps.gif`, `shiny_idle_8fps.gif`, and `shiny_walk_8fps.gif`. A mon with no shiny GIFs shows its default ones as shiny.
+2. Run `node scripts/build-frames.mjs`, and add the mon to `NATIONAL` in `hooks/dex.js`.
 3. Give it a moveset in `MOVES` in `hooks/moves.js`. Every mon needs at least one move.
 4. If it evolves, add it to `hooks/evolutions.js`. If its name isn't just the key capitalized, add it to `hooks/names.js`.
-5. Mark its eyes on every frame in `EYES` in `hooks/eyes.js`, and check them asleep with `node scripts/preview-sleep.mjs <mon>`.
+5. Mark its eyes on every frame in `EYES` in `hooks/eyes.js` (required for gen 1), and check them asleep with `node scripts/preview-sleep.mjs <mon>`.
 6. Run `node scripts/check-data.mjs`, then `/reload-plugins`.
 
 </details>
@@ -558,8 +589,8 @@ claude --plugin-dir .                            # live-reloading session
 | `hooks/eyes.js` | Each mon's eyes on every frame, shut while it sleeps |
 | `hooks/faint.js` | A fainted mon's frame, X eyes in faded colors, and the dizzy stars over it |
 | `hooks/joy.js` | Nurse Joy and her sparkles while a fainted mon heals |
-| `hooks/frames.js` | Generated pixel frames. Don't edit by hand |
-| `sprites/<mon>/*.gif` | Source GIFs, 32x32 |
+| `hooks/frames.js`, `hooks/frames/*.js` | Generated pixel frames, split under the 1 MiB a hooks module may be. Don't edit by hand |
+| `sprites/<mon>/*.gif` | Source GIFs, 32x32 or 64x64 |
 | `scripts/` | Frame builder, attack, sleep, battle, heal, and party previewers on a stand-in host, data check |
 | `tests/pokemon.test.ts` | `claude plugin test` suite |
 

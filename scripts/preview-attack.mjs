@@ -2,7 +2,7 @@
 
 // Renders a move frame by frame into a PNG contact sheet, so attacks can be
 // tuned without a terminal. It drives the real band renderer in hooks/register.js
-// with the stand-in host in stub-host.mjs.
+// with the stand-in host in stub-host.mjs. The mon doesn't have to know the move.
 //
 // node scripts/preview-attack.mjs <mon> <move> [options]
 //   --at <column>   where the mon stands first (default: home at the right edge)
@@ -18,7 +18,7 @@
 import { parseArgs } from 'node:util'
 import { prepareAttack } from '../hooks/attacks.js'
 import { SPRITES } from '../hooks/frames.js'
-import { movesOf } from '../hooks/moves.js'
+import { MOVE_FX, MOVES, movesOf } from '../hooks/moves.js'
 import { contactSheet, stubHost } from './stub-host.mjs'
 
 const { values: opts, positionals } = parseArgs({
@@ -60,7 +60,12 @@ if (opts.at !== undefined) {
 }
 
 const moveKey = (name) => name.toLowerCase().replace(/[\s\-_'.]/g, '')
-const move = movesOf(mon).find((m) => moveKey(m.name) === moveKey(moveName))
+const knows = () => movesOf(mon).find((m) => moveKey(m.name) === moveKey(moveName))
+
+// Any move with an animation plays on any mon here, so an effect can be tuned on every body
+const taught = Object.keys(MOVE_FX).find((name) => moveKey(name) === moveKey(moveName))
+if (!knows() && taught) MOVES[mon] = [...(MOVES[mon] ?? []), taught]
+const move = knows()
 if (!move) {
   console.error(mon + ' has no move "' + moveName + '". Its moves: ' + movesOf(mon).map((m) => m.name).join(', '))
   process.exit(1)
