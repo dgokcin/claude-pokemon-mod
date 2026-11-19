@@ -112,7 +112,8 @@ export function stampPixel(s, cx, py) {
 
 // The items a knocked out foe drops. A stone is one gem recolored: o rim, b body, h shine,
 // and m its mark, like the Thunder Stone's bolt. Rare Candy is a wrapped sweet (w wrapper,
-// c candy, h shine), and the Link Cable two plugs (k) on a cable (c).
+// c candy, h shine), and the Link Cable two plugs (k) on a cable (c). The held evolution
+// items after the stones each draw the thing they're named for, with h for a shine.
 const STONE = ['.ooo.', 'obhbo', 'obmbo', 'obbbo', '.ooo.']
 const stoneOf = (o, b, m) => ({ rows: STONE, colors: { o, b, m, h: 0xffffff } })
 export const ITEM_ART = {
@@ -121,6 +122,26 @@ export const ITEM_ART = {
   thunderstone: stoneOf(0x2a7a30, 0x58b848, 0xffe040),
   leafstone: stoneOf(0x5a6a20, 0x98b040, 0x2a7a30),
   moonstone: stoneOf(0x30304a, 0x60607e, 0xd8d8f0),
+  sunstone: stoneOf(0xa82818, 0xe85030, 0xffc830),
+  shinystone: stoneOf(0x6a6a88, 0xd0d0e8, 0x78e0f8),
+  duskstone: stoneOf(0x201830, 0x483860, 0xa060c0),
+  dawnstone: stoneOf(0x205860, 0x50b0b8, 0xe8f8ff),
+  icestone: stoneOf(0x3070a0, 0x88c8e8, 0xf0ffff),
+  ovalstone: { rows: ['.ooo.', 'obhbo', 'obbbo', 'obbbo', 'obbbo', '.ooo.'], colors: { o: 0xa89878, b: 0xf0e8d0, h: 0xffffff } },
+  kingsrock: { rows: ['y.y.y', 'yyyyy', 'yrysy', 'yyyyy'], colors: { y: 0xe8b828, r: 0xe03838, s: 0x3868e0 } },
+  metalcoat: { rows: ['ss.ss', 'sssss', '.shs.', '.sss.', '.sss.'], colors: { s: 0x9aa0b0, h: 0xffffff } },
+  dragonscale: { rows: ['..b..', '.bhb.', 'bbhbb', '.bbb.', '..b..'], colors: { b: 0x5878d8, h: 0xd0e0ff } },
+  upgrade: { rows: ['ppppp', 'pwrwp', 'prrrp', 'pwrwp', 'ppppp'], colors: { p: 0xd8d8e8, w: 0xffffff, r: 0xe04848 } },
+  dubiousdisc: { rows: ['.ppp.', 'pmhmp', 'pm.mp', 'pmmmp', '.ppp.'], colors: { p: 0x9050c0, m: 0xd060b8, h: 0xffffff } },
+  protector: { rows: ['rrrrr', 'rgggr', 'rgwgr', '.rgr.', '..r..'], colors: { r: 0x8a3020, g: 0xb0b0a0, w: 0xffffff } },
+  electirizer: { rows: ['.k.k.', 'yyyyy', 'ybkby', 'yyyyy'], colors: { y: 0xf0d030, b: 0x3070e0, k: 0x303038 } },
+  magmarizer: { rows: ['.k.k.', 'rrrrr', 'ryryr', 'rrrrr'], colors: { r: 0xd84020, y: 0xffc830, k: 0x303038 } },
+  reapercloth: { rows: ['.ppp.', 'ppppp', 'pphpp', 'p.p.p'], colors: { p: 0x5a3878, h: 0x9a70c0 } },
+  razorclaw: { rows: ['w.w.w', 'w.w.w', 'wwwww', '.ccc.'], colors: { w: 0xf0f0f8, c: 0x8090a8 } },
+  razorfang: { rows: ['wwwww', '.wwh.', '.ww..', '..w..'], colors: { w: 0xf0f0e0, h: 0xffffff } },
+  deepseatooth: { rows: ['ww...', '.ww..', '.wwh.', '..ww.', '...w.'], colors: { w: 0xd8d0c0, h: 0xffffff } },
+  deepseascale: { rows: ['..p..', '.php.', 'pphpp', '.ppp.', '..p..'], colors: { p: 0xe878a8, h: 0xffe0f0 } },
+  prismscale: { rows: ['..r..', '.yhg.', 'rghby', '.bgy.', '..b..'], colors: { r: 0xe85050, y: 0xf0d030, g: 0x50c870, b: 0x5090e8, h: 0xffffff } },
   rarecandy: { rows: ['w.ccc.w', 'wwchcww', 'w.ccc.w'], colors: { w: 0xf0f0f8, c: 0x6a50d8, h: 0xd0c8ff } },
   linkcable: { rows: ['kk.kk', 'k...k', 'c...c', 'c...c', '.ccc.'], colors: { k: 0x9898a8, c: 0x8a50c0 } },
 }

@@ -1,23 +1,52 @@
 import { DEX, dexKey, dexNumber, isCaught, tierOf } from './dex.js'
-import { evolutionsOf } from './evolutions.js'
+import { ANY_LEVEL, evolutionsOf, isPlainLevel } from './evolutions.js'
 import { MAX_LEVEL, xpAt } from './levels.js'
 import { iconsFor, statNow } from './meters.js'
-import { displayName } from './names.js'
+import { displayName, withArticle } from './names.js'
 import { conditionOf, downReply, fullNameOf, goneLine, levelOf, nameOf, readyToEvolve, xpOf } from './records.js'
 import { MONS } from './sprites.js'
 import { S } from './state.js'
-import { hasRunAway, isDead, isFainted, isGone } from './status.js'
+import { hasRunAway, isDead, isDown, isFainted, isGone } from './status.js'
 
 // The replies that tell you things: stats, the box, the Pokédex, and help
 
 // Joins items as "A", "A or B", or "A, B, or C"
 export const orList = (items) => (items.length < 3 ? items.join(' or ') : items.slice(0, -1).join(', ') + ', or ' + items.at(-1))
 
-// How one entry evolves the mon, like "Jolteon with a Thunder Stone"
+const TIMES = { day: ' by day', night: ' at night' }
+
+// How one entry evolves the mon, like "Jolteon with a Thunder Stone", "Politoed by trade
+// holding a King's Rock", or "Espeon on a level-up with full hearts by day"
 export function evolutionText(entry) {
   const into = displayName(entry.into)
-  if (entry.item) return into + ' with a ' + entry.item
-  return entry.trade ? into + ' by trade' : into + ' at Lv. ' + entry.level
+  const when = TIMES[entry.time] ?? ''
+  if (entry.item) return into + ' with ' + withArticle(entry.item) + when
+  if (entry.trade) return into + ' by trade' + (entry.holds ? ' holding ' + withArticle(entry.holds) : '')
+  if (isPlainLevel(entry)) return into + ' at Lv. ' + entry.level
+  const from = entry.level > ANY_LEVEL ? ' from Lv. ' + entry.level : ''
+  const happy = entry.happy ? ' with full hearts' : ''
+  const mate = entry.mate ? ' with ' + displayName(entry.mate) + ' in your party' : ''
+  const move = entry.move ? ' knowing ' + entry.move : ''
+  return into + ' on a level-up' + from + happy + mate + move + when
+}
+
+// Why the shown mon can't take an entry yet, a sentence for each need of unmetOf it lacks
+export function unmetText(entry, unmet, time) {
+  const lines = {
+    happy: 'Its hearts aren\'t full. Pet it to fill them.',
+    time: 'It\'s ' + time + ' now.',
+    move: 'It doesn\'t know ' + entry.move + '.',
+    mate: displayName(entry.mate ?? '') + ' isn\'t in your party.',
+  }
+  return unmet.map((need) => lines[need]).join(' ')
+}
+
+// The mon the shown one can evolve into now: the plain level evolution its level has
+// reached, or the one a level-up made ready while it had all that evolution needs
+export function readyEvolution() {
+  const plain = readyToEvolve()
+  if (plain) return plain
+  return S.readyInto?.mon === S.mon && !S.evolving && !isDown() ? S.readyInto.into : null
 }
 
 // Like "Pikachu, Lv. 12, 1820 XP (377 to Lv. 13). Can become Raichu with a Thunder Stone.
@@ -27,7 +56,7 @@ export function statsText(pets, feeds) {
   const level = levelOf(S.mon)
   const next = level < MAX_LEVEL ? ' (' + (xpAt(level + 1) - xpOf(S.mon)) + ' to Lv. ' + (level + 1) + ')' : ''
   const evolutions = evolutionsOf(S.mon)
-  const ready = readyToEvolve()
+  const ready = readyEvolution()
   const becomes = ready
     ? ' Ready to evolve into ' + displayName(ready) + '. /pokemon evolve lets it.'
     : evolutions.length > 0 ? ' Can become ' + orList(evolutions.map(evolutionText)) + '.' : ''
@@ -82,7 +111,7 @@ export function dexText(dex, wanted, graveyard) {
   if (wanted) {
     if (!MONS.includes(wanted)) return 'Unknown mon "' + wanted + '". See /pokemon list for every mon.'
     const key = dexKey(wanted)
-    if (!DEX.includes(key)) return displayName(wanted) + " isn't in the Pokédex. Only gen 1 mons appear in the wild."
+    if (!DEX.includes(key)) return displayName(wanted) + " isn't in the Pokédex. Only the mons the mod bundles appear in the wild."
     const entry = entries.includes(key) ? dex[key] : null
     const status = isCaught(entry) ? 'Caught ◓' + (entry.shiny ? ' ✦' : '') + '.' : entry ? 'Seen, not caught yet.' : 'Not seen yet.'
     const mark = dexMark(key)
@@ -125,7 +154,7 @@ export const HELP = [
     ['roar', 'Roar to send the wild mon away'],
   ]],
   ['Evolve', [
-    ['evolve [mon]', 'Evolve with a stone or a Link Cable from your bag, or pick what Eevee becomes'],
+    ['evolve [mon]', 'Evolve with an item or a Link Cable from your bag, or pick what Eevee becomes'],
     ['stop', 'Cancel an evolution'],
   ]],
   ['Items', [

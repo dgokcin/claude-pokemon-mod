@@ -8,27 +8,47 @@
 
 import { BASIC } from './effects/basic.js'
 import { BEAMS } from './effects/beams.js'
+import { BOOSTS } from './effects/boosts.js'
+import { BRAWL } from './effects/brawl.js'
+import { BUG } from './effects/bug.js'
 import { CHARGES } from './effects/charge.js'
+import { DARK } from './effects/dark.js'
+import { DRAGON } from './effects/dragon.js'
 import { EARTH } from './effects/earth.js'
 import { ELECTRIC } from './effects/electric.js'
 import { EVOLVE } from './effects/evolve.js'
+import { FAIRY } from './effects/fairy.js'
+import { FIGHTING } from './effects/fighting.js'
 import { FIRE } from './effects/fire.js'
+import { FLYING } from './effects/flying.js'
+import { GHOST } from './effects/ghost.js'
+import { GROUND } from './effects/ground.js'
 import { GUARD } from './effects/guard.js'
+import { ICE } from './effects/ice.js'
+import { MARTIAL } from './effects/martial.js'
 import { MIND } from './effects/mind.js'
 import { NATURE } from './effects/nature.js'
 import { POISON } from './effects/poison.js'
+import { PSYCHIC } from './effects/psychic.js'
+import { ROCK } from './effects/rock.js'
 import { SELF } from './effects/self.js'
 import { SKY } from './effects/sky.js'
 import { SOUND } from './effects/sound.js'
 import { SPECIAL } from './effects/special.js'
+import { STARES } from './effects/stares.js'
+import { STEEL } from './effects/steel.js'
 import { STRIKES } from './effects/strikes.js'
+import { SWAPS } from './effects/swaps.js'
+import { TRICKS } from './effects/tricks.js'
 import { WATER } from './effects/water.js'
 import { WEAPONS } from './effects/weapons.js'
 import { clamp } from './effects/draw.js'
 
 const EFFECTS = {
-  ...BASIC, ...BEAMS, ...CHARGES, ...EARTH, ...ELECTRIC, ...EVOLVE, ...FIRE, ...GUARD, ...MIND,
-  ...NATURE, ...POISON, ...SELF, ...SKY, ...SOUND, ...SPECIAL, ...STRIKES, ...WATER, ...WEAPONS,
+  ...BASIC, ...BEAMS, ...BOOSTS, ...BRAWL, ...BUG, ...CHARGES, ...DARK, ...DRAGON, ...EARTH,
+  ...ELECTRIC, ...EVOLVE, ...FAIRY, ...FIGHTING, ...FIRE, ...FLYING, ...GHOST, ...GROUND, ...GUARD,
+  ...ICE, ...MARTIAL, ...MIND, ...NATURE, ...POISON, ...PSYCHIC, ...ROCK, ...SELF, ...SKY, ...SOUND,
+  ...SPECIAL, ...STARES, ...STEEL, ...STRIKES, ...SWAPS, ...TRICKS, ...WATER, ...WEAPONS,
 }
 
 const FALLBACK = 'impact'

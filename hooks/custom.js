@@ -266,13 +266,6 @@ async function fetchGif(get, gen, name, file) {
   return { gif: decodeGif(fromBase64(content)) }
 }
 
-// Every mon folder in a generation
-export async function monsOfGen(get, gen) {
-  const res = await get(`${REPO}/gen${gen}`, { headers: HEADERS })
-  if (!res.ok) throw new Error(githubError(res))
-  return JSON.parse(res.text).filter((entry) => entry.type === 'dir').map((entry) => entry.name)
-}
-
 // The mon's types from PokéAPI, or normal when it doesn't know the name
 async function typesOf(get, name) {
   try {

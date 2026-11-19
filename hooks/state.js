@@ -98,6 +98,9 @@ export const S = {
   finishingHeal: false,
   evolving: null,
   evolveDue: null,
+  // An evolution with needs beyond a level, like full hearts, that a level-up of the shown
+  // mon made ready, as { mon, into }. /pokemon evolve takes it until an evolution starts.
+  readyInto: null,
   joyHopAt: null,
   sentCells: null,
   sentImage: null,
