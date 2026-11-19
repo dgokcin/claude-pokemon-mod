@@ -19,7 +19,10 @@
 
 import { parseArgs } from 'node:util'
 import { SPRITES } from '../hooks/frames.js'
+import { MOVE_FX, MOVES, movesOf } from '../hooks/moves.js'
 import { contactSheet, stubHost } from './stub-host.mjs'
+
+const moveKey = (name) => name.toLowerCase().replace(/[\s\-_'.]/g, '')
 
 const { values: opts, positionals } = parseArgs({
   allowPositionals: true,
@@ -74,6 +77,9 @@ if (opts.strike) {
   played.length = 0
   await playFor(60)
 } else if (opts.move) {
+  // The home mon is taught a move it doesn't know, so any animation can be aimed at a foe
+  const taught = Object.keys(MOVE_FX).find((name) => moveKey(name) === moveKey(opts.move))
+  if (taught && !movesOf(mon).some((m) => m.name === taught)) MOVES[mon] = [...(MOVES[mon] ?? []), taught]
   played.length = 0
   console.log(await host.command('attack ' + opts.move))
   await playFor(BATTLE_TICKS * 4)
@@ -101,7 +107,6 @@ if (opts.strike) {
 console.log(host.toasts.join('\n'))
 
 const frames = played.filter((f, i) => i % EVERY === 0 || i === played.length - 1)
-const moveKey = (name) => name.toLowerCase().replace(/[\s\-_'.]/g, '')
 const suffix = opts.move ? '-' + moveKey(opts.move) : opts.strike ? '-strike' : opts.throw ? '-' + opts.throw : ''
 const out = opts.out ?? '/tmp/' + mon + '-vs-' + foe + suffix + '.png'
 const { rows, columns } = contactSheet(frames, { out, scale: Number(opts.scale), light: opts.light, perRow: 6 })

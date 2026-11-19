@@ -1,7 +1,7 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-  "files": { "includes": ["hooks/**", "scripts/**", "tests/**", "!hooks/frames.js"] },
+  "files": { "includes": ["hooks/**", "scripts/**", "tests/**", "!hooks/frames.js", "!hooks/frames"] },
   "formatter": { "enabled": false },
   "assist": { "enabled": false },
   "linter": {
